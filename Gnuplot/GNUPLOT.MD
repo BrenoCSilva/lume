@@ -113,11 +113,11 @@ obs: É possível configurar o set title, set grid, etc, em linhas diferentes (a
 | Descrição           |   Via Memória Primária (via RAM)           | Via Memória Secundária (arquivo.txt) |
 |--------------------------|------------------------------|--------------------------|
 | **De onde o Gnuplot busca os dados**         | fprintf(gnuplot_pipeMP, "plot '-' \n"); |  fprintf(gnuplot_pipeMP, "plot 'arquivo.txt' \n"); |
-| **Enviar os os dados**       | fprintf(gnuplot_pipeMP, "%d %d\n", eixo_X[i], eixo_Y[i]);  | fprintf(gnuplot_pipeMP, "plot 'vd_debug.txt'\n"); |
+| **Enviar os os dados**       | fprintf(gnuplot_pipeMP, "%d %d\n", eixo_X[i], eixo_Y[i]);  | fprintf(file, "%d %d\n", eixo_X[i], eixo_Y[i]) |
 | **Finalizar envio dos dados**        | fprintf(gnuplot_pipeMP, "e\n");| Não precisa (o Gnuplot lê até o fim do arquivo). |
 
 
 O Gnuplot é um programa de "redesenho". Toda vez que ocorre o envio do comando plot, ele apaga o gráfico anterior e faz um novo. Caso se envie apenas o ponto atual, o gráfico anterior some e fica apenas um ponto novo. Então em ambos os casos é necessário manter um histórico de valores minimos, no modelo de arquivo, o próprio arquivo.txt atua como seu histórico conforme você anexa (append) novos dados, para o outro modelo é preciso criar uma lista de valores e armazenar uma quantia deles antes de plotar.
 
 ## Tarefa
-Sua tarefa é utilizar o atributo velocidade do veículo através do Simulador Navigate e gerar um gráfico da velocidade x tempo.
+Sua tarefa é utilizar o atributo velocidade do veículo através do Simulador Navigate e gerar um gráfico da velocidade x tempo. Ambos os atributos estão na struct trabalhada anteriormente 
