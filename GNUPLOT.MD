@@ -54,7 +54,7 @@ Obs: Para executar as alteracões realizadas com set é necessário usar o coman
 
 ## Gnuplot em C
 
-Por ser um software independente (um programa instalado no seu PC) o C não importa uma biblioteca específica para usa-lo, ocorre a  utilização da própria stdio.h para fazer a abertura de um "cano/tubulação" (pipe) que através do seu código C envia comandos de texto que o Gnuplot executa e renderiza em tempo real.
+Por ser um software independente (um programa instalado no seu PC) o C não importa uma biblioteca específica para usá-lo, ocorre a  utilização da própria stdio.h para fazer a abertura de um "cano/tubulação" (pipe) que através do seu código C envia comandos de texto que o Gnuplot executa e renderiza em tempo real.
 
 
 A manipulação do Gnuplot em C é quase idêntica à manipulação de um arquivo comum, mudando apenas as funções de sistema:
