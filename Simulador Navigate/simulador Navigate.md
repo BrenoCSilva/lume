@@ -34,9 +34,9 @@
     ./proccontrol /home/lume/astro/data/ufes/primeiros_passos/process/process-navigate_primeiros_passos_sensorbox-6.ini
 ```
 
-> [!NOTE]
-> ALTERAÇÃO REALIZADA AQUI.
 
+> [!NOTE]
+> ALTERAÇÃO REALIZADA AQUI!
 ## Erro na execução do Process
 
 O print abaixo mostra em amarelo os módulos que não foram executados:
