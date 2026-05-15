@@ -122,6 +122,13 @@ Parâmetros podem ser atualizados durante a execução com o comando
 ```
 ./param_edit -once <module> <variable> <value>
 ```
+
+> [!NOTE]
+> ALTERAÇÃO REALIZADA AQUI!
+
+Observação: Atente-se para o fato de que <variable> é o nome do parametro nomeado em {"<module_name>", "<param_name>", ASTRO_PARAM_ONOFF, &var, 1, NULL}.
+
+
 Exemplo:
 
 ```
