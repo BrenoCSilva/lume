@@ -35,7 +35,7 @@
 ```
 
 <p align="center">
-  <img width="500" src="./mss.jpeg"/>
+  <img width="800" src="./mss.jpeg"/>
 </p>
 
 
