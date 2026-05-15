@@ -70,7 +70,7 @@ Como resultado verifica-se que que o módulo mss não foi encontrado. Por causa 
 ```
 Caso a mensagem abaixo tenha sido apresentada a conversão foi um sucesso. Agora execute novamente o novo Process gerado,o simulador deve abrir:
 <p align="center">
-  <img width="1200" src="./conversao_mss.png"/>
+  <img width="1600" src="./conversao_mss.png"/>
 </p>
 
 Dica: Toda vez que um arquivo do *process* não é executado, utilize esse método para descobrir a razão. Um erro comum de acontecer é o caminho das variáveis do Process estarem errados ou não existir mais os arquivos no local.
