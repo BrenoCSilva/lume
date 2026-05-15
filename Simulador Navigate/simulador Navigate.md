@@ -1,184 +1,184 @@
-# Lume Autonomous Mobility System
+# Sistema Lume de Mobilidade Autônoma
 
-The Lume Autonomous Mobility System has modules to assist in vehicle control and communication. It is a framework that operates with the IPC message exchange protocol and includes the following main modes:
+O Sistema Lume de Mobilidade Autônoma possui módulos para auxiliar no controle dos veículos e sua comunicação. Ele é um framework que funciona com protocolo de troca de mensagens IPC e inclui os seguintes principais modos : 
 
 - [*Simulator Mode (Navigate)*](../simulator_mode/simulator_mode.md)
 - [*Playback*](../playback/playback.md)
 - [*Record Log*](../record_log/record_log.md)
 - [*Real World Use*](../real_world_use/real_world_use.md)
 
-Portuguese version available [here](sistema_lume_mobilidade_autonoma_pt-BR.md) 🇵🇹.
-
 *******
-**Table of Contents**
-- [Lume Autonomous Mobility System](#lume-autonomous-mobility-system)
-  - [Astro System](#astro-system)
-  - [The Process File](#the-process-file)
-    - [Variables](#variables)
-    - [Process Modules](#process-modules)
-  - [Running a Process](#running-a-process)
-    - [Solving an Error](#solving-an-error)
-  - [Next Step](#next-step)
+**Tables of contents**
+- [Sistema Lume de Mobilidade Autônoma](#sistema-lume-de-mobilidade-autônoma)
+  - [Sistema Astro](#sistema-astro)
+  - [O Arquivo Process](#o-arquivo-process)
+    - [Variáveis](#variáveis)
+    - [Módulos do Process](#módulos-do-process)
+  - [Rodando um Process](#rodando-um-process)
+    - [Corrigindo um Erro](#corrigindo-um-erro)
+  - [Próximo Passo](#próximo-passo)
 
 *******
 
-## Astro System
+## Sistema Astro
 
-**Astro** is a framework and has various modules located in the *src* folder, and when compiled, their binaries go to the *bin* folder.
+**Astro** é um framework e possui vários módulos que ficam na pasta *src*, e quando compilados, seus binários vão para a pasta *bin*.
 
 <p align="center">
   <img height="250" src="./imgs/astro_dir.jpg"/>
 </p>
 
-The directory structure of the *bin* folder is such that each vehicle has its own folder containing its *.ini* file with its information and its *processes* for each mode, for example:
+A estrutura de organização do diretório *bin* é que cada veículo terá sua pasta contendo seu arquivo *.ini* com suas informações e seus *process* para realização de cada modo, por exemplo: 
+
 
     .
-    ├── atego1730_ufes_ype             # atego1730 folder that performed the arcelor route
-    │   ├── astro-mercedes-atego1730-sensorbox-1.ini        # Vehicle's file
-    │   ├── process-atego1730-navigate.ini                  # Navigate mode process
-    │   ├── process-atego1730-playback-sensorbox-1.ini      # Playback mode process
+    ├── atego1730_ufes_ype             # Pasta do atego1730 que realizou trajeto na arcelor
+    │   ├── astro-mercedes-atego1730-sensorbox-1.ini        # Arquivo do veículo
+    │   ├── process-atego1730-navigate.ini                  # Process do modo navigate
+    │   ├── process-atego1730-playback-sensorbox-1.ini      # Process do modo playback
     │   └── ...                                             # etc.
     └── ...
 
-If you don't have Astro installed, follow the [Astro Installation Tutorial](../../../Installations/install_astro/README.md).
+Caso não tenha o Astro instalado, siga o [Tutorial de instalação do Astro](../../../Installations/install_astro/README.md).
 
-With Astro installed on the machine, run the `git pull` command inside the *astro/src* directory to download new system updates. By running `git status`, you can check which files have changes compared to those stored locally with the ones in the GitHub repository. If you are not familiar with these commands, [here's a GitHub guide](github_guia_simplificado.md).
+Com o Astro instalado na máquina, dar comando `git pull` dentro da pasta *astro/src* para baixar as novas atualizações do sistema. Ao dar o comando `git status`, é possível verificar quais arquivos contém alterações se comparados aos que estão arquivados localmente com os que estão no repositório do github. Caso não estiver ambientado com esses comandos, [aqui está um guia do github](github_guia_simplificado.md).
 
-Once synchronized with the GitHub version, also within the *astro/src* directory, run the `make clean` command to remove object files in the directory and `make` to compile with the new changes.
+Após sincronizado com a versão do github, também dentro da pasta *astro/src*, dar o comando `make clean`, para apagar os arquivos objetos no diretório e `make` para compilar com as novas alterações.
 
-<div id='the-process-file'/>
 
-## The Process File
+<div id='arquivo-process'/>
 
-A process is a file that ends with the *.ini* extension, organized into modules, and contains various programs that will be executed simultaneously by *proccontrol*. It is used to execute all modes of the Autonomous Mobility System, with the difference between each being the modules and programs present in each process.
+## O Arquivo Process
 
-The program called to execute the modules is *proccontrol*, which runs all programs on the command line specified by the passed process file.
+Um process é um arquivo que termina com a nomenclatura *.ini*, é organizado em módulos e possui diversos programas que serão executados simultaneamente pelo *proccontrol*. Ele é usado para executar todos os modos do Sistema de Mobilidade Autônoma, a diferença entre cada um será os módulos e programas que estarão presentes em cada process.
 
-Here's an example of a process:
+O programa que é chamado para executar os módulos é o *proccontrol*, que executa todos os programas na linha de comando que são especificados pelo arquivo process que foi passado.
+
+A seguir o exemplo de um process:
 
 <p align="center">
   <img width="1000" src="./imgs/process.jpg"/>
 </p>
 
-At the beginning of the file, the values of some variables are established, and then the file is organized by modules, each of which has a group of programs, with the *requested_state* column indicating whether it should be used or not.
+No começo do arquivo são estabelecidos os valores de algumas variáveis, e em seguida, o arquivo é organizado por módulos, onde cada um possui um grupo de programas, que na coluna *requested_state* indica se ele deve ser utilizado ou não. 
 
-### Variables
-  - Line 1: Path to the map file
-  - Line 2: Path to the graph file
-  - Line 3: Path to the annotation file
-  - Line 4: Server address
-  - Line 5: Vehicle ID
+### Variáveis
+  - Linha 1: Caminho para o arquivo do mapa
+  - Linha 2: Caminho para o arquivo do grafo
+  - Linha 3: Caminho para o arquivo de anotações
+  - Linha 4: Endereço do servidor
+  - Linha 5: ID do veículo
 
-The *command_line* column contains what should be written in the command line by *proccontrol*, which is the program executable and any arguments if needed.
+Na coluna *command_line*, está o que deve ser escrito na linha de comando pelo *proccontrol*, que é o executável do programa e os argumentos, se necessário.
 
-### Process Modules
-* Support Services: 
-  - *./param_daemon*: Provides information about the vehicle being used and the surrounding area to other programs. It takes the vehicle file as an argument.
+### Módulos do Process
+* Serviços de Suporte: 
+  - *./param_daemon*: Dispõe informações sobre o veículo sendo usado e a área ao seu redor para outros programas. Tem como argumento o arquivo do veículo.
   
-  - *./proccontrol_gui*: Generates the *proccontrol* interface showing the programs and their states.
+  - *./proccontrol_gui*: Gera a interface do *proccontrol* mostrando os programas e seus estados.
   
-  - *./playback*: Executes a log file and sends stored messages to other modules. It takes the log file as an argument.
+  - *./playback*: Executa um arquivo de log e manda as mensagens armazenadas para outros módulos. Tem como argumento o arquivo de log.
   
-  - *./playback_control*: Generates the *playback* control bar with start and pause buttons.
+  - *./playback_control*: Gera a barra de controle do *playback*, com botões de iniciar e pausar.
   
-  - *./map_server*: Loads the vehicle position and the offline map from the map file information passed. It has the following arguments:
-    -  *-map_path* <file_path>: path to the map file.
-    -  *-map_x* <float_x>: global x-coordinate of the map.
-    -  *-map_y* <float_y>: global y-coordinate of the map.
-    -  *-block_map* \<state>: *on* or *off*, enables map generation with information within the specified directory.
-    -  *-lanemap_incoming_message_type*: message type.
-* Vehicle:
-  -  *./simulator_ackerman*: Responsible for generating simulated data for the virtual vehicle.
+  - *./map_server*: Carrega a posição do veículo e o mapa offline a partir das informações do arquivo do mapa passado. Possui os seguintes argumentos:
+    -  *-map_path* <file_path>: caminho para o arquivo do mapa.
+    -  *-map_x* <float_x>: coordenada x global do mapa.
+    -  *-map_y* <float_y>: coordenada y global do mapa.
+    -  *-block_map* \<estado>: *on* ou *off*, habilita a geração do mapa com as informações dentro do diretório passado.
+    -  *-lanemap_incoming_message_type*: tipo de mensagem.
+* Carro:
+  -  *./simulator_ackerman*: É responsável por gerar dados simulados para o veículo virtual.
   
   <br>
 * Slam:
-  -  *./localize_ackerman*: Uses sensor information from the baseServer to find the vehicle's position on the map provided by *param_daemon*. The *-mapping_mode* \<state>, *on* or *off*, indicates whether an offline map will be generated from the sensors.
+  -  *./localize_ackerman*: Usa informações de sensor do baseServer para encontrar a posição do veículo no mapa fornecido por *param_deamon*. O parâmetro *-mapping_mode* \<estado>, *on* ou *off* indica se será gerado um mapa offline a partir dos sensores.
   
-  -  *./mapper*: Updates the offline map generated by the *map_server* module with real-time information (objects, people, etc). The *-map_path* <file_path> argument specifies the map file path.
+  -  *./mapper*: Atualiza o mapa offline gerado pelo módulo map_server com informação em tempo real (objetos, pessoas, etc). O argumento *-map_path* <file_path> define o caminho para o arquivo do mapa.
   
-  -  *./obstacle_distance_mapper*: Generates the obstacle distance map, cost map, and performs mobile object detection.
+  -  *./obstacle_distance_mapper*: Gera o mapa de distância para obstáculos, o mapa de custos e faz a detecção de objetos móveis. 
   
-  -  *./fused_odometry*: Publishes instant odometry values (speed and steering angle) obtained by sensor fusion.  
+  -  *./fused_odometry*: Publica os valores instantâneos de odometria (velocidade e ângulo de volante) obtidos por fusão de sensores.  
   
-  -  *./lidarodom*: Publishes estimated odometry from lidar readings, i.e., by comparing consecutive point clouds.
+  -  *./lidarodom*: Publica odometria estimada a partir das leituras de lidar, ou seja, pela comparação entre nuvens de pontos consecutivas.
 
-* Sensor Data Processing:
-  - *./gps_xyz*: Vehicle GPS filter. Converts raw GPS data to system-used data, such as xyz position.
+* Processamento dos Dados dos Sensores:
+  - *./gps_xyz*: Filtro do GPS do veículo. Converte dado bruto do GPS para dados usados no sistema, como posição xyz.
   
-  - *./base_ackerman*: Applies (bias) and republishes corrected vehicle odometry.
+  - *./base_ackerman*: Aplica (bias) e republica odometria do veículo corrigida.
   
-  - *./neural_object_tracker*: Uses neural networks to detect pedestrians in the crosswalk.
+  - *./neural_object_tracker*: Utiliza redes neurais para detectar pedestres em faixa.
+
+  - *./multiple_object_tracker*: Utiliza redes neurais para detectar objetos moveis.
+
+  - *./aruco_position_tracker*: Utiliza biblioteca aruco para detectar posição de marcadores (QR Code) no mundo.
   
-  - *./multiple_object_tracker*: Uses neural networks to detect moving objects.
-  
-  - *./aruco_position_tracker*: Uses the ArUco library to detect marker (QR Code) positions in the world.
-  
-* Control Hierarchy:
-  -  *./task_manager*: Sends a sequence of commands to the system contained in the mission file passed as a parameter. Commands in the file can include: defining Final Goal, defining graph and map, starting or interrupting autonomous operation, determining wait times between commands, etc. It has the following arguments:
-     -   *-mission_from_user_app* \<state>, *on* or *off*, which determines whether the mission will be defined via the application.
-     -   *-mission* <mission_path>, which passes the mission file.
-     -   *-start_delay* \<state>, *on* or *off*, which determines whether a standard delay will be used before starting the mission.
+* Hierarquia de Controle:
+  -  *./task_manager*: Envia ao sistema uma sequência de comandos contidos no arquivo de missão passado como parâmetro. Comandos contidos no arquivo podem incluir: definir Final Goal, definir grafo e mapa, dar início ou interromper o funcionamento autônomo, determinar tempos de espera entre um comando e outro, etc. Possui os argumentos:
+     -   *-mission_from_user_app* \<estado>, *on* ou *off* que determina se a missão será definida via aplicativo.
+     -   *-mission* <mission_path> que passa o arquivo de missão.
+     -   *-start_delay* \<estado>, *on* ou *off* que determina se será ou não utilizado um delay padrão antes de iniciar a missão.
   
   <br/>
 
-  -  *./route_planner*: Accesses the graph file and from it publishes the desired position sequence that forms the path the vehicle should follow. It also publishes annotations relevant along this path. It has the argument *--graph* <graph_path> <annotation_path>, which are the graph and annotation files.
+  -  *./route_planner*: Acessa o arquivo do grafo e a partir dele publica a sequência de posições desejadas que formam o trajeto que o veículo deverá seguir. Também publica as anotações pertinentes ao longo desse trajeto. Possui como argumento *--graph* <graph_path> <annotation_path>, que são os arquivos de grafo e anotações.
   
-  -  *./offroad_planner*: Plans unstructured paths, i.e., paths that start or end outside a graph. Also responsible for reverse maneuver situations.
+  -  *./offroad_planner*: Planeja caminhos não estruturados, ou seja, que começam ou terminam fora de um grafo. Responsável também por situações de manobra de ré.
 
-  -  *./behavior_selector*: Chooses the appropriate behavior in different situations detected by other modules.
+  -  *./behavior_selector*: Escolhe o comportamento adequado nas diferentes situações detectadas pelos outros módulos.
   
-  -  *./model_predictive_planner*: Returns vehicle acceleration based on the next desired position.
+  -  *./model_predictive_planner*: Retorna a aceleração do veículo baseado na próxima posição desejada.
   
-  -  *./rrt_path_follower*: Attempts to reduce latency in the actuation system.
+  -  *./rrt_path_follower*: Tenta reduzir a latência no sistema de atuação.
   
-  -  *./obstacle_avoider*: Controls vehicle acceleration to avoid obstacles.
+  -  *./obstacle_avoider*: Controla a aceleração do veículo para evitar obstáculos.
   
 * Interfaces:
-  -  *./navigator_gui2*: Responsible for generating the graphical interface. It has the arguments *-map_path* <file_path> and *-annotation_path* <file_path>, which are the map and annotation files.
+  -  *./navigator_gui2*: É responsável por gerar a interface gráfica. Possui os argumentos *-map_path* <file_path> e *-annotation_path* <file_path>, que são os arquivos de mapa e anotações.
   
-  -  *./viewer_3D*: Generates the 3D graph where the moving vehicle and sensor data are displayed.
+  -  *./viewer_3D*: Gera o gráfico 3D onde o carro em movimento e os dados dos sensores são mostrados.
   
-  -  *./util_publish_initial_pose*: Indicates the initial vehicle position. It has arguments for x, y, and direction.
+  -  *./util_publish_initial_pose*: Indica a posição inicial do veículo. Possui como argumentos posição x, y e direção.
 
-  - *./camera_viewer*: Generates the interface that displays the recorded vehicle camera during the journey.
+  - *./camera_viewer*: Gera a interface que mostra a câmera do veículo que foi gravada durante o percurso.
 
-  - *./traffic_light*: Traffic light detector.
+  - *./traffic_light* Detector de semáforos.
   
 * API:
-  -  *./upstream_api*: Responsible for receiving messages from modules, subscribing, and sending the necessary messages to the WEB Monitoring System.
+  -  *./upstream_api*: Responsável por receber as mensagens dos módulos, assinar e enviar as mensagens necessárias para o Sistema de Monitoramento WEB.
   
-  -  *./downstream_api*: Responsible for receiving messages from the WEB Monitoring System and publishing the necessary messages to the rest of the modules.
+  -  *./downstream_api*: Responsável por receber as mensagens do Sistema de Monitoramento WEB e publicar as mensagens necessárias para o restante dos módulos.
 
-## Running a Process
+## Rodando um Process
 
-For a better understanding of the Lume Autonomous Mobility System, let's run a *Navigate Process*.
+Para melhor visualização do funcionamento do Sistema Lume de Mobilidade Autônoma, vamos rodar um *Process Navigate*.
 
-The first step is to run the `./central` command in the terminal within the *astro/bin* directory. The *central* program is responsible for establishing connection and allowing messages between modules.
+O primeiro passo é rodar o comando `./central` no terminal dentro do diretório *astro/bin*. O programa *central* é responsável por estabelecer conexão e permitir mensagens entre os módulos.
 
-If you attempt to run *central* while it is already running in another terminal, you'll receive the following error:
+Caso você tente rodar o *central*, sendo que ele já está em execução em outro terminal, receberá o seguinte erro:
 
 <p align="center">
   <img width="auto" src="./imgs/central_error.jpg"/>
 </p>
 
-In another terminal, in the same directory, we need to call *proccontrol* with the desired *process* as the argument. So, run the command `./proccontrol process-navigate-volta-da-ufes-sensorbox.ini`
+ Em outro terminal, nesse mesmo diretório, devemos chamar o *proccontrol* com o *process* desejado sendo o argumento. Então, rode o comando `./proccontrol process-navigate-volta-da-ufes-sensorbox.ini`
 
-### Solving an Error
+### Corrigindo um Erro
 
-Errors may occur when running a *process*. A common reason for this occurrence is when a file with its path is specified, but the file does not exist or has not been unpacked. For example, attempting to run the following *process*: `process-navigate-atego1730_ype-sensorbox-4.ini` that is inside the *atego1730_ype* car folder, this happened:
+ É possível que ocorram erros ao rodar um *process*. Um motivo comum para essa ocorrência, é quando foi determinado um arquivo com seu caminho, porém o arquivo não existe ou não foi descompactado. Por exemplo, tentando rodar o seguinte *process*: `process-navigate-atego1730_ype-sensorbox-4.ini` que está dentro da pasta do carro */atego1730_ype*, isso ocorreu:
 
  <p align="center">
   <img width="auto" src="./imgs/process_dying.gif"/>
 </p>
 
-The first thing to do is click on the programs in yellow on the *Proccontrol GUI* and select "Stop Program," as they are dying and being called again by *proccontrol*, and then press Ctrl+C in the terminal to terminate.
+A primeira coisa a ser feita é clicar nos programas em amarelo no *Proccontrol GUI* e selecionar "Stop Program", já que eles estão morrendo e sendo chamados novamente pelo *proccontrol*, e em seguida apertar Ctrl+C no terminal para encerrar. 
 
-To identify the program that was causing the problem, open the terminal and identify the program that was dying. Then, run it on the command line, and the error message will be displayed. In the case above, the error message was:
+Para identificar o programa que estava dando problema, abra o terminal e identifique o programa que estava morrendo. Então, execute ele na linha de comando e será mostrada a mensagem de erro. No caso acima, o erro apontado foi:
 
 `PROCCONTROL (9891): ./mapper -map_path atego1730_ype/geodata/map_atego1730_ype_20230511-sensorbox4/map_files3/ (10033) exited UNCLEANLY (code = 255).`
 
-While checking the path passed to *mapper*, it was found that the */map_files3* directory did not exist. To fix this error, you need to import the necessary map file for the program and place it in the specified directory.
+Ao procurar o caminho passado para o *mapper*, percebeu-se que o diretório */map_files3* não existia. Para consertar esse erro, é preciso importar o arquivo de mapa necessário para o programa e botá-lo no diretório especificado.
 
-## Next Step
+## Próximo Passo
 
-Now that you understand how the **Lume Autonomous Mobility System** works and how to configure the **Astro System**, the next step is to understand the functioning of the Simulator Mode (Navigate). Follow [this tutorial](../simulator_mode/simulator_mode.md) to learn more.
+ Agora que você entendeu como funciona o **Sistema Lume de Mobilidade Autônoma** e como configurar o **Sistema Astro**, o próximo passo é entender o funcionamento do Simulator Mode (Navigate), então siga [esse tutorial](../simulator_mode/simulator_mode.md).
