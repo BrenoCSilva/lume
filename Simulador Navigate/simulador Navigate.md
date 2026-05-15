@@ -59,7 +59,7 @@ Para encontrar qual foi o motivo do erro acima copie a linha de erro, abra outro
   <img width="800" src="./mss.jpeg"/>
 </p>
 
-Como resultado verifica-se que que o módulo mss não foi encontrado. Por causa de uma atualização nos mapas do astro esse módulo se tornou obrigatório para que os mapas sejam carregados. Para corrigir, execute o comando abaixo para que ocorra 
+Como resultado verifica-se que que o módulo mss não foi encontrado. Por causa de uma atualização nos mapas do astro esse módulo se tornou obrigatório para que os mapas sejam carregados. Para corrigir, execute o comando abaixo para que ocorra a conversão.
 
 ```bash
 ./mss_process_prepare.py <caminho para o seu process>
