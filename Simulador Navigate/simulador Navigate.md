@@ -33,6 +33,15 @@
     ./central
     ./proccontrol /home/lume/astro/data/ufes/primeiros_passos/process/process-navigate_primeiros_passos_sensorbox-6.ini
 ```
+
+## Erro na execução do Process
+
+<p align="center">
+  <img width="800" src="./mss.jpeg"/>
+</p>
+
+Um erro que pode ocorrer ao executar seu Process através do procconctrol
+
 ## Proccontrol GUI
 
  Dentro do *Proccontrol gui*, os programas que estão rodando ficam em verde, os que estão com erro/reiniciados em amarelo e os que não estão mais sendo executados em vermelho. Clicando em cada um, é possível realizar funções como iniciá-los ou pará-los. No *viewer_3D*, é possível visualizar o ambiente com 3 dimensões sem os dados dos sensores (que são captados no mundo real), e também visualizar outras características clicando em *options*. 
