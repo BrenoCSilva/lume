@@ -9,7 +9,7 @@ Os gráficos podem ser gerados diretamente via terminal, por um arquivo externo 
 1. [Instalação do Gnuplot](#instalação-do-gnuplot)
 2. [Alguns comandos básicos do gnuplot](#alguns-comandos-básicos-do-gnuplot)
 3. [Gnuplot em C](#gnuplot-em-c)
-4. [Como enviar informações para o gnuplot?](#como-enviar-informações-para-o-gnuplot)
+4. [Como enviar informações para o Gnuplot?](#como-enviar-informações-para-o-gnuplot)
     - [Enviando as coordenadas](#enviando-as-coordenadas)
     - [Mudando a Ordem com o using](#mudando-a-ordem-com-o-using)
 5. [Estilizando o Gráfico: Pontos x Linhas](#estilizando-o-gráfico-pontos-x-linhas)
@@ -77,7 +77,7 @@ O comando de abertura `popen` (Pipe Open) cria um canal de comunicação entre s
 | **"w"(Write)** |Abre o Gnuplot e permite que o seu programa C envie comandos | Enviar comandos como `set title`, `plot 'arquivo.txt'` ou os próprios dados via `plot '-'`|
 | **"r"(Read)** | Abre o Gnuplot e permite que o seu programa C leia o que o Gnuplot imprime via terminal |Capturar informações de erro ou coordenadas que o Gnuplot calculou|
 
-## Como enviar informações para o gnuplot?
+## Como enviar informações para o Gnuplot?
 
 Existem duas estratégias principais para alimentar o Gnuplot com as informações que você deseja visualizar. A escolha depende se o objetivo é apenas ver o gráfico em tempo real ou se é necessário guardar um registro físico dos dados.
 
