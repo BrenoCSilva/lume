@@ -36,6 +36,13 @@
 
 ## Erro na execução do Process
 
+O print abaixo mostra em amarelo os módulos que não foram executados:
+
+<p align="center">
+  <img width="800" src="./mss.jpeg"/>
+</p>
+
+
 <p align="center">
   <img width="800" src="./mss.jpeg"/>
 </p>
