@@ -93,7 +93,7 @@ obs: todo comando enviado ao gnuplot deve terminar com '\n'.
 O Gnuplot interpreta as informações recebidas (seja via arquivo .txt ou diretamente da memória RAM) como uma tabela organizada em colunas. Por padrão, o Gnuplot associa a primeira coluna de dados ao eixo X e a segunda coluna ao eixo Y. Caso se envie uma linha com os valores 4.5 e 1.2, o Gnuplot entenderá que 4.5 é a Coluna 1 (X) e 1.2 é a Coluna 2 (Y).
 
 ### Mudando a Ordem com o using
-Caso você queira alterar qual dado vai para qual eixo sem precisar mudar a ordem no seu código C, utilizamos o parâmetro using. Ele permite mapear as colunas da forma que você desejar seguindo o formato `using <eixo X>:<eixo Y>`. Exemplo:
+Caso você queira alterar qual dado vai para qual eixo sem precisar mudar a ordem no seu código C, utilize o parâmetro using. Ele permite mapear as colunas da forma que você desejar seguindo o formato `using <eixo X>:<eixo Y>`. Exemplo:
 
 `fprintf(gnuplot_pipeMP, "plot '-'");`
 
