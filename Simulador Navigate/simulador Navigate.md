@@ -46,12 +46,12 @@ Para identificar o erro de execução é necessário parar o processo que deu er
 <p align="center">
   <img width="800" src="./mensagem_error.png"/>
 </p>
-Nesse log você consegue pegar qual foi o arquivo que não foi executado, como por exemplo o mapper:
+Nesse log você consegue visualizar qual foi o módulo que não foi executado, como por exemplo o mapper:
 
 ```bash
 ./mapper -map_path ../data/ufes/primeiros_passos/geodata/map_primeiros_passos_20240613/map_files
 ```
-Para encontrar qual foi o motivo do erro acima copie toda a linha e abra outro terminal e navegue até a pasta bin do astro. E o execute.
+Para encontrar qual foi o motivo do erro acima copie a linha de erro, abra outro terminal e execute na pasta astro/bin.
   
 **Obs.:** O *./central* ainda precisa estar em execução
 
@@ -69,10 +69,8 @@ Caso a mensagem abaixo tenha sido apresentada a conversão foi um sucesso. Agora
   <img width="800" src="./conversao_mss.png"/>
 </p>
 
-
 Dica: Toda vez que um arquivo do *process* não é executado, utilize esse método para descobrir a razão. Um erro comum de acontecer é o caminho das variáveis do Process estarem errados ou não existir mais os arquivos no local.
 
-```
 ## Proccontrol GUI
 
  Dentro do *Proccontrol gui*, os programas que estão rodando ficam em verde, os que estão com erro/reiniciados em amarelo e os que não estão mais sendo executados em vermelho. Clicando em cada um, é possível realizar funções como iniciá-los ou pará-los. No *viewer_3D*, é possível visualizar o ambiente com 3 dimensões sem os dados dos sensores (que são captados no mundo real), e também visualizar outras características clicando em *options*. 
