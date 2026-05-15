@@ -104,9 +104,7 @@ Obs: O caractere quebra de linha funciona como o botão "Enter" do Gnuplot. Assi
 ## Estilizando o Gráfico: Pontos x Linhas
 Por padrão, o Gnuplot desenha apenas os pontos isolados no gráfico. Para visualizar a continuidade dos dados, é necessário instruí-lo a ligar esses pontos com segmentos de reta.
 
-Para isso, utilizamos o parâmetro with lines (ou a abreviação w l) logo após o comando de plotagem:
-
-fprintf(gnuplot_pipeMP, "plot '-' with lines \n");
+Para isso, utilizamos o parâmetro with lines (ou a abreviação w l) logo após o comando de plotagem:`fprintf(gnuplot_pipeMP, "plot '-' with lines \n");`
 
 obs: É possível configurar o set title, set grid, etc, em linhas diferentes (antes do plot). Mas o using, o with lines e o title fazem parte do comando plot. Eles são paramêtros do plot e devem ir juntos com ele.
 
