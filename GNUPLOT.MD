@@ -11,7 +11,7 @@ Os gráficos podem ser gerados diretamente via terminal, por um arquivo externo 
 3. [Gnuplot em C](#gnuplot-em-c)
 4. [Como enviar informações para o gnuplot?](#como-enviar-informações-para-o-gnuplot)
     4.1 [Enviando as coordenadas](#enviando-as-coordenadas)
-    4.2 [Mudando a Ordem com o using](#mudando-a-ordem-com-o-using)
+   4.2 [Mudando a Ordem com o using](#mudando-a-ordem-com-o-using)
 5. [Estilizando o Gráfico: Pontos x Linhas](#estilizando-o-gráfico-pontos-x-linhas)
 6. [Resumo](#resumo)
 7. [Tarefa](#tarefa)
