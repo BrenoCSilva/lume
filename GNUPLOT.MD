@@ -64,7 +64,7 @@ A manipulação do Gnuplot em C é quase idêntica à manipulação de um arquiv
 | Operação           | Arquivo Comum (stdio.h)              | Gnuplot (Pipe)  |
 |--------------------------|------------------------------|--------------------------|
 | **Declaração**         |FILE *arquivo; |                    FILE *gnuplot_pipe; |
-| **Abertura**       | fopen("arquivo.txt", "w");  | popen("gnuplot", "modo"); |
+| **Abertura**       | fopen("arquivo.txt", "modo");  | popen("gnuplot", "modo"); |
 | **Escrita**        | fprintf(arquivo, "texto");| fprintf(gnuplot_pipe, "plot..."); |
 | **Fechamento**       | fclose(arquivo); | pclose(gnuplot_pipe);|
 
