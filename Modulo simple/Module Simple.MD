@@ -1,123 +1,173 @@
+# Módulo Simples
 
-# Gnuplot tutorial
+Dentro de `astro/src/simple_module_example` podemos encontrar um modelo básico do funcionamento de um Publisher e Subscriber. O Publisher é responsável por enviar a informação (mensagem), enquanto o Subscriber é responsável por receber esta informação.
 
-O Gnuplot é um software utilitário de terminal para geração de gráficos 2D e 3D. Podendo ser utilizado em diferentes plataformas: Windows, Linux, Mac, Android etc. 
+Um subscriber normalmente tem um formato parecido com a imagem abaixo. Onde temos que passar a chave da mensagem, o formato da mensagem, um possível bloco de memória onde a mensagem será armazenada, o tamanho dessa mensagem, a função que vai funcionar como handler e subscribe_how (este parâmetro controla como a assinatura da mensagem será tratada no gerenciamento da fila de mensagens).
 
-Os gráficos podem ser gerados diretamente via terminal, por um arquivo externo e até mesmo através de um executável em C. 
+```
+astro_subscribe_message (
+    ASTRO_STRING_EXAMPLE_MESSAGE_NAME,
+    ASTRO_STRING_EXAMPLE_MESSAGE_FMT,
+    message,
+    sizeof(astro_string_example_message),
+    handler,
+    subscribe_how
+);
+```
 
-## Tópicos
-1. [Instalação do Gnuplot](#instalação-do-gnuplot)
-2. [Alguns comandos básicos do gnuplot](#alguns-comandos-básicos-do-gnuplot)
-3. [Gnuplot em C](#gnuplot-em-c)
-4. [Como enviar informações para o Gnuplot?](#como-enviar-informações-para-o-gnuplot)
-    - [Enviando as coordenadas](#enviando-as-coordenadas)
-    - [Mudando a Ordem com o using](#mudando-a-ordem-com-o-using)
-5. [Estilizando o Gráfico: Pontos x Linhas](#estilizando-o-gráfico-pontos-x-linhas)
-6. [Resumo](#resumo)
-7. [Tarefa](#tarefa)
+Já o Publisher irá variar bastante de acordo com a mensagem que deve ser enviada, ou seja, para qual módulo será a comunicação. Mas podemos ter uma noção baseada na imagem abaixo. Precisamos passar todas as informações necessárias para cada publish, principalmente contendo a mensagem em si, o host, o timestamp e a chave da mensagem (sempre analisar a tipagem da struct que irá utilizar).
 
-## Instalação do Gnuplot
-Para confirmar se o programa do Gnuplot está instalado na sua máquina execute o comando abaixo no seu terminal:
+```
+astro_string_example_message main_message;
+char *main_content;
+main_content = "Mensagem enviada através do módulo publish example";
 
-````bash
-gnuplot
+printf("Enviando mensagem: %s\n", main_content);
 
-````
+main_message.num_message = 1;
+main_message.content_message = main_content;
+main_message.timestamp = astro_get_time();
+main_message.host = astro_get_host();
 
-Caso o seu retorno seja algo parecido com isso, significa que a instalação já foi realizada:
+astro_publish_example_publish_command_message(&main_message);
+```
 
-<img src="terminal_gnuplot_success.png" width="800" title="terminal_gnuplot_fail">
+```
+void
+astro_publish_example_publish_command_message(astro_string_example_message *message)
+{
+    IPC_RETURN_TYPE err;
+    
+    err = IPC_publishData((char *) ASTRO_STRING_EXAMPLE_MESSAGE_NAME, message);
+    astro_test_ipc_exit(err, "Could not publish", (char *) ASTRO_STRING_EXAMPLE_MESSAGE_FMT);
+}
+```
 
-Em caso contrário, execute o comando sugerido no terminal:
+Dentro de uma funcionalidade onde é necessário um Subscriber normalmente é utilizado um Handler, que é uma função responsável por realizar alguma ação após o recebimento dessa mensagem. O handler é uma função bem simples, podendo conter qualquer coisa dentro, como na imagem abaixo.
 
-<img src="terminal_gnuplot_fail.png" width="800" title="terminal_gnuplot_fail">
+```
+static void
+astro_simple_handler(astro_string_example_message *current_message)
+{
+    printf("Mensagem recebida: %s\n", current_message->content_message);
+}
+```
 
- O texto `gnuplot>` no início da linha indica que o gnuplot está pronto para receber comandos. Por exemplo: 
+### Anotações Bruno:
 
-````bash
-                                                                plot cos(x)
+**Replicar e Simplificar**: Replique o exemplo `simple_module_example` e execute-o. Em seguida, remova qualquer parte do código que não seja necessária.
 
-````
-
-## Alguns comandos básicos do gnuplot
-
-| Descrição           | Comando              | 
-|--------------------------|------------------------------|
-| **Nomear eixos**         | gnuplot> set xlabel "eixo X" |                    
-| **Inserir título**       | gnuplot> set title "meu título"  | 
-| **Inserir grade**        | gnuplot> set grid                        |
-| **Gerar gráfico 2D**       | gnuplot> plot x | 
-| **Gerar gráfico 3D**       | gnuplot> splot x*y                          | 
-| **Encerra gnuplot**         |  gnuplot> quit               | 
-
-Obs: Para executar as alteracões realizadas com set é necessário usar o comando `gnuplot> replot` para que aconteça uma atualização. Algo parecido vale para caso em que se deseja gerar dois ou mais gráficos ao mesmo tempo. Após o comando plot ou splot o próximo gráfico exige o uso do replot.
-
-## Gnuplot em C
-
-Por ser um software independente (um programa instalado no seu PC) o C não importa uma biblioteca específica para usá-lo, ocorre a  utilização da própria stdio.h para fazer a abertura de um "cano/tubulação" (pipe) que através do seu código C envia comandos de texto que o Gnuplot executa e renderiza em tempo real.
-
-
-A manipulação do Gnuplot em C é quase idêntica à manipulação de um arquivo comum, mudando apenas as funções de sistema:
-
-
-
-| Operação           | Arquivo Comum (stdio.h)              | Gnuplot (Pipe)  |
-|--------------------------|------------------------------|--------------------------|
-| **Declaração**         |FILE *arquivo; |                    FILE *gnuplot_pipe; |
-| **Abertura**       | fopen("arquivo.txt", "modo");  | popen("gnuplot", "modo"); |
-| **Escrita**        | fprintf(arquivo, "texto");| fprintf(gnuplot_pipe, "plot..."); |
-| **Fechamento**       | fclose(arquivo); | pclose(gnuplot_pipe);|
-
-O comando de abertura `popen` (Pipe Open) cria um canal de comunicação entre seu programa e o Gnuplot.
-- O argumento "gnuplot" é o nome do executável que o sistema operacional vai procurar e rodar em segundo plano.
-- O “modo” representa a operação que se deseja efetuar e define a direção do fluxo de dados entre o seu programa e o Gnuplot. Na prática, existem dois modos principais: 
-
-| Modo           | Descrição           | Exemplo  |
-|--------------------------|------------------------------|--------------------------|
-| **"w"(Write)** |Abre o Gnuplot e permite que o seu programa C envie comandos | Enviar comandos como `set title`, `plot 'arquivo.txt'` ou os próprios dados via `plot '-'`|
-| **"r"(Read)** | Abre o Gnuplot e permite que o seu programa C leia o que o Gnuplot imprime via terminal |Capturar informações de erro ou coordenadas que o Gnuplot calculou|
-
-## Como enviar informações para o Gnuplot?
-
-Existem duas estratégias principais para alimentar o Gnuplot com as informações que você deseja visualizar. A escolha depende se o objetivo é apenas ver o gráfico em tempo real ou se é necessário guardar um registro físico dos dados.
-
-1. Via Memória Secundária (arquivo.txt):
-Nesta abordagem, seu programa em C salva os dados no disco rígido primeiro, e depois diz ao Gnuplot para abrir esse arquivo. Sinaliza ao Gnuplot através do comando: `fprintf(gnuplot_pipe, "seu_arquivo.txt\n");`
-
-2. Via Memória Primária (via RAM):
-Aqui você envia os dados diretamente da memória RAM para o gráfico, sem criar arquivos intermediários. Sinaliza ao Gnuplot através do comando: `fprintf(gnuplot_pipe, "plot '-' \n");`
-
-obs: todo comando enviado ao gnuplot deve terminar com '\n'.
-
-### Enviando as coordenadas
-O Gnuplot interpreta as informações recebidas (seja via arquivo .txt ou diretamente da memória RAM) como uma tabela organizada em colunas. Por padrão, o Gnuplot associa a primeira coluna de dados ao eixo X e a segunda coluna ao eixo Y. Caso se envie uma linha com os valores 4.5 e 1.2, o Gnuplot entenderá que 4.5 é a Coluna 1 (X) e 1.2 é a Coluna 2 (Y).
-
-### Mudando a Ordem com o using
-Caso você queira alterar qual dado vai para qual eixo sem precisar mudar a ordem no seu código C, utilize o parâmetro using. Ele permite mapear as colunas da forma que você desejar seguindo o formato `using <eixo X>:<eixo Y>`. Exemplo:
-
-`fprintf(gnuplot_pipeMP, "plot '-'");`
-
-`fprintf(gnuplot_pipeMP, " using 2:1  \n");`
-
-Obs: O caractere quebra de linha funciona como o botão "Enter" do Gnuplot. Assim que ele recebe um \n após o comando plot '-', ele entra no modo de dados e para de aceitar configurações. Se houvesse um \n logo após o plot '-' no primeiro fprintf, o Gnuplot acharia que a palavra using já era um dado numérico, resultando em erro de leitura.
-
-## Estilizando o Gráfico: Pontos x Linhas
-Por padrão, o Gnuplot desenha apenas os pontos isolados no gráfico. Para visualizar a continuidade dos dados, é necessário instruí-lo a ligar esses pontos com segmentos de reta.
-
-Para isso, utilizamos o parâmetro with lines (ou a abreviação w l) logo após o comando de plotagem:`fprintf(gnuplot_pipeMP, "plot '-' with lines \n");`
-
-obs: É possível configurar o set title, set grid, etc, em linhas diferentes (antes do plot). Mas o using, o with lines e o title fazem parte do comando plot. Eles são paramêtros do plot e devem ir juntos com ele.
-
-## Resumo
-
-| Descrição           |   Via Memória Primária (via RAM)           | Via Memória Secundária (arquivo.txt) |
-|--------------------------|------------------------------|--------------------------|
-| **De onde o Gnuplot busca os dados**         | fprintf(gnuplot_pipeMP, "plot '-' \n"); |  fprintf(gnuplot_pipeMP, "plot 'arquivo.txt' \n"); |
-| **Enviar os os dados**       | fprintf(gnuplot_pipeMP, "%d %d\n", eixo_X[i], eixo_Y[i]);  | fprintf(gnuplot_pipeMP, "plot 'vd_debug.txt'\n"); |
-| **Finalizar envio dos dados**        | fprintf(gnuplot_pipeMP, "e\n");| Não precisa (o Gnuplot lê até o fim do arquivo). |
+![](https://lh7-rt.googleusercontent.com/docsz/AD_4nXcH8jSDYp0-w1zapIaGi8dZOGH-NyjvEJK7Cjt7hVkRDIYmohCOAxoCrxYC_w9upRnnlvbxtACwm5ymoMkSLd8cHkAlpEyxdXVEtCT6mtDF9e2E1weKQn6oBz8GeUsvqXrivP28?key=z6YPq4aOMJRxIcAMJnYHJA)
 
 
-O Gnuplot é um programa de "redesenho". Toda vez que ocorre o envio do comando plot, ele apaga o gráfico anterior e faz um novo. Caso se envie apenas o ponto atual, o gráfico anterior some e fica apenas um ponto novo. Então em ambos os casos é necessário manter um histórico de valores minimos, no modelo de arquivo, o próprio arquivo.txt atua como seu histórico conforme você anexa (append) novos dados, para o outro modelo é preciso criar uma lista de valores e armazenar uma quantia deles antes de plotar.
+## Criando um Módulo no Astro
 
-## Tarefa
-Sua tarefa é utilizar o atributo velocidade do veículo através do Simulador Navigate e gerar um gráfico da velocidade x tempo.
+Para criar um módulo no Astro precisamos começar criando uma pasta dentro de `astro/src`. Dentro desta basta criar os arquivos .c e .h necessários para o desenvolvimento do módulo.
+
+Para compilação do módulo é necessário criar um arquivo Makefile (seguir o padrão de outros módulos). Vale ressaltar para o uso correto das flags que tem relação direta com todas as bibliotecas .h que estão sendo importadas diretamente nos arquivos que você criou. Por exemplo, se dentro do seu código está sendo utilizando a biblioteca:
+
+```
+#include <astro/robot_ackerman_interface.h>
+```
+
+será necessário incluir a flag:
+
+```
+-lrobot_ackerman_interface
+```
+
+## Executando um Módulo
+
+Para compilar basta executar o comando make e, caso não tenha dado nenhum erro, rodar no terminal `./<nome_do_executavel>`
+
+## Tarefa 1# - Criando um módulo
+
+Para aplicar esse conhecimentos vamos criar nosso próprio módulo.
+
+1. Crie um módulo usando o dentro da pasta astro/src usando como exemplo o simple_module_example.
+2. Seu programa deve receber a mensagem (subscriber) astro_robot_ackerman_motion_command_message. Lembre-se que para isso será necessário criar um handler para recepção dessa mensagem.
+3. Em seguida, deve-se publicar a mensagem (publisher): astro_base_ackerman_motion_command_message. Vale ressaltar que éssa mensagem é do obstacle_avoider.
+4. Não é necessário fazer nenhum processamento com os dados recebido no item 2, apenas repasse direto via publisher no item 3. (Tome cuidado com os tipos das structs que estão sendo recebidas e enviadas).
+5. Crie um makefile e compile o código. Se tudo tiver certo, podemos testar! :)
+
+Observação I: É necessário modificar a função `handler`, pois ela será utilizada para implementar a lógica do Publish. No entanto, para o primeiro passo, você pode deixá-la vazia (ou printando algo), apenas para realizar testes iniciais com o Subscribe.
+
+Observação II : Outros módulos já utilizam de métodos de publisher e subscriber dessas mensagens, então você deve reutilizar esses métodos já aplicados. Você pode utilizar o comando ./grep_all que fica dentro de astro/bin para encontrar outros códigos que utilizam as structs necessárias.
+
+**Buscar Implementações Relevantes**: Use o comando `./grep_all` no terminal para localizar implementações relacionadas ao que você deseja encontrar. Por exemplo, para buscar códigos relacionados a `astro_robot_ackerman_motion_command_message`, digite:
+```
+./grep_all astro_robot_ackerman_motion_command_message
+```
+
+Identifique e documente em qual parte do código essa referência aparece.
+
+![](https://lh7-rt.googleusercontent.com/docsz/AD_4nXdn_iGajJbQ8EoL1QApYwg3v-nrZzDCMw6k28sEZKZgwZ7mJwye4gTu-emtxzjCiuB5H2ck5Emp20Mn6pjwyfKgVdhnsYSsXgiEY3hy6T_O0h3n70_-W-YNJvS24EUgC_VvhZcwvw?key=z6YPq4aOMJRxIcAMJnYHJA)
+
+Esta imagem ilustra o uso do comando `grep_all`. Podemos observar como ele retorna a linha e o arquivo onde o código está localizado. Assim, você pode abrir o arquivo correspondente e analisar exemplos de estruturas e o uso de cada função para auxiliar na implementação do seu código.
+
+> [!NOTE]
+> ALTERAÇÃO REALIZADA AQUI!
+
+Dica: Examine diversos códigos para identificar um "padrão" de implementação. Para facilitar sua compreensão, considere a struct `astro_robot_ackerman_motion_command_message` como a __interface primária de entrada__ de dados do `obstacle_avoider`. O `obstacle_avoider` é o módulo de segurança do sistema de mobilidade autônoma. Ele atua como um ouvinte ativo para receber e processar os comandos de movimento. Tais comandos são orquestrados e publicados por módulos de alto nível, como o `navigator_ackerman`, o `motion_planner` ou até mesmo instâncias customizadas como a do seu novo módulo.
+
+
+**Testar o Subscribe**: Após localizar as funções necessárias para implementar o Subscribe, incorpore-as no código. Em seguida, execute o programa e verifique se ele funciona corretamente.
+
+**Implementar o Publish**: Repita os passos 2 e 3 para implementar o Publish. Sempre que possível, mantenha todas as funcionalidades no mesmo arquivo .c, para garantir simplicidade e alinhamento com o padrão dos códigos existentes.
+
+**Seguir a Tarefa 2**: Após concluir os passos acima, continue com a execução da tarefa 2.
+
+## Tarefa 2# - Testando o módulo
+
+Para testar este módulo criado você deverá seguir os passos para execução de um [Process](https://github.com/LumeRobotics/docs/blob/main/Tutorials/ASTRO/sistema_lume_mobilidade_autonoma/sistema_lume_mobilidade_autonoma_pt-BR.md) e [Simulator Mode](https://github.com/LumeRobotics/docs/blob/main/Tutorials/ASTRO/simulator_mode/simulator_mode.md). Com todo o sistema rodando perfeitamente, você deve:
+
+1. Inserir o veículo no mapa, clicando em Place Robot
+2. Marcar o destino com Place Final Goal
+3. Calcular a rota
+4. Executar clicando em Go
+
+Se tudo tiver de acordo o veículo deve trafegar sem nenhum problema até o destino final marcado. Isso se dá por todas as variáveis externas ativas e funcionando adequadamente. O ProControl GUI deve estar com essa aparência:
+
+![](https://lh7-rt.googleusercontent.com/docsz/AD_4nXd_C_Wy4JJu3HUXKBnqtTjAQMyC6oGoPj5mqMk478UNC-K6tTP5ReP_QbmjbMXB43LPB3Qy0hK1INdUO08P_cJs7h3i-YK8OPD6LazurB3afNCRSYQqPSZYjSE96r-kmNnc3aKHMDUAhIZmWLkwM12hofY?key=z6YPq4aOMJRxIcAMJnYHJA)
+
+> [!NOTE]
+> ALTERAÇÃO REALIZADA AQUI!
+
+De maneira geral, o sistema de mobilidade autônoma opera através da execução contínua de vários módulos em paralelo. À medida que o sistema é executado, seus diversos módulos trocam mensagens continuamente. Qualquer módulo que deseje ler essas informações só precisa se inscrever (*subscribe*) para "escutá-las". Portanto, você não precisa publicar mensagens do tipo `astro_robot_ackerman_motion_command_message` manualmente para ver os valores mudando, desde que o próprio sistema esteja rodando para alimentar esse fluxo de dados.
+
+É exatamente isso que ocorre com o `obstacle_avoider` configurado no arquivo `process-navigate_primeiros_passos_sensorbox-6.ini`. Enquanto o simulador de navegação estiver ativo, ele publicará essas mensagens de comando de forma constante. Você poderá comprovar isso apenas observando o seu módulo *subscriber* sendo executado: a publicação manual que você fez na etapa anterior não será mais necessária.
+
+Agora, vamos expandir as funcionalidades do módulo criado na __Tarefa #1__. Para compreender a justificativa prática dessa nova implementação, precisaremos forçar a parada do `obstacle_avoider`. Para fazer isso, vá até o __Proccontrol GUI__, selecione o processo `obstacle_avoider` e clique em __Stop__. O processo deverá ficar vermelho na interface, indicando a interrupção, conforme mostra a imagem abaixo.
+
+
+![](https://lh7-rt.googleusercontent.com/docsz/AD_4nXeYfgm8T6wlQOiuQjk4js-Gtk_8sBX3sZe7K6LSjhWrwKjEgRJUNdjuJr2axojwtpFcc2dWzk07IY38KiDh_o8Ih-pDINTPCIpL5UaVrF7gIUTyN24up1nDsyHSV_NJAfLfQjIfLHDnjcoYBSM9PHy7850U?key=z6YPq4aOMJRxIcAMJnYHJA)
+
+Ao fazer isso, e tentar trafegar com o veículo novamente, você irá observar que o mesmo não irá andar. 
+
+
+> [!NOTE]
+> ALTERAÇÃO REALIZADA AQUI!
+
+### Por que o veículo para quando o `obstacle_avoider` é interrompido?
+
+Isso ocorre devido a uma rigorosa medida de segurança do sistema. O fluxo de controle do veículo funciona em cascata: o módulo de planejamento gera as rotas e as envia para o `obstacle_avoider`, que, por sua vez, as valida e as repassa continuamente para a camada de baixo nível ou simulador (através da mensagem `ASTRO_BASE_ACKERMAN_MOTION_COMMAND_NAME`).
+
+Para entender esse processo, vale lembrar que a mensagem de planejamento possui o atributo `motion_command` (do tipo `astro_robot_and_trailers_motion_command_t`), que descreve exatamente a trajetória __futura__ e __desejada__ para o robô. Assim que o `obstacle_avoider` intercepta essa estrutura, ele aplica seus algoritmos de segurança. Se detectar que a rota causará uma colisão ou exige uma aceleração perigosa, ele __altera os comandos originais__ na mesma hora (recalculando a velocidade *v* para acionar os freios, por exemplo).
+
+Após essa filtragem, o `obstacle_avoider` empacota os dados já validados em uma __nova__ mensagem (`astro_base_ackerman_motion_command_message`) e a publica. É apenas essa nova mensagem que tem autoridade final sobre o que as rodas do veículo devem de fato executar.
+
+Na outra ponta dessa comunicação, o módulo `base_ackerman` possui um mecanismo que monitora o tempo decorrido desde o recebimento do último comando (controlado pelo parâmetro `motion_timeout`). Quando você força a parada do processo `obstacle_avoider` via Proccontrol, o envio dessas mensagens de controle é interrompido. Ao atingir o tempo limite sem instruções, o sistema assume que houve uma falha crítica de comunicação. Imediatamente, ele limpa a fila de execução e zera a velocidade do carro. O veículo jamais tem permissão para continuar andando "às cegas".
+
+A situação atual é a seguinte: sem o `obstacle_avoider` publicando as informações, o mecanismo de proteção atuou e travou o carro. __Sua tarefa agora__ é suprir essa falta de comunicação. Você deverá atualizar, compilar e executar o código da __Tarefa #1__ para forçar o envio dessas mensagens, assumindo temporariamente o papel de publicação do `obstacle_avoider` e garantindo que o veículo volte a andar.
+
+Dica: use o ./grep_all
+
+Se tudo der certo, ao rodar seu arquivo executável, seu veículo começará a andar novamente.
+
+## Próximo Tutorial
+
+Para continuar seu aprendizado, siga para o próximo tutorial: [Implementando Parâmetros em seu Módulo](./implementing_parameters_in_modules.md)
+
+
+// Observação: Atente-se para o fato de que <variable> é o nome do parametro nomeado em {"<module_name>", "<param_name>", ASTRO_PARAM_ONOFF, &var, 1, NULL}.
+
