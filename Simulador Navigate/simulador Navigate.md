@@ -51,7 +51,7 @@ Nesse log você consegue visualizar qual foi o módulo que não foi executado, c
 ```bash
 ./mapper -map_path ../data/ufes/primeiros_passos/geodata/map_primeiros_passos_20240613/map_files
 ```
-Para encontrar qual foi o motivo do erro acima copie a linha de erro, abra outro terminal e execute na pasta astro/bin.
+Para encontrar qual foi o motivo do erro acima copie a linha de erro, abra outro terminal e execute-o na pasta astro/bin.
   
 **Obs.:** O *./central* ainda precisa estar em execução
 
