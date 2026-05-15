@@ -81,10 +81,10 @@ O comando de abertura `popen` (Pipe Open) cria um canal de comunicação entre s
 
 Existem duas estratégias principais para alimentar o Gnuplot com as informações que você deseja visualizar. A escolha depende se o objetivo é apenas ver o gráfico em tempo real ou se é necessário guardar um registro físico dos dados.
 
-1. Via Memória Secundária (arquivo.txt)
+1. Via Memória Secundária (arquivo.txt):
 Nesta abordagem, seu programa em C salva os dados no disco rígido primeiro, e depois diz ao Gnuplot para abrir esse arquivo. Sinaliza ao Gnuplot através do comando: `fprintf(gnuplot_pipe, "seu_arquivo.txt\n");`
 
-2. Via Memória Primária (via RAM)
+2. Via Memória Primária (via RAM):
 Aqui você envia os dados diretamente da memória RAM para o gráfico, sem criar arquivos intermediários. Sinaliza ao Gnuplot através do comando: `fprintf(gnuplot_pipe, "plot '-' \n");`
 
 obs: todo comando enviado ao gnuplot deve terminar com '\n'.
