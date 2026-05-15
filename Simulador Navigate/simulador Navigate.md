@@ -35,7 +35,7 @@
 ```
 
 > [!NOTE]
-> ALTERAÇÃO REALIZADA AQUI!
+> ALTERAÇÃO REALIZADA AQUI.
 
 ## Erro na execução do Process
 
