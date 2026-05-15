@@ -126,7 +126,7 @@ Parâmetros podem ser atualizados durante a execução com o comando
 > [!NOTE]
 > ALTERAÇÃO REALIZADA AQUI!
 
-Observação: Atente-se para o fato de que <variable> é o nome do parametro nomeado em {"<module_name>", "<param_name>", ASTRO_PARAM_ONOFF, &var, 1, NULL}.
+Observação: Atente-se para o fato de que <variable> é o nome do parametro nomeado em `{"<module_name>", "<param_name>", ASTRO_PARAM_ONOFF, &var, 1, NULL}.`
 
 
 Exemplo:
