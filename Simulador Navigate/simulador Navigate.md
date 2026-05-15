@@ -33,6 +33,9 @@
     ./central
     ./proccontrol /home/lume/astro/data/ufes/primeiros_passos/process/process-navigate_primeiros_passos_sensorbox-6.ini
 ```
+> [!NOTE]
+> Este texto terá uma barra lateral azul (Informação).
+> 
 ## Erro na execução do Process
 
 O print abaixo mostra em amarelo os módulos que não foram executados:
@@ -64,7 +67,7 @@ Como resultado verifica-se que que o módulo mss não foi encontrado. Por causa 
 ```bash
 ./mss_process_prepare.py <caminho para o seu process>
 ```
-Caso a mensagem abaixo tenha sido apresentada a conversão foi um sucesso. Agora execute novamente o novo Process gerado,o simulador deve abrir.
+Caso a mensagem abaixo tenha sido apresentada a conversão foi um sucesso. Agora execute novamente o novo Process gerado,o simulador deve abrir:
 <p align="center">
   <img width="800" src="./conversao_mss.png"/>
 </p>
