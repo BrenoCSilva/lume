@@ -34,10 +34,13 @@
     ./proccontrol /home/lume/astro/data/ufes/primeiros_passos/process/process-navigate_primeiros_passos_sensorbox-6.ini
 ```
 
+## Erro na execução do Process
+
 <p align="center">
   <img width="800" src="./mss.jpeg"/>
 </p>
 
+Um erro que pode ocorrer ao executar seu Process através do procconctrol
 
 ## Proccontrol GUI
 
