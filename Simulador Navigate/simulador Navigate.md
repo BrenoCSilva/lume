@@ -41,7 +41,7 @@ O print abaixo mostra em amarelo os módulos que não foram executados:
   <img width="800" src="./modulos_erros.png"/>
 </p>
 
-Para identificar o erro de execução é necessário parar o processo que deu erro clicando com o botão esquerdo do mouse em cima dele e selecionar a opção stop. Depois vá ao terminal onde está sendo executando o ./proccontrol para verificar o log do erro.
+Para identificar o erro de execução é necessário parar o processo que deu erro clicando com o botão esquerdo do mouse em cima dele e selecionar a opção stop. Depois vá ao terminal onde está sendo executando o ./proccontrol para verificar o log do erro (exited UNCLEANLY).
 
 <p align="center">
   <img width="800" src="./mensagem_error.png"/>
