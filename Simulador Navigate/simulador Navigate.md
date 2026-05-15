@@ -50,7 +50,6 @@ Nesse log você consegue pegar qual foi o arquivo que não foi executado, como p
 
 ```bash
 ./mapper -map_path ../data/ufes/primeiros_passos/geodata/map_primeiros_passos_20240613/map_files
-Um erro que pode ocorrer ao executar seu Process através do procconctrol
 ```
 Para encontrar qual foi o motivo do erro acima copie toda a linha e abra outro terminal e navegue até a pasta bin do astro. E o execute.
   
