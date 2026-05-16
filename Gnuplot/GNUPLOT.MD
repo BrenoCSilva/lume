@@ -50,7 +50,7 @@ Em caso contrário, execute o comando sugerido no terminal:
 | **Gerar gráfico 3D**       | gnuplot> splot x*y                          | 
 | **Encerra gnuplot**         |  gnuplot> quit               | 
 
-> [!CAUTION]
+> [!Observação]
 > Para executar as alteracões realizadas com set é necessário usar o comando `gnuplot> replot` para que aconteça uma atualização. Algo parecido vale para caso em que se deseja gerar dois ou mais gráficos ao mesmo tempo. Após o comando plot ou splot o próximo gráfico exige o uso do replot.
 
 ## Gnuplot em C
