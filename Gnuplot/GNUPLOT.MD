@@ -51,7 +51,7 @@ Em caso contrário, execute o comando sugerido no terminal:
 | **Encerra gnuplot**         |  gnuplot> quit               | 
 
 > [!IMPORTANT]
-> Para executar as alteracões realizadas com set é necessário usar o comando `gnuplot> replot` para que aconteça uma atualização. Algo parecido vale para caso em que se deseja gerar dois ou mais gráficos ao mesmo tempo. Após o comando plot ou splot o próximo gráfico exige o uso do replot.
+> Para aplicar as alterações feitas com `set`, é necessário executar o comando `gnuplot> replot`, garantindo a atualização do gráfico. O mesmo princípio vale quando se deseja gerar dois ou mais gráficos simultaneamente: após utilizar plot ou splot, os gráficos seguintes devem ser gerados com replot.
 
 ## Gnuplot em C
 
