@@ -152,7 +152,7 @@ Na outra ponta dessa comunicação, o módulo `base_ackerman` possui um mecanism
 A situação atual é a seguinte: sem o `obstacle_avoider` publicando as informações, o mecanismo de proteção atuou e travou o carro. __Sua tarefa agora__ é suprir essa falta de comunicação. Você deverá atualizar, compilar e executar o código da __Tarefa #1__ para forçar o envio dessas mensagens, assumindo temporariamente o papel de publicação do `obstacle_avoider` e garantindo que o veículo volte a andar.
 
 >[!TIP]
->use o ./grep_all
+>use o `./grep_all`
 
 Se tudo der certo, ao rodar seu arquivo executável, seu veículo começará a andar novamente.
 
