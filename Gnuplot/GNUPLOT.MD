@@ -154,4 +154,10 @@ int main() {
 ````
 
 ## Tarefa
-Sua tarefa é utilizar o atributo velocidade do veículo através do Simulador Navigate e gerar um gráfico da velocidade x tempo. Ambos os atributos estão na struct trabalhada anteriormente `astro_base_ackerman_motion_command_message`.
+
+Relembrando as Tarefas 1 e 2, foi utilizado a estrutura `astro_base_ackerman_motion_command_message` para lidar com as mensagens do sistema. Agora, você usará essa mesma struct para monitorar o movimento do veículo:
+
+1 - Coleta e Registro: Capture a velocidade (v) e o timestamp de cada mensagem recebida e armazene esses dados em um arquivo .txt enquanto o simulador Navigate (Tarefa 2) estiver em execução.
+
+2 - Visualização: Após concluir a coleta, utilize o Gnuplot para ler o arquivo gerado e criar um gráfico de velocidade x tempo, seguindo o modelo da imagem abaixo:
+
