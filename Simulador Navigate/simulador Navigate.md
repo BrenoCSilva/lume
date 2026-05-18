@@ -75,6 +75,48 @@ Caso a mensagem abaixo tenha sido apresentada a conversão foi um sucesso. Agora
 
 Dica: Toda vez que um arquivo do *process* não é executado, utilize esse método para descobrir a razão. Um erro comum de acontecer é o caminho das variáveis do Process estarem errados ou não existir mais os arquivos no local.
 
+*******************************************************************
+
+## Process Execution Error
+The screenshot below shows the modules that failed to execute (highlighted in yellow):
+
+<p align="center">
+  <img width="800" src="./modulos_erros.png"/>
+</p>
+
+To identify the execution error, you must stop the failed process by left-clicking it and selecting the stop option. Then, check the terminal where ./proccontrol is running to verify the error log (look for exited UNCLEANLY).
+
+<p align="center">
+  <img width="800" src="./mensagem_error.png"/>
+</p>
+
+In this log, you can identify which module failed to run, such as the mapper:
+
+```bash
+./mapper -map_path ../data/ufes/primeiros_passos/geodata/map_primeiros_passos_20240613/map_files
+```
+
+To find the cause of the error, copy the failed command line, open a new terminal, and execute it within the astro/bin folder.
+
+Note: The ./central module must still be running.
+
+<p align="center">
+  <img width="800" src="./mss.jpeg"/>
+</p>
+
+In the example above, the result shows that the mss module was not found. Due to a recent update in Astro maps, this module has become mandatory for maps to load correctly. To fix this, run the command below to perform the conversion:
+
+```bash
+./mss_process_prepare.py <caminho para o seu process>
+```
+
+If the message below is displayed, the conversion was successful. Now, run the newly generated Process again, and the simulator should open:
+<p align="center">
+  <img width="1600" src="./conversao_mss.png"/>
+</p>
+
+Tip: Whenever a process file fails to execute, use this method to debug the cause. Common errors include incorrect paths in the Process variables or files that have been moved or deleted.
+
 ## Proccontrol GUI
 
  Dentro do *Proccontrol gui*, os programas que estão rodando ficam em verde, os que estão com erro/reiniciados em amarelo e os que não estão mais sendo executados em vermelho. Clicando em cada um, é possível realizar funções como iniciá-los ou pará-los. No *viewer_3D*, é possível visualizar o ambiente com 3 dimensões sem os dados dos sensores (que são captados no mundo real), e também visualizar outras características clicando em *options*. 
