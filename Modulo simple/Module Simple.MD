@@ -105,7 +105,7 @@ Identifique e documente em qual parte do código essa referência aparece.
 
 Esta imagem ilustra o uso do comando `grep_all`. Podemos observar como ele retorna a linha e o arquivo onde o código está localizado. Assim, você pode abrir o arquivo correspondente e analisar exemplos de estruturas e o uso de cada função para auxiliar na implementação do seu código.
 
-> [!TIP]
+> [!dica]
 > ALTERAÇÃO REALIZADA AQUI!
 
 Dica: Examine diversos códigos para identificar um "padrão" de implementação. Para facilitar sua compreensão, considere a struct `astro_robot_ackerman_motion_command_message` como a __interface primária de entrada__ de dados do `obstacle_avoider`. O `obstacle_avoider` é o módulo de segurança do sistema de mobilidade autônoma. Ele atua como um ouvinte ativo para receber e processar os comandos de movimento. Tais comandos são orquestrados e publicados por módulos de alto nível, como o `navigator_ackerman`, o `motion_planner` ou até mesmo instâncias customizadas como a do seu novo módulo.
