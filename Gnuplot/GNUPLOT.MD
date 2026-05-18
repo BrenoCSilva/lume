@@ -14,6 +14,7 @@ Os gráficos podem ser gerados diretamente via terminal, por um arquivo externo 
     - [Mudando a Ordem com o using](#mudando-a-ordem-com-o-using)
 5. [Estilizando o Gráfico: Pontos x Linhas](#estilizando-o-gráfico-pontos-x-linhas)
 6. [Resumo](#resumo)
+7. [Exemplo](#exemplo)
 7. [Tarefa](#tarefa)
 
 ## Instalação do Gnuplot
@@ -88,7 +89,8 @@ Nesta abordagem, seu programa em C salva os dados no disco rígido primeiro, e d
 2. Via Memória Primária (via RAM):
 Aqui você envia os dados diretamente da memória RAM para o gráfico, sem criar arquivos intermediários. Sinaliza ao Gnuplot através do comando: `fprintf(gnuplot_pipe, "plot '-' \n");`
 
->[!NOTE] todo comando enviado ao gnuplot deve terminar com '\n'.
+>[!NOTE] 
+> Todo comando enviado ao gnuplot deve terminar com '\n'.
 
 ### Enviando as coordenadas
 O Gnuplot interpreta as informações recebidas (seja via arquivo .txt ou diretamente da memória RAM) como uma tabela organizada em colunas. Por padrão, o Gnuplot associa a primeira coluna de dados ao eixo X e a segunda coluna ao eixo Y. Caso se envie uma linha com os valores 4.5 e 1.2, o Gnuplot entenderá que 4.5 é a Coluna 1 (X) e 1.2 é a Coluna 2 (Y).
@@ -147,8 +149,7 @@ int main() {
     return 0;
 }
 
-```
-
+````
 
 ## Tarefa
 Sua tarefa é utilizar o atributo velocidade do veículo através do Simulador Navigate e gerar um gráfico da velocidade x tempo. Ambos os atributos estão na struct trabalhada anteriormente `astro_base_ackerman_motion_command_message`.
