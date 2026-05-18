@@ -128,9 +128,6 @@ Se tudo tiver de acordo o veículo deve trafegar sem nenhum problema até o dest
 
 ![](https://lh7-rt.googleusercontent.com/docsz/AD_4nXd_C_Wy4JJu3HUXKBnqtTjAQMyC6oGoPj5mqMk478UNC-K6tTP5ReP_QbmjbMXB43LPB3Qy0hK1INdUO08P_cJs7h3i-YK8OPD6LazurB3afNCRSYQqPSZYjSE96r-kmNnc3aKHMDUAhIZmWLkwM12hofY?key=z6YPq4aOMJRxIcAMJnYHJA)
 
-> [!NOTE]
-> ALTERAÇÃO REALIZADA AQUI!
-
 De maneira geral, o sistema de mobilidade autônoma opera através da execução contínua de vários módulos em paralelo. À medida que o sistema é executado, seus diversos módulos trocam mensagens continuamente. Qualquer módulo que deseje ler essas informações só precisa se inscrever (*subscribe*) para "escutá-las". Portanto, você não precisa publicar mensagens do tipo `astro_robot_ackerman_motion_command_message` manualmente para ver os valores mudando, desde que o próprio sistema esteja rodando para alimentar esse fluxo de dados.
 
 É exatamente isso que ocorre com o `obstacle_avoider` configurado no arquivo `process-navigate_primeiros_passos_sensorbox-6.ini`. Enquanto o simulador de navegação estiver ativo, ele publicará essas mensagens de comando de forma constante. Você poderá comprovar isso apenas observando o seu módulo *subscriber* sendo executado: a publicação manual que você fez na etapa anterior não será mais necessária.
