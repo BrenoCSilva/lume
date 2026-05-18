@@ -88,7 +88,7 @@ Nesta abordagem, seu programa em C salva os dados no disco rígido primeiro, e d
 2. Via Memória Primária (via RAM):
 Aqui você envia os dados diretamente da memória RAM para o gráfico, sem criar arquivos intermediários. Sinaliza ao Gnuplot através do comando: `fprintf(gnuplot_pipe, "plot '-' \n");`
 
-obs: todo comando enviado ao gnuplot deve terminar com '\n'.
+>[!NOTE] todo comando enviado ao gnuplot deve terminar com '\n'.
 
 ### Enviando as coordenadas
 O Gnuplot interpreta as informações recebidas (seja via arquivo .txt ou diretamente da memória RAM) como uma tabela organizada em colunas. Por padrão, o Gnuplot associa a primeira coluna de dados ao eixo X e a segunda coluna ao eixo Y. Caso se envie uma linha com os valores 4.5 e 1.2, o Gnuplot entenderá que 4.5 é a Coluna 1 (X) e 1.2 é a Coluna 2 (Y).
@@ -100,14 +100,16 @@ Caso você queira alterar qual dado vai para qual eixo sem precisar mudar a orde
 
 `fprintf(gnuplot_pipeMP, " using 2:1  \n");`
 
-Obs: O caractere quebra de linha funciona como o botão "Enter" do Gnuplot. Assim que ele recebe um \n após o comando plot '-', ele entra no modo de dados e para de aceitar configurações. Se houvesse um \n logo após o plot '-' no primeiro fprintf, o Gnuplot acharia que a palavra using já era um dado numérico, resultando em erro de leitura.
+>[!NOTE]
+> O caractere quebra de linha funciona como o botão "Enter" do Gnuplot. Assim que ele recebe um \n após o comando plot '-', ele entra no modo de dados e para de aceitar configurações. Se houvesse um \n logo após o plot '-' no primeiro fprintf, o Gnuplot acharia que a palavra using já era um dado numérico, resultando em erro de leitura.
 
 ## Estilizando o Gráfico: Pontos x Linhas
 Por padrão, o Gnuplot desenha apenas os pontos isolados no gráfico. Para visualizar a continuidade dos dados, é necessário instruí-lo a ligar esses pontos com segmentos de reta.
 
 Para isso, utilizamos o parâmetro with lines (ou a abreviação w l) logo após o comando de plotagem:`fprintf(gnuplot_pipeMP, "plot '-' with lines \n");`
 
-obs: É possível configurar o set title, set grid, etc, em linhas diferentes (antes do plot). Mas o using, o with lines e o title fazem parte do comando plot. Eles são paramêtros do plot e devem ir juntos com ele.
+>[!NOTE]
+> É possível configurar o set title, set grid, etc, em linhas diferentes (antes do plot). Mas o using, o with lines e o title fazem parte do comando plot. Eles são paramêtros do plot e devem ir juntos com ele.
 
 ## Resumo
 
@@ -119,6 +121,34 @@ obs: É possível configurar o set title, set grid, etc, em linhas diferentes (a
 
 
 O Gnuplot é um programa de "redesenho". Toda vez que ocorre o envio do comando plot, ele apaga o gráfico anterior e faz um novo. Caso se envie apenas o ponto atual, o gráfico anterior some e fica apenas um ponto novo. Então em ambos os casos é necessário manter um histórico de valores minimos, no modelo de arquivo, o próprio arquivo.txt atua como seu histórico conforme você anexa (append) novos dados, para o outro modelo é preciso criar uma lista de valores e armazenar uma quantia deles antes de plotar.
+
+## Exemplo 
+````c
+#include <stdio.h>
+
+int main() {
+    // 1. Criar e salvar dados no arquivo
+    FILE *arquivo = fopen("dados.txt", "w");
+    fprintf(arquivo, "1 10\n"); // Ponto 1 (X=1, Y=10)
+    fprintf(arquivo, "2 20\n"); // Ponto 2 (X=2, Y=20)
+    fclose(arquivo);
+
+    // 2. Abrir o Gnuplot
+    FILE *pipe = popen("gnuplot -persist", "w");
+
+    // 3. Configurar e Plotar
+    fprintf(pipe, "set title 'Exemplo Simples'\n");
+    fprintf(pipe, "set grid\n");
+    fprintf(pipe, "plot 'dados.txt' with lines\n");
+
+    // 4. Fechar o cano (pipe)
+    pclose(pipe);
+
+    return 0;
+}
+
+```
+
 
 ## Tarefa
 Sua tarefa é utilizar o atributo velocidade do veículo através do Simulador Navigate e gerar um gráfico da velocidade x tempo. Ambos os atributos estão na struct trabalhada anteriormente `astro_base_ackerman_motion_command_message`.
