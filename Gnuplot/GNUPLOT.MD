@@ -27,16 +27,16 @@ gnuplot
 
 Caso o seu retorno seja algo parecido com isso, significa que a instalação já foi realizada:
 
-<img src="terminal_gnuplot_success.png" width="800" title="terminal_gnuplot_fail">
+<img src="./files/tutorial_gnuplot/terminal_gnuplot_success.png" width="800" title="terminal_gnuplot_fail">
 
 Em caso contrário, execute o comando sugerido no terminal:
 
-<img src="terminal_gnuplot_fail.png" width="800" title="terminal_gnuplot_fail">
+<img src="./files/tutorial_gnuplot/terminal_gnuplot_fail.png" width="800" title="terminal_gnuplot_fail">
 
  O texto `gnuplot>` no início da linha indica que o gnuplot está pronto para receber comandos. Por exemplo: 
 
 ````bash
-                                                                plot cos(x)
+plot cos(x)
 
 ````
 
