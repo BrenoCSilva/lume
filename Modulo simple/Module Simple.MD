@@ -139,10 +139,6 @@ Agora, vamos expandir as funcionalidades do módulo criado na __Tarefa #1__. Par
 
 Ao fazer isso, e tentar trafegar com o veículo novamente, você irá observar que o mesmo não irá andar. 
 
-
-> [!NOTE]
-> ALTERAÇÃO REALIZADA AQUI!
-
 ### Por que o veículo para quando o `obstacle_avoider` é interrompido?
 
 Isso ocorre devido a uma rigorosa medida de segurança do sistema. O fluxo de controle do veículo funciona em cascata: o módulo de planejamento gera as rotas e as envia para o `obstacle_avoider`, que, por sua vez, as valida e as repassa continuamente para a camada de baixo nível ou simulador (através da mensagem `ASTRO_BASE_ACKERMAN_MOTION_COMMAND_NAME`).
