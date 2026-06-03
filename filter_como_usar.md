@@ -1,6 +1,6 @@
 # Guia de Testes: Validação do Filtro VD (RemoteKit)
 
-Este guia orienta como realizar o envio de payloads JSON via terminal utilizando o utilitário `./publish` para validar as diferentes ramificações de lógica (**Cadastro**, **Duplicados**, **Remoção** e **Tratamento de Erros**) do gerenciador de filtros.
+Este guia orienta como realizar o envio de strings JSON através do publish tipo command_signals_message.
 
 > **Regra de Ouro do Terminal:** Sempre abra a string com aspas simples (`'`) por fora e utilize aspas duplas (`"`) para as chaves e valores do JSON por dentro. Isso evita erros de interpretação do Bash.
 
@@ -26,6 +26,13 @@ Nem todos os campos são necessários para todas as operações. Entretanto, sem
 * `position`
 
 ---
+
+Porém, existe campos que enviados de maneira isolada nada fazem, por não existir tratamento são ignorados:
+
+
+```bash
+./publish '{"name": "SinalA"}'
+```
 
 ## 1. Cadastrar um Novo Filtro
 
@@ -66,7 +73,7 @@ Dados:     0xBD
 #### Resposta Esperada no VD
 
 ```text
-[ADD ERROR] Parametros do config incompletos para o pairing
+[ADD IGNORE] Parametros do config incompletos para o pairing
 ```
 
 ---
@@ -142,11 +149,9 @@ Dados:     0xBD
 
 ## 4. Teste de Defesas e Tratamento de Erros
 
-Cenários criados para validar o comportamento do parser diante de payloads JSON inválidos ou malformados.
+Cenários criados para validar o comportamento do parser diante da string JSON inválidos ou malformados.
 
 ### Cenário A: Erro de Sintaxe no Objeto `config`
-
-Força uma falha do `json_tokener_parse` interno através de um JSON inválido.
 
 #### Valor hexadecimal sem aspas
 
@@ -160,18 +165,12 @@ Força uma falha do `json_tokener_parse` interno através de um JSON inválido.
 ./publish '{"name": "SinalA", "config": {"function": "pairing", "id":}}'
 ```
 
-#### Ausência do objeto `config`
-
-```bash
-./publish '{"name": "SinalA"}'
-```
-
 ### Resposta Esperada no VD
 
 Todos os cenários acima resultam na mesma falha de validação:
 
 ```text
-[ERROR PARSE] mandou chave sem valor no config
+[ERROR PARSE] mandou chave sem valor 
 ```
 
 ---
