@@ -1,8 +1,8 @@
 # Guia de Testes: Validação do Filtro VD (RemoteKit)
 
-Este guia orienta como realizar o envio de strings JSON através do publish tipo command_signals_message.
+Este guia orienta como realizar o envio de strings JSON através do publish.
 
-> **Regra de Ouro do Terminal:** Sempre abra a string com aspas simples (`'`) por fora e utilize aspas duplas (`"`) para as chaves e valores do JSON por dentro. Isso evita erros de interpretação do Bash.
+> **Envio pelo Terminal:** Sempre abra a string com aspas simples (`'`) por fora e utilize aspas duplas (`"`) para as chaves e valores do JSON por dentro. Isso evita erros de interpretação do Bash.
 
 ---
 
