@@ -6,14 +6,42 @@ Este guia orienta como realizar o envio de payloads JSON via terminal utilizando
 
 ---
 
-## 1. Cadastrar um Novo Filtro (Pairing)
+## 0. Estrutura Completa da Mensagem
 
-Utilizado para ativar a interceptação de um sinal do RemoteKit em um ID específico da rede CAN. O campo `"remove"` deve ser omitido e a `"function"` deve ser obrigatoriamente `"pairing"`.
+Abaixo está um exemplo contendo todos os campos disponíveis:
 
 ### Comando no Terminal
 
 ```bash
-./publish '{"name": "SinalA", "level": "Alto", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
+./publish '{"name": "SinalA", "level": "Alto", "remove": "yes", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
+```
+
+### Observações
+
+Nem todos os campos são necessários para todas as operações. Entretanto, sempre que os campos abaixo forem enviados, eles devem obrigatoriamente estar dentro do objeto `config`:
+
+* `function`
+* `id`
+* `byte`
+* `position`
+
+---
+
+## 1. Cadastrar um Novo Filtro
+
+Utilizado para ativar a interceptação de um sinal do RemoteKit em um ID específico da rede CAN.
+
+### Regras
+
+* O campo `"function"` deve ser obrigatoriamente `"pairing"`.
+* Os campos `id`, `position` e `byte` são obrigatórios para a operação de cadastro.
+* O campo `"remove"` pode ser omitido ou possuir qualquer valor diferente de `"yes"`.
+* Caso a função informada não seja `"pairing"`, a regra será ignorada, pois atualmente não existe tratamento para outras funcionalidades.
+
+### Comando no Terminal
+
+```bash
+./publish '{"config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
 ```
 
 ### Resposta Esperada no VD
@@ -27,19 +55,37 @@ funcionalidade: pairing
 Dados:     0xBD
 ```
 
+### Cenário: Parâmetros Obrigatórios Ausentes
+
+#### Comando
+
+```bash
+./publish '{"name": "SinalA", "config": {"function": "pairing"}}'
+```
+
+#### Resposta Esperada no VD
+
+```text
+[ADD ERROR] Parametros do config incompletos para o pairing
+```
+
 ---
 
 ## 2. Bloqueio de Filtro Duplicado
 
-Garante a robustez da memória impedindo que a mesma regra seja injetada múltiplas vezes na tabela hash.
+Impede que a mesma regra seja inserida múltiplas vezes na tabela hash.
 
 Para testar, execute exatamente o mesmo comando de cadastro anterior uma segunda vez.
 
-### Comando no Terminal (Repetido)
+### Comando no Terminal
 
 ```bash
 ./publish '{"name": "SinalA", "level": "Alto", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
 ```
+
+### Observação
+
+Apesar de `name` e `level` serem enviados, a validação de duplicidade utiliza apenas os campos armazenados na estrutura do filtro, ou seja, os valores presentes em `config`.
 
 ### Resposta Esperada no VD
 
@@ -53,15 +99,33 @@ A função de segurança detecta a colisão de ID, byte e posição e rejeita a 
 
 ## 3. Remover um Filtro Ativo (Delete)
 
-Aciona a lógica de remoção sequencial de dentro do vetor de regras do ID informado.
+Aciona a lógica de remoção de filtros previamente cadastrados.
 
-É obrigatório passar a chave `"remove": "yes"` no primeiro nível do JSON e preencher a função alvo e o ID dentro de `config`.
+É obrigatório enviar a chave `"remove": "yes"` no primeiro nível do JSON.
 
-### Comando no Terminal
+### Remoção por Nome
+
+Para remover utilizando apenas o nome do filtro:
+
+#### Comando no Terminal
 
 ```bash
-./publish '{"name": "SinalA", "level": "Alto", "remove": "yes", "config": {"function": "pairing", "id": "0x201"}}'
+./publish '{"name": "SinalA", "remove": "yes", "config": {"function": "pairing"}}'
 ```
+
+### Remoção por ID
+
+Para remover utilizando o ID do filtro:
+
+#### Comando no Terminal
+
+```bash
+./publish '{"remove": "yes", "config": {"function": "pairing", "id": "0x201"}}'
+```
+
+### Observação
+
+Caso `name` e `id` sejam enviados simultaneamente, o `id` possui precedência durante a busca do filtro.
 
 ### Resposta Esperada no VD
 
@@ -78,19 +142,33 @@ Dados:     0xBD
 
 ## 4. Teste de Defesas e Tratamento de Erros
 
-Cenários criados para validar que payloads corrompidos ou malformados não causem falhas críticas (*Segmentation Fault*) ou vazamentos de memória no robô.
+Cenários criados para validar o comportamento do parser diante de payloads JSON inválidos ou malformados.
 
-### Cenário A: Erro de Sintaxe no Sub-JSON (`config`)
+### Cenário A: Erro de Sintaxe no Objeto `config`
 
-Força a falha do `json_tokener_parse` interno enviando um valor sem aspas (sintaxe inválida para o JSON-C).
+Força uma falha do `json_tokener_parse` interno através de um JSON inválido.
 
-#### Comando
+#### Valor hexadecimal sem aspas
 
 ```bash
 ./publish '{"name": "SinalA", "config": {"function": "pairing", "id": 0x201}}'
 ```
 
-#### Retorno Esperado no VD
+#### Chave sem valor
+
+```bash
+./publish '{"name": "SinalA", "config": {"function": "pairing", "id":}}'
+```
+
+#### Ausência do objeto `config`
+
+```bash
+./publish '{"name": "SinalA"}'
+```
+
+### Resposta Esperada no VD
+
+Todos os cenários acima resultam na mesma falha de validação:
 
 ```text
 [ERROR PARSE] mandou chave sem valor no config
@@ -100,7 +178,7 @@ Força a falha do `json_tokener_parse` interno enviando um valor sem aspas (sint
 
 ### Cenário B: Tentativa de Remoção sem Parâmetros Obrigatórios
 
-Envia a flag de remoção ativa, mas envia o objeto `config` completamente vazio, quebrando as regras de validação.
+Envia a flag de remoção ativa, mas envia o objeto `config` vazio, impossibilitando a identificação do filtro a ser removido.
 
 #### Comando
 
@@ -108,7 +186,7 @@ Envia a flag de remoção ativa, mas envia o objeto `config` completamente vazio
 ./publish '{"name": "SinalA", "remove": "yes", "config": {}}'
 ```
 
-#### Retorno Esperado no VD
+#### Resposta Esperada no VD
 
 ```text
 [IGNORAR DELETE] Tentando remover um filter sem o campo functionality ou sem name/id
