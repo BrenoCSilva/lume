@@ -1,6 +1,6 @@
 # Guia de Testes: Validação do Filtro VD (RemoteKit)
 
-Este guia orienta como realizar o envio de strings JSON através do publish.
+Este guia orienta o padrão esperado para a string JSON coletada para utilizar o filtro da rede can. A string por padrão irá vir do **atributo command_signals_string** da struct **astro_vehicle_driver_command_signals_message**. Abaixo é demonstrado essa mensagem sendo enviada via terminal.
 
 > **Envio pelo Terminal:** Sempre abra a string com aspas simples (`'`) por fora e utilize aspas duplas (`"`) para as chaves e valores do JSON por dentro. Isso evita erros de interpretação do Bash.
 
