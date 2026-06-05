@@ -27,11 +27,37 @@ Nem todos os campos são necessários para todas as operações. Entretanto, sem
 
 ---
 
-Existem campos que se enviados de maneira isolada nada fazem, são ignoradas pois não existe tratamento. O programa atual só trata mensagens que o remove == yes e function == pairing.
+Existem campos que se enviados de maneira isolada nada fazem, são ignoradas pois não existe tratamento. O programa atual só trata mensagens em que o campo remove == yes e/ou function == pairing.
 
 ```bash
 ./publish '{"name": "SinalA"}'
 ```
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration (config empty, no treatment for this command.)**
+
+
+```bash
+./publish '{"config": {"id": "0x201"}}'
+```
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration (no treatment for this command.)**
+
+Envio de campos malformados:
+```bash
+./publish '{"config": {"id": 0x201}}'
+
+```bash
+./publish '{"name": "SinalA", "config": {"function": "pairing", "id":}}'
+```
+```
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( JSON [command_signal] with invalid syntax.)**
+
+Campo remove não acompanhado do campo config: 
+```bash
+./publish '{"name": "SinalA", "remove": "yes"}'
+```
+```bash
+./publish '{"name": "SinalA", "remove": "yes", "config": {}}'
+```
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( It is mandatory to send the 'functionality' and at least the 'id' or 'name'.)**
 
 ## 1. Cadastrar um Novo Filtro
 
@@ -52,28 +78,18 @@ Utilizado para ativar a interceptação de um sinal do RemoteKit em um ID espec�
 
 ### Resposta Esperada no VD
 
-O sistema realiza o parse com sucesso, converte as strings hexadecimais para inteiros nativos e registra o filtro na tabela hash.
+O sistema realiza o parse com sucesso, e registra o a regra para o filtro na tabela hash. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
 
-```text
-[ADD] Register pairing!
-ID Completo: 201
-funcionalidade: pairing
-Dados:     0xBD
-```
 
 ### Cenário: Parâmetros Obrigatórios Ausentes
 
-#### Comando
+Tentar executar a funcionalidade de pareamento sem os campos do config:
 
 ```bash
 ./publish '{"name": "SinalA", "config": {"function": "pairing"}}'
 ```
 
-#### Resposta Esperada no VD
-
-```text
-[ADD IGNORE] Parametros do config incompletos para o pairing
-```
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Required keys [config] are missing for the 'pairing' function in the JSON.)**
 
 ---
 
@@ -89,17 +105,11 @@ Para testar, execute exatamente o mesmo comando de cadastro anterior uma segunda
 ./publish '{"name": "SinalA", "level": "Alto", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
 ```
 
-### Observação
-
-Apesar de `name` e `level` serem enviados, a validação de duplicidade utiliza apenas os campos armazenados na estrutura do filtro, ou seja, os valores presentes em `config`.
+**Observação:** Apesar de `name` e `level` serem enviados, a validação de duplicidade utiliza apenas os campos armazenados na estrutura do filtro, ou seja, os valores presentes em `config`.
 
 ### Resposta Esperada no VD
 
-A função de segurança detecta a colisão de ID, byte e posição e rejeita a inserção.
-
-```text
-[IGNORAR ADD] Tentando adicionar um filter já existente!
-```
+A função de segurança detecta a colisão de ID, byte e posição e rejeita a inserção. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
 
 ---
 
@@ -116,7 +126,7 @@ Para remover utilizando apenas o nome do filtro:
 #### Comando no Terminal
 
 ```bash
-./publish '{"name": "SinalA", "remove": "yes", "config": {"function": "pairing"}}'
+./publish '{"name": "RPM", "remove": "yes", "config": {"function": "pairing"}}'
 ```
 
 ### Remoção por ID
@@ -129,63 +139,7 @@ Para remover utilizando o ID do filtro:
 ./publish '{"remove": "yes", "config": {"function": "pairing", "id": "0x201"}}'
 ```
 
-### Observação
-
-Caso `name` e `id` sejam enviados simultaneamente, o `id` possui precedência durante a busca do filtro.
-
 ### Resposta Esperada no VD
 
-O ID é localizado na hash, a regra de pareamento associada é removida do vetor e o log confirma a exclusão.
+O ID é localizado na hash, a regra de pareamento associada é removida do vetor. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
 
-```text
-[DELETE]
-ID Completo: 201
-funcionalidade: pairing
-Dados:     0xBD
-```
-
----
-
-## 4. Teste de Defesas e Tratamento de Erros
-
-Cenários criados para validar o comportamento do parser diante da string JSON inválidos ou malformados.
-
-### Cenário A: Erro de Sintaxe no Objeto `config`
-
-#### Valor hexadecimal sem aspas
-
-```bash
-./publish '{"name": "SinalA", "config": {"function": "pairing", "id": 0x201}}'
-```
-
-#### Chave sem valor
-
-```bash
-./publish '{"name": "SinalA", "config": {"function": "pairing", "id":}}'
-```
-
-### Resposta Esperada no VD
-
-Todos os cenários acima resultam na mesma falha de validação:
-
-```text
-[ERROR PARSE] mandou chave sem valor 
-```
-
----
-
-### Cenário B: Tentativa de Remoção sem Parâmetros Obrigatórios
-
-Envia a flag de remoção ativa, mas envia o objeto `config` vazio, impossibilitando a identificação do filtro a ser removido.
-
-#### Comando
-
-```bash
-./publish '{"name": "SinalA", "remove": "yes", "config": {}}'
-```
-
-#### Resposta Esperada no VD
-
-```text
-[IGNORAR DELETE] Tentando remover um filter sem o campo functionality ou sem name/id
-```
