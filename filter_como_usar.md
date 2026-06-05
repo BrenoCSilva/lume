@@ -43,11 +43,12 @@ astro_error correspondente: **4 - 110 - Rejected_filter_configuration (no treatm
 Envio de campos malformados:
 ```bash
 ./publish '{"config": {"id": 0x201}}'
+```
 
 ```bash
 ./publish '{"name": "SinalA", "config": {"function": "pairing", "id":}}'
 ```
-```
+
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( JSON [command_signal] with invalid syntax.)**
 
 Campo remove não acompanhado do campo config: 
