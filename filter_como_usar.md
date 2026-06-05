@@ -27,8 +27,7 @@ Nem todos os campos são necessários para todas as operações. Entretanto, sem
 
 ---
 
-Porém, existe campos que enviados de maneira isolada nada fazem, por não existir tratamento são ignorados:
-
+Existem campos que se enviados de maneira isolada nada fazem, são ignoradas pois não existe tratamento. O programa atual só trata mensagens que o remove == yes e function == pairing.
 
 ```bash
 ./publish '{"name": "SinalA"}'
