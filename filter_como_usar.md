@@ -152,3 +152,30 @@ Para remover utilizando o ID do filtro:
 
 O ID é localizado na hash, a regra de pareamento associada é removida do vetor. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
 
+### Possíveis erros no remove
+
+Campo remove não acompanhado do campo config: 
+```bash
+./test_publish_command_signals '{"name": "RPM", "remove": "yes"}'
+```
+```bash
+./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {}}'
+```
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( It is mandatory to send the 'functionality' and at least the 'id' or 'name'.)**
+
+Tentando remover um filtro não existente: 
+
+```bash
+./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {"function": "pairing"}}'
+```
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Exclusion ignored: No filter exists with this ID.)**
+
+Sinal passado no campo "name" não existe ID correspondente no arquivo dbc:
+
+
+```bash
+./test_publish_command_signals '{"name": "Sinal", "remove": "yes", "config": {"function": "pairing"}}'
+```
+
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration (This signal does not exist in the dbc file.)**
+
