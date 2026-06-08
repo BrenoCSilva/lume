@@ -1,6 +1,18 @@
 # Resumo e guia de Testes: Validação do Filtro VD
 
-Antes de iniciar o guia, segue um resumo do que o módulo faz: O TAD `vehicle_driver_filter` foi criado para interceptar valores específicos da rede CAN e executar uma ação correspondente.
+O TAD `vehicle_driver_filter` foi criado para interceptar valores específicos da rede CAN e executar uma ação correspondente.
+
+## Tópicos
+1. [ Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
+2. [Alguns comandos básicos do gnuplot](#alguns-comandos-básicos-do-gnuplot)
+3. [Gnuplot em C](#gnuplot-em-c)
+4. [Como enviar informações para o Gnuplot?](#como-enviar-informações-para-o-gnuplot)
+    - [Enviando as coordenadas](#enviando-as-coordenadas)
+    - [Mudando a Ordem com o using](#mudando-a-ordem-com-o-using)
+5. [Estilizando o Gráfico: Pontos x Linhas](#estilizando-o-gráfico-pontos-x-linhas)
+6. [Resumo](#resumo)
+7. [Exemplo](#exemplo)
+7. [Tarefa](#tarefa)
 
 ## Resumo do fluxo de operação:
 
