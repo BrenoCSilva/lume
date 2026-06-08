@@ -13,7 +13,7 @@ Abaixo está um exemplo contendo todos os campos disponíveis:
 ### Comando no Terminal
 
 ```bash
-./test_publish_command_signals '{"name": "RPM", "level": "Alto", "remove": "yes", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
+./test_publish_command_signals '{"name": "RPM", "level": "Alto", "remove": "yes", "config": {"function": "pairing", "id": "0x8000023a", "position": 0, "byte": "0xBD"}}'
 ```
 
 ### Observações
@@ -36,7 +36,7 @@ astro_error correspondente: **4 - 110 - Rejected_filter_configuration (no treatm
 
 
 ```bash
-./test_publish_command_signals '{"config": {"id": "0x201"}}'
+./test_publish_command_signals '{"config": {"id": "0x8000023a"}}'
 ```
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration (no treatment for this command.)**
 
@@ -80,7 +80,7 @@ Utilizado para ativar a interceptação de um sinal do RemoteKit em um ID espec�
 ### Comando no Terminal
 
 ```bash
-./test_publish_command_signals '{"config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
+./test_publish_command_signals '{"config": {"function": "pairing", "id": "0x8000023a", "position": 0, "byte": "0xBD"}}'
 ```
 
 ### Resposta Esperada no VD
@@ -109,7 +109,7 @@ Para testar, execute exatamente o mesmo comando de cadastro anterior uma segunda
 ### Comando no Terminal
 
 ```bash
-./test_publish_command_signals '{"name": "RPM", "level": "Alto", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
+./test_publish_command_signals '{"name": "RPM", "level": "Alto", "config": {"function": "pairing", "id": "0x8000023a", "position": 0, "byte": "0xBD"}}'
 ```
 
 **Observação:** Apesar de `name` e `level` serem enviados, a validação de duplicidade utiliza apenas os campos armazenados na estrutura do filtro, ou seja, os valores presentes em `config`.
@@ -145,7 +145,7 @@ Para remover utilizando o ID do filtro:
 #### Comando no Terminal
 
 ```bash
-./test_publish_command_signals '{"remove": "yes", "config": {"function": "pairing", "id": "0x201"}}'
+./test_publish_command_signals '{"remove": "yes", "config": {"function": "pairing", "id": "0x8000023a"}}'
 ```
 
 ### Resposta Esperada no VD
