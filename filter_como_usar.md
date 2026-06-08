@@ -5,7 +5,7 @@ O TAD `vehicle_driver_filter` foi criado para interceptar valores específicos d
 ## Tópicos
 1. [ Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
 2. [Guia de Testes](#guia-de-testes)
-    - [Estrutura Completa da Mensagem](#estrutura-completa-da-mensagem)
+    - [Estrutura Completa da Mensagem](#1.-estrutura-completa-da-mensagem)
     - [Cadastrar um Novo Filtro](#cadastrar-um-novo-filtro)
     - [Bloqueio de Filtro Duplicado](#bloqueio-de-filtro-duplicado)
     - [Remover um Filtro Ativo](#remover-um-filtro-ativo)
