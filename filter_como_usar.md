@@ -18,7 +18,7 @@ Abaixo está um exemplo contendo todos os campos disponíveis:
 
 ### Observações
 
-Nem todos os campos são necessários para todas as operações. Entretanto, sempre que os campos abaixo forem enviados, eles devem obrigatoriamente estar dentro do objeto `config`:
+Nem todos os campos são necessários para todas as operações. Entretanto, sempre que os campos abaixo forem enviados, eles devem obrigatoriamente estar dentro da chave `config`:
 
 * `function`
 * `id`
