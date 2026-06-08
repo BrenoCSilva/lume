@@ -3,16 +3,17 @@
 O TAD `vehicle_driver_filter` foi criado para interceptar valores específicos da rede CAN e executar uma ação correspondente.
 
 ## Tópicos
-1. [ Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
+1. [Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
 2. [Guia de Testes](#guia-de-testes)
-    - [Estrutura Completa da Mensagem](#1.-estrutura-completa-da-mensagem)
-    - [Cadastrar um Novo Filtro](#cadastrar-um-novo-filtro)
-    - [Bloqueio de Filtro Duplicado](#bloqueio-de-filtro-duplicado)
-    - [Remover um Filtro Ativo](#remover-um-filtro-ativo)
+    - [Estrutura Completa da Mensagem](#1-estrutura-completa-da-mensagem)
+    - [Cadastrar um Novo Filtro](#2-cadastrar-um-novo-filtro)
+    - [Bloqueio de Filtro Duplicado](#3-bloqueio-de-filtro-duplicado)
+    - [Remover um Filtro Ativo](#4-remover-um-filtro-ativo)
+
 
 ## Resumo do fluxo de operação:
 
-**1- Captação da mensagem:** Após enviada uma string no formato json através do tipo `astro_vehicle_driver_command_signals_message` , o handler do `vehicle_driver_main` chama a função responsável para processar essas informações: `vehicle_driver_filter_process_command_signals_message()`. Nessa função ocorre toda a verificação de campos da string enviada. Caso ocorra o envio inválido da string_json, solicitação de um tratamento inexistente, sinal não encontrado no dbc, regra já existente, etc. A função envia um **astro_error** para o sistema.  Estando tudo certo no envio, a ação "pairing" ou "remove" deve ser executada (são as únicas possíveis atualmente). o "pairing" vai cadastrar uma nova regra para o filtro, e o "remove" deleta essa regra.
+**1 - Captação da mensagem:** Após enviada uma string no formato json através do tipo `astro_vehicle_driver_command_signals_message` , o handler do `vehicle_driver_main` chama a função responsável para processar essas informações: `vehicle_driver_filter_process_command_signals_message()`. Nessa função ocorre toda a verificação de campos da string enviada. Caso ocorra o envio inválido da string_json, solicitação de um tratamento inexistente, sinal não encontrado no dbc, regra já existente, etc. A função envia um **astro_error** para o sistema.  Estando tudo certo no envio, a ação "pairing" ou "remove" deve ser executada (são as únicas possíveis atualmente). o "pairing" vai cadastrar uma nova regra para o filtro, e o "remove" deleta essa regra.
 
 **2 - Execução do filtro:** O filtro em si atua através da função `vehicle_driver_filter_evaluate_can_frame()`, que é chamado a cada frame CAN lido da rede. Se existir uma regra de interceptação ativa para aquele frame, o fluxo é ramificado e uma ação diferente da padrão é executada.
 
