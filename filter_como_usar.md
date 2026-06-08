@@ -79,7 +79,7 @@ Utilizado para ativar a interceptação de um sinal do RemoteKit em um ID espec�
 
 ### Resposta Esperada no VD
 
-O sistema realiza o parse com sucesso, e registra o a regra para o filtro na tabela hash. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
+O sistema realiza o parse com sucesso, e registra a regra para o filtro na tabela hash. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
 
 
 ### Cenário: Parâmetros Obrigatórios Ausentes
