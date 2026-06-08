@@ -67,7 +67,7 @@ Utilizado para ativar a interceptação de um sinal do RemoteKit em um ID espec�
 ### Regras
 
 * O campo `"function"` deve ser obrigatoriamente `"pairing"`.
-* Os campos `id`, `position` e `byte` são obrigatórios para a operação de cadastro.
+* Os campos `id`, `position` e `byte` são obrigatórios para a operação de cadastro do pareamento.
 * O campo `"remove"` pode ser omitido ou possuir qualquer valor diferente de `"yes"`.
 * Caso a função informada não seja `"pairing"`, a regra será ignorada, pois atualmente não existe tratamento para outras funcionalidades.
 
