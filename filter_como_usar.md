@@ -6,7 +6,7 @@ Este guia orienta o padrão esperado da string JSON para utilizar o filtro da re
 
 ---
 
-## 0. Estrutura Completa da Mensagem
+## 1. Estrutura Completa da Mensagem
 
 Abaixo está um exemplo contendo todos os campos disponíveis:
 
@@ -60,7 +60,7 @@ Campo remove não acompanhado do campo config:
 ```
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( It is mandatory to send the 'functionality' and at least the 'id' or 'name'.)**
 
-## 1. Cadastrar um Novo Filtro
+## 2. Cadastrar um Novo Filtro
 
 Utilizado para ativar a interceptação de um sinal do RemoteKit em um ID específico da rede CAN.
 
@@ -94,7 +94,7 @@ astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Required 
 
 ---
 
-## 2. Bloqueio de Filtro Duplicado
+## 3. Bloqueio de Filtro Duplicado
 
 Impede que a mesma regra seja inserida múltiplas vezes na tabela hash.
 
@@ -114,7 +114,7 @@ A função de segurança detecta a colisão de ID, byte e posição e rejeita a 
 
 ---
 
-## 3. Remover um Filtro Ativo (Delete)
+## 4. Remover um Filtro Ativo (Delete)
 
 Aciona a lógica de remoção de filtros previamente cadastrados.
 
