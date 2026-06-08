@@ -122,6 +122,16 @@ Aciona a lógica de remoção de filtros previamente cadastrados.
 
 É obrigatório enviar a chave `"remove": "yes"` no primeiro nível do JSON.
 
+### Remoção de um filtro não existente
+
+#### Comando no Terminal
+
+```bash
+./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {"function": "pairing"}}'
+```
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Exclusion ignored: No filter exists with this ID.)**
+
+
 ### Remoção por Nome
 
 Para remover utilizando apenas o nome do filtro:
