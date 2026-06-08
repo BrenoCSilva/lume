@@ -152,7 +152,7 @@ Para remover utilizando o ID do filtro:
 
 O ID é localizado na hash, a regra de pareamento associada é removida do vetor. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
 
-### Possíveis erros no remove
+### Possíveis Erros no Remove
 
 Campo remove não acompanhado do campo config: 
 ```bash
