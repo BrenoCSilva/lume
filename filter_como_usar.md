@@ -111,6 +111,7 @@ Para testar, execute exatamente o mesmo comando de cadastro anterior uma segunda
 ### Resposta Esperada no VD
 
 A função de segurança detecta a colisão de ID, byte e posição e rejeita a inserção. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
+
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( Filter creation ignored: The requested rule already exists for this ID.)**
 
 ---
