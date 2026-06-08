@@ -13,7 +13,7 @@ Abaixo está um exemplo contendo todos os campos disponíveis:
 ### Comando no Terminal
 
 ```bash
-./test_publish_command_signals '{"name": "SinalA", "level": "Alto", "remove": "yes", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
+./test_publish_command_signals '{"name": "RPM", "level": "Alto", "remove": "yes", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
 ```
 
 ### Observações
@@ -30,7 +30,7 @@ Nem todos os campos são necessários para todas as operações. Entretanto, sem
 Existem campos que se enviados de maneira isolada nada fazem, são ignoradas pois não existe tratamento. O programa atual só trata mensagens em que o campo remove == yes e/ou function == pairing.
 
 ```bash
-./test_publish_command_signals '{"name": "SinalA"}'
+./test_publish_command_signals '{"name": "RPM"}'
 ```
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration (no treatment for this command.)**
 
@@ -46,17 +46,17 @@ Envio de campos malformados:
 ```
 
 ```bash
-./test_publish_command_signals '{"name": "SinalA", "config": {"function": "pairing", "id":}}'
+./test_publish_command_signals '{"name": "RPM", "config": {"function": "pairing", "id":}}'
 ```
 
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( JSON [command_signal] with invalid syntax.)**
 
 Campo remove não acompanhado do campo config: 
 ```bash
-./test_publish_command_signals '{"name": "SinalA", "remove": "yes"}'
+./test_publish_command_signals '{"name": "RPM", "remove": "yes"}'
 ```
 ```bash
-./test_publish_command_signals '{"name": "SinalA", "remove": "yes", "config": {}}'
+./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {}}'
 ```
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( It is mandatory to send the 'functionality' and at least the 'id' or 'name'.)**
 
@@ -87,7 +87,7 @@ O sistema realiza o parse com sucesso, e registra a regra para o filtro na tabel
 Tentar executar a funcionalidade de pareamento sem os campos do config:
 
 ```bash
-./test_publish_command_signals '{"name": "SinalA", "config": {"function": "pairing"}}'
+./test_publish_command_signals '{"name": "RPM", "config": {"function": "pairing"}}'
 ```
 
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Required keys [config] are missing for the 'pairing' function in the JSON.)**
@@ -103,7 +103,7 @@ Para testar, execute exatamente o mesmo comando de cadastro anterior uma segunda
 ### Comando no Terminal
 
 ```bash
-./test_publish_command_signals '{"name": "SinalA", "level": "Alto", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
+./test_publish_command_signals '{"name": "RPM", "level": "Alto", "config": {"function": "pairing", "id": "0x201", "position": 0, "byte": "0xBD"}}'
 ```
 
 **Observação:** Apesar de `name` e `level` serem enviados, a validação de duplicidade utiliza apenas os campos armazenados na estrutura do filtro, ou seja, os valores presentes em `config`.
