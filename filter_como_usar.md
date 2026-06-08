@@ -1,4 +1,16 @@
-# Guia de Testes: Validação do Filtro VD (RemoteKit)
+# Resumo e guia de Testes: Validação do Filtro VD
+
+Antes de iniciar o guia, segue um resumo do que o módulo faz: O TAD `vehicle_driver_filter` foi criado para interceptar valores específicos da rede CAN e executar uma ação correspondente.
+
+## Resumo do fluxo de operação:
+
+**1- Captação da mensagem:** Após enviada uma string no formato json através do tipo `astro_vehicle_driver_command_signals_message` , o handler do `vehicle_driver_main` chama a função responsável para processar essas informações: `vehicle_driver_filter_process_command_signals_message()`. Nessa função ocorre toda a verificação de campos da string enviada. Caso ocorra o envio inválido da string_json, solicitação de um tratamento inexistente, sinal não encontrado no dbc, regra já existente, etc. A função envia um **astro_error** para o sistema.  Estando tudo certo no envio, a ação "pairing" ou "remove" deve ser executada (são as únicas possíveis atualmente). o "pairing" vai cadastrar uma nova regra para o filtro, e o "remove" deleta essa regra.
+
+**2 - Execução do filtro:** O filtro em si atua através da função `vehicle_driver_filter_evaluate_can_frame()`, que é chamado a cada frame CAN lido da rede. Se existir uma regra de interceptação ativa para aquele frame, o fluxo é ramificado e uma ação diferente da padrão é executada.
+
+**3 - Remoção por name:** Para possiblitar a remoção de regras utilizando apenas o nome do sinal (sem precisar do ID numérico), foi criada uma estrutura de dados Hash que mapeia o "name" ao seu respectivo "id" do arquivo DBC. Para popular essa estrutura, a função `vehicle_driver_filter_register_name_id()` é chamada uma única vez durante a inicialização (dentro de `vehicle_driver_start_dbc_parser_process()`), registrando todos os IDs de sinais encontrados no arquivo DBC.
+
+## Guia de Testes
 
 Este guia orienta o padrão esperado da string JSON para utilizar o filtro da rede can. A string por padrão irá vir do **atributo command_signals_string** da struct **astro_vehicle_driver_command_signals_message**. Abaixo é demonstrado essa mensagem sendo enviada via terminal.
 
@@ -6,17 +18,17 @@ Este guia orienta o padrão esperado da string JSON para utilizar o filtro da re
 
 ---
 
-## 1. Estrutura Completa da Mensagem
+### 1. Estrutura Completa da Mensagem
 
 Abaixo está um exemplo contendo todos os campos disponíveis:
 
-### Comando no Terminal
+#### Comando no Terminal
 
 ```bash
 ./test_publish_command_signals '{"name": "RPM", "level": "Alto", "remove": "yes", "config": {"function": "pairing", "id": "0x8000023a", "position": 0, "byte": "0xBD"}}'
 ```
 
-### Observações
+#### Observações
 
 Nem todos os campos são necessários para todas as operações. Entretanto, sempre que os campos abaixo forem enviados, eles devem obrigatoriamente estar dentro da chave `config`:
 
@@ -66,29 +78,29 @@ astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( It is ma
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Exclusion ignored: No filter exists with this ID.)**
 
 
-## 2. Cadastrar um Novo Filtro
+### 2. Cadastrar um Novo Filtro
 
 Utilizado para ativar a interceptação de um sinal do RemoteKit em um ID específico da rede CAN.
 
-### Regras
+#### Regras
 
 * O campo `"function"` deve ser obrigatoriamente `"pairing"`.
 * Os campos `id`, `position` e `byte` são obrigatórios para a operação de cadastro do pareamento.
 * O campo `"remove"` pode ser omitido ou possuir qualquer valor diferente de `"yes"`.
 * Caso a função informada não seja `"pairing"`, a regra será ignorada, pois atualmente não existe tratamento para outras funcionalidades.
 
-### Comando no Terminal
+#### Comando no Terminal
 
 ```bash
 ./test_publish_command_signals '{"config": {"function": "pairing", "id": "0x8000023a", "position": 0, "byte": "0xBD"}}'
 ```
 
-### Resposta Esperada no VD
+#### Resposta Esperada no VD
 
 O sistema realiza o parse com sucesso, e registra a regra para o filtro na tabela hash. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
 
 
-### Cenário: Parâmetros Obrigatórios Ausentes
+#### Cenário: Parâmetros Obrigatórios Ausentes
 
 Tentar executar a funcionalidade de pareamento sem os campos do config:
 
@@ -100,13 +112,13 @@ astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Required 
 
 ---
 
-## 3. Bloqueio de Filtro Duplicado
+### 3. Bloqueio de Filtro Duplicado
 
 Impede que a mesma regra seja inserida múltiplas vezes na tabela hash.
 
 Para testar, execute exatamente o mesmo comando de cadastro anterior uma segunda vez.
 
-### Comando no Terminal
+#### Comando no Terminal
 
 ```bash
 ./test_publish_command_signals '{"name": "RPM", "level": "Alto", "config": {"function": "pairing", "id": "0x8000023a", "position": 0, "byte": "0xBD"}}'
@@ -114,7 +126,7 @@ Para testar, execute exatamente o mesmo comando de cadastro anterior uma segunda
 
 **Observação:** Apesar de `name` e `level` serem enviados, a validação de duplicidade utiliza apenas os campos armazenados na estrutura do filtro, ou seja, os valores presentes em `config`.
 
-### Resposta Esperada no VD
+#### Resposta Esperada no VD
 
 A função de segurança detecta a colisão de ID, byte e posição e rejeita a inserção.
 
@@ -122,13 +134,13 @@ astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( Filter c
 
 ---
 
-## 4. Remover um Filtro Ativo (Delete)
+### 4. Remover um Filtro Ativo (Delete)
 
 Aciona a lógica de remoção de filtros previamente cadastrados.
 
 É obrigatório enviar a chave `"remove": "yes"` no primeiro nível do JSON.
 
-### Remoção por Nome
+#### Remoção por Nome
 
 Para remover utilizando apenas o nome do filtro:
 
@@ -138,7 +150,7 @@ Para remover utilizando apenas o nome do filtro:
 ./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {"function": "pairing"}}'
 ```
 
-### Remoção por ID
+#### Remoção por ID
 
 Para remover utilizando o ID do filtro:
 
@@ -148,11 +160,11 @@ Para remover utilizando o ID do filtro:
 ./test_publish_command_signals '{"remove": "yes", "config": {"function": "pairing", "id": "0x8000023a"}}'
 ```
 
-### Resposta Esperada no VD
+#### Resposta Esperada no VD
 
 O ID é localizado na hash, a regra de pareamento associada é removida do vetor. Caso não obtenha erros, admita que o processo foi realizado com o sucesso.
 
-### Possíveis Erros no Remove
+#### Possíveis Erros no Remove
 
 Campo remove não acompanhado do campo config: 
 ```bash
@@ -178,4 +190,7 @@ Sinal passado no campo "name" não existe ID correspondente no arquivo dbc:
 ```
 
 astro_error correspondente: **4 - 110 - Rejected_filter_configuration (This signal does not exist in the dbc file.)**
+
+
+
 
