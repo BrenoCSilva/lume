@@ -32,7 +32,7 @@ Existem campos que se enviados de maneira isolada nada fazem, são ignoradas poi
 ```bash
 ./test_publish_command_signals '{"name": "SinalA"}'
 ```
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration (config empty, no treatment for this command.)**
+astro_error correspondente: **4 - 110 - Rejected_filter_configuration (no treatment for this command.)**
 
 
 ```bash
