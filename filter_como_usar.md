@@ -53,13 +53,13 @@ Existem campos que se enviados de maneira isolada nada fazem, são ignoradas poi
 ```bash
 ./test_publish_command_signals '{"name": "RPM"}'
 ```
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration (no treatment for this command.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration (no treatment for this command.)**
 
 
 ```bash
 ./test_publish_command_signals '{"config": {"id": "0x8000023a"}}'
 ```
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration (no treatment for this command.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration (no treatment for this command.)**
 
 Envio de campos malformados:
 ```bash
@@ -70,7 +70,7 @@ Envio de campos malformados:
 ./test_publish_command_signals '{"name": "RPM", "config": {"function": "pairing", "id":}}'
 ```
 
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( JSON [command_signal] with invalid syntax.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration ( JSON [command_signal] with invalid syntax.)**
 
 Campo remove não acompanhado do campo config: 
 ```bash
@@ -79,12 +79,12 @@ Campo remove não acompanhado do campo config:
 ```bash
 ./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {}}'
 ```
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( It is mandatory to send the 'functionality' and at least the 'id' or 'name'.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration ( It is mandatory to send the 'functionality' and at least the 'id' or 'name'.)**
 
 ```bash
 ./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {"function": "pairing"}}'
 ```
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Exclusion ignored: No filter exists with this ID.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration (Exclusion ignored: No filter exists with this ID.)**
 
 
 ### 2. Cadastrar um Novo Filtro
@@ -117,7 +117,7 @@ Tentar executar a funcionalidade de pareamento sem os campos do config:
 ./test_publish_command_signals '{"name": "RPM", "config": {"function": "pairing"}}'
 ```
 
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Required keys [config] are missing for the 'pairing' function in the JSON.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration (Required keys [config] are missing for the 'pairing' function in the JSON.)**
 
 ---
 
@@ -139,7 +139,7 @@ Para testar, execute exatamente o mesmo comando de cadastro anterior uma segunda
 
 A função de segurança detecta a colisão de ID, byte e posição e rejeita a inserção.
 
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( Filter creation ignored: The requested rule already exists for this ID.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration ( Filter creation ignored: The requested rule already exists for this ID.)**
 
 ---
 
@@ -182,14 +182,14 @@ Campo remove não acompanhado do campo config:
 ```bash
 ./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {}}'
 ```
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration ( It is mandatory to send the 'functionality' and at least the 'id' or 'name'.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration ( It is mandatory to send the 'functionality' and at least the 'id' or 'name'.)**
 
 Tentando remover um filtro não existente: 
 
 ```bash
 ./test_publish_command_signals '{"name": "RPM", "remove": "yes", "config": {"function": "pairing"}}'
 ```
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration (Exclusion ignored: No filter exists with this ID.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration (Exclusion ignored: No filter exists with this ID.)**
 
 Sinal passado no campo "name" não existe ID correspondente no arquivo dbc:
 
@@ -198,7 +198,7 @@ Sinal passado no campo "name" não existe ID correspondente no arquivo dbc:
 ./test_publish_command_signals '{"name": "Sinal", "remove": "yes", "config": {"function": "pairing"}}'
 ```
 
-astro_error correspondente: **4 - 110 - Rejected_filter_configuration (This signal does not exist in the dbc file.)**
+astro_error correspondente: **4 - 112 - Rejected_filter_configuration (This signal does not exist in the dbc file.)**
 
 
 
