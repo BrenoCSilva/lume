@@ -1,72 +1,335 @@
-> [!NOTE]
-> Este texto terá uma barra lateral azul (Informação).
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+#include <string.h>
+#include <iostream>
+#include <iomanip>
+#include <vector>
+#include <cmath>
 
-> [!TIP]
-> Este terá uma barra verde (Dica).
+char timestamp_inicial[32], timestamp_final[32];
 
-> [!IMPORTANT]
-> Este terá uma barra roxa (Importante).
-
-> [!WARNING]
-> Este terá uma barra amarela (Aviso).
-
-> [!CAUTION]
-> Este terá uma barra vermelha (Cuidado/Perigo).
-
-A principal alteração foi realizada na lógica de identificação e leitura de arquivos de áudio, substituindo o uso de IDs numéricos por identificadores em string. Para suportar essa mudança, os arquivos de áudio foram renomeados e a formatação do caminho foi atualizada. Além disso 3 novos arquivos de áudio foram criados para abranger uma quantidade maior de estados do veículo, porém por não encontrar a mesma voz utilizada nos arquivos de áudio base, esses novos arquivos foram gerados com uma voz masculina do Antonio (https://ttsmaker.com/). OS testes realizados com o simulador abrangeram os seguintes estados: Initializing, Stopped, Free_Running, End_Of_Path_Reached e o modo_autonomo_ativado.
-
-Detalhes:
-- Atualização da formatação do caminho do arquivo (`../data/audios/%s.wav`) para utilizar o nome do estado em vez de um ID numérico.
-- Renomeação dos arquivos de áudio físicos para corresponder à nova convenção de strings.
-- Atualização na função `behavior_selector_state_message_handler` para enviar a string descritiva (ex: "veiculo_parado").
-- Atualização na função `ford_escape_status_handler` para também adotar strings na identificação do arquivo.
-- O deslocamento de pastas foi alterado também, agora considerando que o executável está sendo chamado da pasta bin.
-
-futuras melhorias: padronizar a voz dos estados, expor o veículo a condições que abregem mais estados e inserir o restante dos estados: Free_Reverse_Running, Stopping_To_Reverse, Stopping_To_Go_Forward, Recovering_From_Error e Stopped_At_Ramp.
-
-Mafefile:
-- Remoção da compilação direta de `global_user_interface_interface.c` em `SOURCES`/`OBJECTS`.
-- Inclui flag `-lglobal_user_interface_interface` e o path `-L$(ASTRO_HOME)/lib` em `LFLAGS`.
-- Altera dependência em LFLAGS de `ford_escape_hybrid_interface` para `vehicle_driver_interface`.
+typedef struct {
+    int signal;               
+    double timestamp_1;   
+    double timestamp_2;   
+    double time;
+} Traffic_signal;
 
 
-Refatora o Makefile do módulo `audio_interface` para utilizar linkagem de bibliotecas no lugar da compilação direta de arquivos externos.
+int read_term(char* linha) {
+        
+    char *delimitadores = " \n\t"; 
+    char* copia_linha = strdup(linha);
+    char *termo = strtok(copia_linha, delimitadores);  // retorna o ponteiro para o primeiro termo[ate o delimitador]
+    
+    if(termo == NULL) {
+        free(copia_linha);
+        return 0;
+    }
+    
+    if(strcmp(termo, "TRAFFIC_MANAGER_SIGNAL:") == 0){
+        free(copia_linha);
+        return 1;
+    }
 
-Principais alterações:
-- Remoção do arquivo `../global/global_user_interface_interface.c` das etapas de compilação (`SOURCES` e `OBJECTS`), passando a utilizar a sua versão compilada via flag de linkagem (`-lglobal_user_interface_interface`).
-- Adição explícita do diretório de bibliotecas `$(ASTRO_HOME)/lib` em `LFLAGS`.
-- Substituição da biblioteca `ford_escape_hybrid_interface` por `vehicle_driver_interface` nas dependências.
-- Limpeza do caminho inserido em `PUBLIC_INCLUDES`.
-- Inclusão das variáveis de metadados `MODULE_NAME` e `MODULE_COMMENT`.
+    if(strcmp(termo, "VELODYNE_VARIABLE_SCAN_IN_FILE0") == 0){
+        int i=0;
+        static int flag = 1;
+        while(termo != NULL && i < 7){
+            termo = strtok(NULL, delimitadores);
+            i++;
+        }
+        if(flag){
+            strcpy(timestamp_inicial, termo);
+            strcpy(timestamp_final, termo);
+            //printf("inicio: %s\n", timestamp_inicial);
+            //printf("fim:%s\n", timestamp_final);
+            flag = 0;
+        }else{
+            strcpy(timestamp_final, termo);
+        }
+    }
+    free(copia_linha);
+    return 0;
+}
 
-- Remove compilação direta de `global_user_interface_interface.c` em `SOURCES`/`OBJECTS`.
-- Inclui flag `-lglobal_user_interface_interface` e o path `-L$(ASTRO_HOME)/lib` em `LFLAGS`.
-- Altera dependência em LFLAGS de `ford_escape_hybrid_interface` para `vehicle_driver_interface`.
+
+std::vector<Traffic_signal> read_file(char* caminho_arquivo){
+
+    FILE* arquivo_p; 
+
+    arquivo_p = fopen(caminho_arquivo, "r");
+
+    if(!arquivo_p){
+        printf("Error ao abrir o arquivo, finalizando programa\n");
+        /*EXEC_COOLDOWN(astro_global_publish_astro_error_message_custom_string(
+				ASTRO_ERROR_CODE_1401,
+				"Error ao abrir o arquivo."
+				), 5);*/
+        exit(1);
+    }
+
+    std::vector<Traffic_signal> signals_file;
+    char* linha = NULL;
+    size_t tamanho = 0;
+    int return_linha;
+    while(getline(&linha, &tamanho, arquivo_p) != -1){ // getline retorna o tamanho da linha, se -1, linha vazia.
+
+        return_linha = read_term(linha); // le os termos da linha
+        if(return_linha) {
+            Traffic_signal s;
+            sscanf(linha, "TRAFFIC_MANAGER_SIGNAL: %d %*lf %*s %*lf", &s.signal, &s.timestamp_1, &s.timestamp_2);
+            s.time = atof(timestamp_final);
+            signals_file.push_back(s);
+        }
+
+    }
+
+    free(linha);
+    fclose(arquivo_p);
+    return signals_file;
+}
+
+int inc = 0;
+void gerar_arquivos_entrada(char* file_path){
+
+    FILE* arquivo_p; 
+
+    arquivo_p = fopen(file_path, "w");
+
+    if(!arquivo_p){
+        printf("Error ao abrir o arquivo, finalizando programa\n");
+        exit(1);
+    }
+
+    char signal[32] = "13";
+    double timestamp1 = 20.000;
+    double timestamp2 = 20.000;
+    int j;
+    for(int i=0 ; i<10; i++){
+        j = i + inc;
+        fprintf(arquivo_p, "TRAFFIC_MANAGER_SIGNAL: %s %lf traffic_manager %lf\n", signal, timestamp1 + j, timestamp2 + j);
+    }
+    inc++;
+    fclose(arquivo_p);
+
+}
+
+
+void gerar_arquivos_saida(char* file_path, std::vector<Traffic_signal> signals){
+
+    FILE* arquivo_p; 
+    arquivo_p = fopen(file_path, "w");
+
+    if(!arquivo_p){
+        printf("Error ao abrir o arquivo, finalizando programa\n");
+        exit(1);
+    }
+
+    for(auto& signal : signals){
+        fprintf(arquivo_p, "%d %lf \n", signal.signal, signal.timestamp_1);
+    }
+    fclose(arquivo_p);
+}
+
+void plotar_sinais_digitais(const std::vector<Traffic_signal>& msg = {}, bool fim = false) {
+    
+    static std::vector<std::vector<Traffic_signal>> container_acumulado;
+    
+    if (!msg.empty()) {
+        container_acumulado.push_back(msg);
+    }
+    if (fim && !container_acumulado.empty()) {
+        static FILE *gnuplot_pipe = popen("gnuplot -persist", "w");
+
+        fprintf(gnuplot_pipe, "set title 'Análise de Troca de Sinais'\n");
+        fprintf(gnuplot_pipe, "set xlabel 'Timestamp (s)'\n");
+        fprintf(gnuplot_pipe, "set grid\n");
+
+        //fprintf(gnuplot_pipe, "set yrange [8.5 : 13.5]\n");
+        
+        //fprintf(gnuplot_pipe, "set ytics ('Arq2: VM (12)' 9, 'Arq2: VD (13)' 10, 'Arq1: VM (12)' 12, 'Arq1: VD (13)' 13)\n"); 
+        
+        // Se tiver 1 arquivo: vai de 10.5 a 13.5. Se tiver 3: vai de 4.5 a 13.5.
+        double y_min = 13.5 - (3.0 * container_acumulado.size());
+        fprintf(gnuplot_pipe, "set yrange [%lf : 13.5]\n", y_min);
+        
+        // 2. CONSTRUÇÃO DINÂMICA DOS YTICS (Legendas do Eixo Y)
+        // Vamos usar um loop para montar a string com os nomes de todas as pistas
+        fprintf(gnuplot_pipe, "set ytics (");
+        for (size_t c = 0; c < container_acumulado.size(); c++) {
+            int offset = (int)c * -3;
+            int v_vermelho = 12 + offset;
+            int v_verde = 13 + offset;
+
+            // Escreve as duas legendas da pista atual
+            fprintf(gnuplot_pipe, "'Arq%lu: VM (12)' %d, 'Arq%lu: VD (13)' %d", 
+                    c + 1, v_vermelho, c + 1, v_verde);
+
+            // Se não for o último arquivo, adiciona uma vírgula para separar o próximo do loop
+            if (c < container_acumulado.size() - 1) {
+                fprintf(gnuplot_pipe, ", ");
+            }
+        }
+        fprintf(gnuplot_pipe, ")\n");
+
+        fprintf(gnuplot_pipe, "set xrange [%s: %s]\n", timestamp_inicial, timestamp_final);
+
+        fprintf(gnuplot_pipe, "plot ");
+        for (size_t i = 0; i < container_acumulado.size(); i++) {
+            fprintf(gnuplot_pipe, "'-' using 1:2 with steps linewidth 2 title 'Arquivo %lu'", i + 1);
+            if (i < container_acumulado.size() - 1) fprintf(gnuplot_pipe, ", ");
+        }
+        fprintf(gnuplot_pipe, "\n");
+        
+        for (int c=0; c < container_acumulado.size();c++ ) {
+            const auto& curva = container_acumulado[c];
+            int offset = (int)c * -3;
+            for (size_t i = 1; i < curva.size(); i++) {
+                int sinal_com_offset = curva[i].signal + offset;
+                fprintf(gnuplot_pipe, "%lf %d\n", curva[i].time, sinal_com_offset);
+            }
+            fprintf(gnuplot_pipe, "e\n");
+        }
+        //fprintf(gnuplot_pipe, "e\n");
+   
+
+        fflush(gnuplot_pipe);
+    }
+}
+
+
+void plotar_sinais_tri_estatal(const std::vector<Traffic_signal>& msg = {}, bool fim = false) {
+    static std::vector<std::vector<Traffic_signal>> container_acumulado;
+    
+    if (!msg.empty()) {
+        container_acumulado.push_back(msg);
+    }
+    
+    if (fim && !container_acumulado.empty()) {
+        static FILE *gnuplot_pipe = popen("gnuplot -persist", "w");
+        size_t qtd_arquivos = container_acumulado.size();
+
+        fprintf(gnuplot_pipe, "set title 'Análise Tri-estatal de Sinais (Verde / OFF / Vermelho)'\n");
+        fprintf(gnuplot_pipe, "set xlabel 'Timestamp Unix (s)'\n");
+        fprintf(gnuplot_pipe, "set grid\n");
+
+        // 1. CÁLCULO DINÂMICO DO RANGE VERTICAL (Y)
+        // Se tiver 1 arquivo, vai de 10.5 a 13.5. Cada arquivo tira 3 unidades para baixo.
+        double y_min = 13.5 - (3.0 * qtd_arquivos);
+        fprintf(gnuplot_pipe, "set yrange [%lf : 13.5]\n", y_min);
+        
+        // 2. CONSTRUÇÃO DINÂMICA DAS LEGENDAS (YTICS)
+        fprintf(gnuplot_pipe, "set ytics (");
+        for (size_t c = 0; c < qtd_arquivos; c++) {
+            int centro_pista = 12 + ((int)c * -3);
+            
+            int v_vermelho = centro_pista - 1;
+            int v_off      = centro_pista;
+            int v_verde    = centro_pista + 1;
+
+            // Adiciona as 3 marcações (VM, OFF, VD) para esta pista no eixo Y
+            fprintf(gnuplot_pipe, "'Arq%lu: VM (-1)' %d, 'Arq%lu: OFF (0)' %d, 'Arq%lu: VD (1)' %d", 
+                    c + 1, v_vermelho, c + 1, v_off, c + 1, v_verde);
+
+            if (c < qtd_arquivos - 1) {
+                fprintf(gnuplot_pipe, ", ");
+            }
+        }
+        fprintf(gnuplot_pipe, ")\n"); 
+
+        fprintf(gnuplot_pipe, "set xrange [%s: %s]\n", timestamp_inicial, timestamp_final);
+
+        // 3. COMANDO PLOT
+        fprintf(gnuplot_pipe, "plot ");
+        for (size_t i = 0; i < qtd_arquivos; i++) {
+            fprintf(gnuplot_pipe, "'-' using 1:2 with steps linewidth 2 title 'Arquivo %lu'", i + 1);
+            if (i < qtd_arquivos - 1) fprintf(gnuplot_pipe, ", ");
+        }
+        fprintf(gnuplot_pipe, "\n");
+
+        // 4. ENVIO DOS DADOS MAPEADOS
+        for (size_t c = 0; c < qtd_arquivos; c++) {
+            const auto& curva = container_acumulado[c];
+            int centro_pista = 12 + ((int)c * -3);
+
+            for (size_t i = 1; i < curva.size(); i++) {
+                // Mapeia o sinal original do arquivo para o padrão [-1, 0, 1]
+                int sinal_mapeado = 0; 
+                
+                if (curva[i].signal == 13) {         // Exemplo: Verde original
+                    sinal_mapeado = 1;
+                } else if (curva[i].signal == 12) {  // Exemplo: Vermelho original
+                    sinal_mapeado = -1;
+                } else {                             // Qualquer outra coisa (ou ID do OFF) vira 0
+                    sinal_mapeado = 0;
+                }
+
+                // Aplica a posição da pista baseado no centro dela
+                int valor_final_y = centro_pista + sinal_mapeado;
+                
+                fprintf(gnuplot_pipe, "%lf %d\n", curva[i].time, valor_final_y);
+            }
+            fprintf(gnuplot_pipe, "e\n"); 
+        }
+   
+        fflush(gnuplot_pipe);
+        container_acumulado.clear(); 
+    }
+}
 
 
 
-Com certeza! Vamos revisar e justificar cada um dos passos que você fez, porque o seu raciocínio geral esteve muito correto, mas tem um pequeno detalhe crítico que você precisa corrigir.
+int main(int argc, char* argv[]){
 
-### 1. Execução do `mss_process_prepare.py`
-**O que você fez:** Rodou o script em cima do seu arquivo `process.ini`.
-**Justificativa:** Correto! A documentação dizia que o antigo `map_server` foi substituído pelo novo `mss` e pelo `obstacle_evidence`. O papel desse script python é automatizar o trabalho chato: ele entra no seu arquivo `process.ini`, troca o executável do `map_server` pelo `mss`, adiciona as chamadas do `obstacle_evidence` e já embute a maioria dos novos parâmetros necessários.
-*Obs: Note que a saída do script apontou para um mapa do `atego1730` em vez da pasta `primeiros_passos`. Isso indica que o seu arquivo de process provavelmente ainda estava com a variável `MAP_PATH` apontando para o lugar errado (o mapa do Atego).*
 
-### 2. Modificação manual no arquivo `.ini` (CUIDADO AQUI ⚠️)
-**O que você fez:** Adicionou 3 parâmetros manuais para o `mapper_laser_ldmrs` no seu arquivo `astro-astro2p-ufes-sensorbox-6.ini` com o valor `off`.
-**Justificativa:** O script python injeta os novos parâmetros do `obstacle_evidence`, mas o `mapper` (que aparentemente ainda está ativo no seu process) continuou reclamando que precisava conhecer as medidas do laser. Então você fez bem em adicioná-los para parar o erro do programa.
-**O Problema:** Você colocou os valores como `off`, mas esses parâmetros esperam valores **numéricos** (tamanho em metros). Se você deixa `off`, o sistema lê como `0.0`. Isso significa que o alcance máximo do seu laser será de 0 metros e ele não vai enxergar nenhum obstáculo!
-**Como corrigir:** Altere os valores no seu arquivo `.ini` para números reais. Exemplo:
-```ini
-mapper_laser_ldmrs_range_max 130.0
-mapper_laser_ldmrs_safe_height_from_ground -20.0
-mapper_laser_ldmrs_unsafe_height_above_ground 10.5
-```
+    printf("iniciando programa\n");
 
-### 3. Conversão do mapa com o `prepare_mss_maps`
-**O que você fez:** Usou a ferramenta de conversão apontando para a pasta original e gerando a nova `map_files_mss`.
-**Justificativa:** Exatamente o que a documentação pede. O novo formato MSS exige um arquivo `info.txt` que descreve a resolução e o tamanho dos blocos de mapa. Essa ferramenta pega o mapa velho e recria ele do zero no padrão do MSS. Foi esse passo que finalmente criou o seu arquivo `info.txt` e permitiu que o `./mss` funcionasse.
-*Obs: Você usou o `--params ../src/astro-mercedes-atego.ini`. Idealmente você deveria ter usado o seu próprio arquivo do astro2p (`../data/ufes/primeiros_passos/parameters_ini/astro-astro2p-ufes-sensorbox-6.ini`), mas como as definições de resolução de grade do mapa (`mapper_map_grid_res`) costumam ser padrão entre os robôs, acabou funcionando.*
+    std::vector<std::vector<Traffic_signal>> list_files;
+    int i;
+    char caminho_saida[32];
+    for( i=1; i < argc; i++){
 
-### Resumo do que você precisa fazer agora
-Sua lógica de resolução de problemas foi ótima e você entendeu a nova arquitetura do sistema! Só volte no seu arquivo de parâmetros (`astro-astro2p-ufes-sensorbox-6.ini`), procure os três parâmetros do `mapper_laser_ldmrs` que você adicionou e troque o `off` pelos valores numéricos (como mostrei acima), senão o robô não vai enxergar os obstáculos. Feito isso, tudo deve rodar liso!
+        std::vector<Traffic_signal> signals_file = read_file(argv[i]);
+        snprintf(caminho_saida, sizeof(caminho_saida), "saida%d.txt", i);
+        gerar_arquivos_saida(caminho_saida, signals_file);
+        list_files.push_back(signals_file);
+
+        //gerar_arquivos_entrada(argv[i]);         
+    }
+    
+    printf("\nLeitura concluída! Total de arquivos lidos: %lu\n", list_files.size());
+
+
+    if (list_files.size() >= 2) {
+        plotar_sinais_tri_estatal(list_files[0], false);
+        for( i=1; i < list_files.size() ; i++){
+            auto& arq1 = list_files[0];
+            auto& arq2 = list_files[i];
+            
+            // Pega o menor tamanho entre os dois para evitar ler além do limite
+            size_t min_linhas;
+            printf("arq1 com %d sinais e arq2 com %d sinais\n", list_files[0].size(), list_files[1].size());
+            if(arq1.size() < arq2.size()){
+                min_linhas = arq1.size();
+            }else{
+                 min_linhas = arq2.size();
+            }
+            printf("\nComparando os primeiros %lu sinais comuns:\n", min_linhas);
+            for (size_t j = 0; j < min_linhas; j++) {
+                printf("Sinal [%lu] -> Arq1 : %lf | Arq%d : %lf | Dif: %lf\n",
+                       j, i+1, arq1[j].time, arq2[j].time, 
+                       arq2[j].time - arq1[j].time);
+            }
+            plotar_sinais_tri_estatal(list_files[i], false);
+            //plotar_sinais_digitais(list_files[0], list_files[1]);
+        }
+
+        plotar_sinais_tri_estatal({}, true);
+    }   
+
+    return 0;
+}
+
+
