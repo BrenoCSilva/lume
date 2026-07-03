@@ -32,10 +32,9 @@ A ferramenta `plot_traffic_manager_signals` foi criada para processar arquivos d
       `traffic_signal`.
    
 **2 - Geração de Arquivos de Saída:** Para cada arquivo de log passado por argumento, a função `generate_outputs_files()` gera automaticamente um arquivo formatado do tipo `saida<N>.txt`. Esse
-      arquivo de saída simplificado contém apenas as colunas de `signal` e `timestamp_velodyne`, facilitando análises externas ou exportações.
+      arquivo de saída simplificado contém apenas as colunas de `signal` e `timestamp_velodyne`.
    
-**3 - Plotagem pelo Gnuplot:** A função `gnuplot()` acumula os conjuntos de dados de todos os arquivos e os envia simultaneamente para um processo do Gnuplot rodando via pipe (`popen("gnuplot
-      -persist")`). O gráfico define automaticamente o intervalo horizontal (`xrange`) com base no primeiro e último timestamp lidos e desenha as curvas em formato de degraus (`with steps`) sob uma escala
+**3 - Plotagem pelo Gnuplot:** A função `gnuplot()` acumula os conjuntos de dados de todos os arquivos e os envia simultaneamente para um processo do Gnuplot. O gráfico define automaticamente o intervalo horizontal (`xrange`) com base no primeiro e último timestamp lidos e desenha as curvas em formato de degraus (`with steps`) sob uma escala
       vertical fixa de `[10:15]`, que representa a faixa de estados do semáforo.
    
     
