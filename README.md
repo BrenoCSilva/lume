@@ -11,52 +11,51 @@
 > Este terá uma barra amarela (Aviso).
 
 > [!CAUTION]
-> Este terá uma barra vermelha (Cuidado/Perigo).
-        # Resumo e guia de Testes: Plotador de Sinais do Traffic Manager
+> 
+  # Resumo e guia de Testes: Plotador de Sinais do Traffic Manager
     
-    A ferramenta `plot_traffic_manager_signals` foi criada para processar arquivos de log de auditoria (`audit.txt`), extrair os dados de sinais gerados pelo módulo Traffic Manager, gerar arquivos de
-      saída limpos e apresentar visualizações gráficas interativas e comparativas usando o Gnuplot.
+A ferramenta `plot_traffic_manager_signals` foi criada para processar arquivos de log de auditoria (`audit.txt`), extrair os dados de sinais gerados pelo módulo Traffic Manager, gerar arquivos de saída limpos e apresentar visualizações gráficas interativas e comparativas usando o Gnuplot.
     
      ## Tópicos
      1. [Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
      2. [Guia de Execução e Testes](#guia-de-execucao-e-testes)
          - [Estrutura do Log e Parsing](#1-estrutura-do-log-e-parsing)
          - [Compilação do Módulo](#2-compilacao-do-modulo)
-        - [Geração de Saídas Simplificadas](#3-geracao-de-saidas-simplificadas)
-        - [Plotagem Gráfica Comparativa](#4-plotagem-grafica-comparativa)
+         - [Geração de Saídas Simplificadas](#3-geracao-de-saidas-simplificadas)
+         - [Plotagem Gráfica Comparativa](#4-plotagem-grafica-comparativa)
    
    
-    ## Resumo do fluxo de operação:
+## Resumo do fluxo de operação:
    
-    **1 - Leitura e Parsing do Log:** O programa recebe como argumentos de linha de comando os caminhos de arquivos de log de auditoria. A função `read_file()` varre linha por linha de cada arquivo em
+**1 - Leitura e Parsing do Log:** O programa recebe como argumentos de linha de comando os caminhos de arquivos de log de auditoria. A função `read_file()` varre linha por linha de cada arquivo em
       busca da palavra-chave `TRAFFIC_MANAGER_SIGNAL`. As linhas encontradas são desmembradas utilizando um padrão `sscanf` que mapeia e armazena os dados relevantes em um vetor de estruturas
       `traffic_signal`.
    
-   **2 - Geração de Arquivos de Saída:** Para cada arquivo de log passado por argumento, a função `generate_outputs_files()` gera automaticamente um arquivo formatado do tipo `saida<N>.txt`. Esse
+**2 - Geração de Arquivos de Saída:** Para cada arquivo de log passado por argumento, a função `generate_outputs_files()` gera automaticamente um arquivo formatado do tipo `saida<N>.txt`. Esse
       arquivo de saída simplificado contém apenas as colunas de `signal` e `timestamp_velodyne`, facilitando análises externas ou exportações.
    
-    **3 - Plotagem pelo Gnuplot:** A função `gnuplot()` acumula os conjuntos de dados de todos os arquivos e os envia simultaneamente para um processo do Gnuplot rodando via pipe (`popen("gnuplot
+**3 - Plotagem pelo Gnuplot:** A função `gnuplot()` acumula os conjuntos de dados de todos os arquivos e os envia simultaneamente para um processo do Gnuplot rodando via pipe (`popen("gnuplot
       -persist")`). O gráfico define automaticamente o intervalo horizontal (`xrange`) com base no primeiro e último timestamp lidos e desenha as curvas em formato de degraus (`with steps`) sob uma escala
       vertical fixa de `[10:15]`, que representa a faixa de estados do semáforo.
    
     
    
-    ## Guia de Execução e Testes
+## Guia de Execução e Testes
    
-    Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilitário e como realizar os testes de plotagem individual ou comparativa.
+Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilitário e como realizar os testes de plotagem individual ou comparativa.
  
-   **Requisito do Sistema:** Para que a visualização gráfica abra com sucesso na tela, certifique-se de que o `gnuplot` e sua interface X11 estejam instalados em sua máquina Linux.
+**Requisito do Sistema:** Para que a visualização gráfica abra com sucesso na tela, certifique-se de que o `gnuplot` e sua interface X11 estejam instalados em sua máquina Linux.
      ```bash
      sudo apt update && sudo apt install gnuplot gnuplot-x11
-    
+    ```
 
 
 
-   ### 1. Estrutura do Log e Parsing
+### 1. Estrutura do Log e Parsing
 
    O parser `sscanf` presente na função `read_file()` espera que as linhas de log correspondentes aos semáforos sigam estritamente o formato abaixo:
    
-   8 #### Padrão Esperado no Log:
+8 #### Padrão Esperado no Log:
   TRAFFIC_MANAGER_SIGNAL <num_traffic_lights> <x1> <x2> <y1> <y2> <signal> <annotation_id> <timestamp_velodyne> <ignorado> <timestamp_relative>
    
    2 #### Exemplo Prático de Linha do Log:
