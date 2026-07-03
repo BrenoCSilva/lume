@@ -108,4 +108,7 @@ O comando irá produzir o binário executável `plot_traffic_manager_signals`.
 1. Uma janela do Gnuplot se abrirá exibindo o título **"Gráfico de sinal x timestamp"**.
 2. O eixo horizontal (Tempo) se ajustará automaticamente entre o menor e o maior timestamp válido.
 3. O eixo vertical mostrará o sinal de semáforo fixado entre as marcas `10` e `15`.
+4. Pelo padrão do traffic_manager o sinal 12 representa semáfaro `verde` e 13 semáfaro `vermelhor`
 5. O gráfico permanecerá interativo (permitindo zoom com o mouse) até que você feche a janela.
+
+<img align="center" src="./files/tutorial_gnuplot/grafico-velocidade-tempo.png" width="1000" title="grafico velocidade x tempo">
