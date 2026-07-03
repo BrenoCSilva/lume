@@ -54,14 +54,13 @@ Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilit
 
    O parser `sscanf` presente na função `read_file()` espera que as linhas de log correspondentes aos semáforos sigam estritamente o formato abaixo:
    
-8 #### Padrão Esperado no Log:
+#### Padrão Esperado no Log:
   TRAFFIC_MANAGER_SIGNAL <num_traffic_lights> <x1> <x2> <y1> <y2> <signal> <annotation_id> <timestamp_velodyne> <ignorado> <timestamp_relative>
    
-   2 #### Exemplo Prático de Linha do Log:
-  TRAFFIC_MANAGER_SIGNAL 1 100 200 150 250 12 55 1718290234.123456 WORD 1718290234.345678
+#### Exemplo Prático de Linha do Log:
+    TRAFFIC_MANAGER_SIGNAL 1 100 200 150 250 12 55 1718290234.123456 WORD 1718290234.345678
 
-    
-     * **Campos Mapeados:**
+  **Campos Mapeados:**
        * `num_traffic_lights` = `1`
        * `x1` = `100`, `x2` = `200`, `y1` = `150`, `y2` = `250`
        * `signal` = `12` (ID do sinal/cor do semáforo)
@@ -70,17 +69,17 @@ Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilit
        * `timestamp_relative` = `1718290234.345678`
     
 
-   
-    ### 2. Compilação do Módulo
+  ### 2. Compilação do Módulo
    
     Navegue até a pasta do módulo e compile o binário utilizando o `make` do ambiente:
    
-    #### Comando no Terminal
+#### Comando no Terminal
+
+```bash
   cd traffic_manager/plot_traffic_manager_signals
   make
-
-
- O comando irá produzir o binário executável `plot_traffic_manager_signals`.
+```
+O comando irá produzir o binário executável `plot_traffic_manager_signals`.
 
 
  ### 3. Geração de Saídas Simplificadas
