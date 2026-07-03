@@ -54,11 +54,9 @@ Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilit
 
    O parser `sscanf` presente na função `read_file()` espera que as linhas de log correspondentes aos semáforos sigam estritamente o formato abaixo:
    
-#### Padrão Esperado no Log:
-  TRAFFIC_MANAGER_SIGNAL <num_traffic_lights> <x1> <x2> <y1> <y2> <signal> <annotation_id> <timestamp_velodyne> <ignorado> <timestamp_relative>
+#### Padrão Esperado no Log: TRAFFIC_MANAGER_SIGNAL <num_traffic_lights> <x1> <x2> <y1> <y2> <signal> <annotation_id> <timestamp_velodyne> <ignorado> <timestamp_relative>
    
-#### Exemplo Prático de Linha do Log:
-    TRAFFIC_MANAGER_SIGNAL 1 100 200 150 250 12 55 1718290234.123456 WORD 1718290234.345678
+#### Exemplo Prático de Linha do Log: TRAFFIC_MANAGER_SIGNAL 1 100 200 150 250 12 55 1718290234.123456 WORD 1718290234.345678
 
   **Campos Mapeados:**
        * `num_traffic_lights` = `1`
