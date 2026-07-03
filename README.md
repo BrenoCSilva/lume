@@ -90,9 +90,11 @@ O comando irá produzir o binário executável `plot_traffic_manager_signals`.
 
    
 **Resultado:** Será gerado um arquivo `saida1.txt` com as colunas formatadas:
-  1718290234.123456 
-  1718290234.345678 
-  1718290235.112233 
+
+  12 1718290234.123456 
+  12 1718290234.345678 
+  13 1718290235.112233 
+  
 #### Testando com múltiplos arquivos:
   ./plot_traffic_manager_signals meu_audit_1.txt meu_audit_2.txt
 
