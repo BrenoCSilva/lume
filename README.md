@@ -49,20 +49,12 @@ Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilit
 
    O parser `sscanf` presente na função `read_file()` espera que as linhas de log correspondentes aos semáforos sigam estritamente o formato abaixo:
    
-#### Padrão Esperado no Log: TRAFFIC_MANAGER_SIGNAL <num_traffic_lights> <x1> <x2> <y1> <y2> <signal> <annotation_id> <timestamp_velodyne> <ignorado> <timestamp_relative>
-   
-#### Exemplo Prático de Linha do Log: TRAFFIC_MANAGER_SIGNAL 1 100 200 150 250 12 55 1718290234.123456 WORD 1718290234.345678
-
-  **Campos Mapeados:**
-       * `num_traffic_lights` = `1`
-       * `x1` = `100`, `x2` = `200`, `y1` = `150`, `y2` = `250`
-       * `signal` = `12` (ID do sinal/cor do semáforo)
-       * `annotation_id` = `55`
-       * `timestamp_velodyne` = `1718290234.123456`
-       * `timestamp_relative` = `1718290234.345678`
-    
-
-  ### 2. Compilação do Módulo
+Padrão Esperado no Log: 
+```bash
+TRAFFIC_MANAGER_SIGNAL <num_traffic_lights> <x1> <x2> <y1> <y2> <signal> <annotation_id> <timestamp_velodyne> <ignorado> <timestamp_relative>
+TRAFFIC_MANAGER_SIGNAL 1 0 0 0 0 12 0 1774025793.765861 traffic_manager@lume-M 0.394803
+```
+### 2. Compilação do Módulo
    
 Navegue até a pasta do módulo e compile o arquivo utilizando o `make` do ambiente:
    
