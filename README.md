@@ -69,7 +69,7 @@ Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilit
 
   ### 2. Compilação do Módulo
    
-    Navegue até a pasta do módulo e compile o binário utilizando o `make` do ambiente:
+Navegue até a pasta do módulo e compile o binário utilizando o `make` do ambiente:
    
 #### Comando no Terminal
 
