@@ -12,50 +12,112 @@
 
 > [!CAUTION]
 > Este terá uma barra vermelha (Cuidado/Perigo).
+        # Resumo e guia de Testes: Plotador de Sinais do Traffic Manager
+    
+    A ferramenta `plot_traffic_manager_signals` foi criada para processar arquivos de log de auditoria (`audit.txt`), extrair os dados de sinais gerados pelo módulo Traffic Manager, gerar arquivos de
+      saída limpos e apresentar visualizações gráficas interativas e comparativas usando o Gnuplot.
+    
+     ## Tópicos
+     1. [Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
+     2. [Guia de Execução e Testes](#guia-de-execucao-e-testes)
+         - [Estrutura do Log e Parsing](#1-estrutura-do-log-e-parsing)
+         - [Compilação do Módulo](#2-compilacao-do-modulo)
+        - [Geração de Saídas Simplificadas](#3-geracao-de-saidas-simplificadas)
+        - [Plotagem Gráfica Comparativa](#4-plotagem-grafica-comparativa)
+   
+   
+    ## Resumo do fluxo de operação:
+   
+    **1 - Leitura e Parsing do Log:** O programa recebe como argumentos de linha de comando os caminhos de arquivos de log de auditoria. A função `read_file()` varre linha por linha de cada arquivo em
+      busca da palavra-chave `TRAFFIC_MANAGER_SIGNAL`. As linhas encontradas são desmembradas utilizando um padrão `sscanf` que mapeia e armazena os dados relevantes em um vetor de estruturas
+      `traffic_signal`.
+   
+   **2 - Geração de Arquivos de Saída:** Para cada arquivo de log passado por argumento, a função `generate_outputs_files()` gera automaticamente um arquivo formatado do tipo `saida<N>.txt`. Esse
+      arquivo de saída simplificado contém apenas as colunas de `signal` e `timestamp_velodyne`, facilitando análises externas ou exportações.
+   
+    **3 - Plotagem pelo Gnuplot:** A função `gnuplot()` acumula os conjuntos de dados de todos os arquivos e os envia simultaneamente para um processo do Gnuplot rodando via pipe (`popen("gnuplot
+      -persist")`). O gráfico define automaticamente o intervalo horizontal (`xrange`) com base no primeiro e último timestamp lidos e desenha as curvas em formato de degraus (`with steps`) sob uma escala
+      vertical fixa de `[10:15]`, que representa a faixa de estados do semáforo.
+   
+    
+   
+    ## Guia de Execução e Testes
+   
+    Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilitário e como realizar os testes de plotagem individual ou comparativa.
+ 
+   **Requisito do Sistema:** Para que a visualização gráfica abra com sucesso na tela, certifique-se de que o `gnuplot` e sua interface X11 estejam instalados em sua máquina Linux.
+     ```bash
+     sudo apt update && sudo apt install gnuplot gnuplot-x11
+    
 
-# Resumo e Guia de Uso: Plotador de Sinais do Traffic Manager
 
-A ferramenta `plot_traffic_manager_signals` foi desenvolvida para ler logs de auditoria (`audit.txt`), processar os sinais de semáforo enviados pelo Traffic Manager, gerar arquivos de saída formatados e plotar esses dados em formato gráfico de forma comparativa utilizando o Gnuplot.
 
----
+   ### 1. Estrutura do Log e Parsing
 
-## Tópicos
+   O parser `sscanf` presente na função `read_file()` espera que as linhas de log correspondentes aos semáforos sigam estritamente o formato abaixo:
+   
+   8 #### Padrão Esperado no Log:
+  TRAFFIC_MANAGER_SIGNAL <num_traffic_lights> <x1> <x2> <y1> <y2> <signal> <annotation_id> <timestamp_velodyne> <ignorado> <timestamp_relative>
+   
+   2 #### Exemplo Prático de Linha do Log:
+  TRAFFIC_MANAGER_SIGNAL 1 100 200 150 250 12 55 1718290234.123456 WORD 1718290234.345678
 
-1. Resumo do fluxo de operação  
-2. Estrutura da linha do log (TRAFFIC_MANAGER_SIGNAL)  
-3. Compilação e execução  
-4. Geração de arquivos de saída  
-5. Visualização gráfica (Gnuplot)
+    
+     * **Campos Mapeados:**
+       * `num_traffic_lights` = `1`
+       * `x1` = `100`, `x2` = `200`, `y1` = `150`, `y2` = `250`
+       * `signal` = `12` (ID do sinal/cor do semáforo)
+       * `annotation_id` = `55`
+       * `timestamp_velodyne` = `1718290234.123456`
+       * `timestamp_relative` = `1718290234.345678`
+    
 
----
+   
+    ### 2. Compilação do Módulo
+   
+    Navegue até a pasta do módulo e compile o binário utilizando o `make` do ambiente:
+   
+    #### Comando no Terminal
+  cd traffic_manager/plot_traffic_manager_signals
+  make
 
-## Resumo do fluxo de operação
 
-### 1 - Leitura e Parsing
-O programa recebe um ou mais arquivos de log por argumento de linha de comando.  
-A função `read_file()` percorre cada linha do arquivo identificando a palavra-chave `TRAFFIC_MANAGER_SIGNAL`.
+ O comando irá produzir o binário executável `plot_traffic_manager_signals`.
 
-Quando encontrada, a linha é parseada via `sscanf` e armazenada em um vetor de estruturas do tipo `traffic_signal`.
 
----
+ ### 3. Geração de Saídas Simplificadas
 
-### 2 - Geração de arquivos de saída
-Para cada arquivo lido, o programa chama `generate_outputs_files()`, gerando arquivos como:
+ Sempre que o utilitário processar arquivos de entrada, ele gerará arquivos de saída contendo apenas o sinal e o timestamp do velodyne.
 
-- `saida1.txt`
-- `saida2.txt`
-- etc.
+    #### Testando com um arquivo:
+  ./plot_traffic_manager_signals meu_audit_1.txt
 
-Esses arquivos contêm apenas:
-- `signal`
-- `timestamp_velodyne`
+   
+**Resultado:** Será gerado um arquivo `saida1.txt` com as colunas formatadas:
+  1718290234.123456 
+  1718290234.345678 
+  1718290235.112233 
+#### Testando com múltiplos arquivos:
+  ./plot_traffic_manager_signals meu_audit_1.txt meu_audit_2.txt
 
----
 
-### 3 - Plotagem comparativa no Gnuplot
-O programa acumula os dados de forma estática para múltiplos arquivos.
+ **Resultado:** Serão criados dois arquivos no mesmo diretório:
+ * `saida1.txt` (dados extraídos de `meu_audit_1.txt`)
+ * `saida2.txt` (dados extraídos de `meu_audit_2.txt`)
 
-Ao final, abre uma conexão com o Gnuplot via:
+ ---
 
-```bash
-popen("gnuplot -persist")
+ ### 4. Plotagem Gráfica Comparativa
+  
+ Para comparar e visualizar o comportamento temporal dos semáforos entre diferentes execuções ou trechos de logs, basta passar múltiplos caminhos.
+ 
+ #### Comando no Terminal
+  ./plot_traffic_manager_signals audit_execucao_A.txt audit_execucao_B.txt
+
+#### Comportamento Esperado na Tela (Interface Gráfica):
+
+1. Uma janela do Gnuplot se abrirá exibindo o título **"Gráfico de sinal x timestamp"**.
+2. O eixo horizontal (Tempo) se ajustará automaticamente entre o menor e o maior timestamp válido de forma dinâmica.
+3. O eixo vertical mostrará o sinal de semáforo fixado entre as marcas `10` e `15`.
+4. Os dados serão plotados usando linhas em degraus (`with steps`) com diferentes cores para cada arquivo de entrada, ajudando a identificar discrepâncias de tempo de resposta ou transições de estado incorretas.
+5. O gráfico permanecerá interativo (permitindo zoom com o mouse) até que você feche a janela ou envie o comando de fechamento no terminal.
