@@ -16,7 +16,7 @@
     
 A ferramenta `plot_traffic_manager_signals` foi criada para processar arquivos de log de auditoria (`audit.txt`), extrair os dados de sinais gerados pelo módulo Traffic Manager, gerar arquivos de saída limpos e apresentar visualizações gráficas interativas e comparativas usando o Gnuplot.
     
-     ## Tópicos
+## Tópicos
      1. [Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
      2. [Guia de Execução e Testes](#guia-de-execucao-e-testes)
          - [Estrutura do Log e Parsing](#1-estrutura-do-log-e-parsing)
