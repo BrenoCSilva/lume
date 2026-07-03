@@ -43,12 +43,7 @@ A ferramenta `plot_traffic_manager_signals` foi criada para processar arquivos d
    
 Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilitário e como realizar os testes de plotagem individual ou comparativa.
  
-**Requisito do Sistema:** Para que a visualização gráfica abra com sucesso na tela, certifique-se de que o `gnuplot` e sua interface X11 estejam instalados em sua máquina Linux.
-     ```bash
-     sudo apt update && sudo apt install gnuplot gnuplot-x11
-    ```
-
-
+**Requisito do Sistema:** Para que a visualização gráfica abra com sucesso na tela, certifique-se de que o `gnuplot` esteja instalado em sua máquina.
 
 ### 1. Estrutura do Log e Parsing
 
@@ -96,8 +91,9 @@ O comando irá produzir o binário executável `plot_traffic_manager_signals`.
 13 1718290235.112233 
   
 #### Testando com múltiplos arquivos:
+```bash
   ./plot_traffic_manager_signals meu_audit_1.txt meu_audit_2.txt
-
+```
 
  **Resultado:** Serão criados dois arquivos no mesmo diretório:
  * `saida1.txt` (dados extraídos de `meu_audit_1.txt`)
@@ -110,8 +106,9 @@ O comando irá produzir o binário executável `plot_traffic_manager_signals`.
  Para comparar e visualizar o comportamento temporal dos semáforos entre diferentes execuções ou trechos de logs, basta passar múltiplos caminhos.
  
  #### Comando no Terminal
+```bash
   ./plot_traffic_manager_signals audit_execucao_A.txt audit_execucao_B.txt
-
+```
 #### Comportamento Esperado na Tela (Interface Gráfica):
 
 1. Uma janela do Gnuplot se abrirá exibindo o título **"Gráfico de sinal x timestamp"**.
