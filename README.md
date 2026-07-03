@@ -82,10 +82,11 @@ O comando irá produzir o binário executável `plot_traffic_manager_signals`.
 
  ### 3. Geração de Saídas Simplificadas
 
- Sempre que o utilitário processar arquivos de entrada, ele gerará arquivos de saída contendo apenas o sinal e o timestamp do velodyne.
-
-    #### Testando com um arquivo:
+ Sempre que o executável processar arquivos de entrada, ele gerará arquivos de saída contendo apenas o sinal e o timestamp do velodyne.
+ 
+```bash
   ./plot_traffic_manager_signals meu_audit_1.txt
+```
 
    
 **Resultado:** Será gerado um arquivo `saida1.txt` com as colunas formatadas:
