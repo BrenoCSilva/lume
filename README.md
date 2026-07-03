@@ -115,7 +115,6 @@ O comando irá produzir o binário executável `plot_traffic_manager_signals`.
 #### Comportamento Esperado na Tela (Interface Gráfica):
 
 1. Uma janela do Gnuplot se abrirá exibindo o título **"Gráfico de sinal x timestamp"**.
-2. O eixo horizontal (Tempo) se ajustará automaticamente entre o menor e o maior timestamp válido de forma dinâmica.
+2. O eixo horizontal (Tempo) se ajustará automaticamente entre o menor e o maior timestamp válido.
 3. O eixo vertical mostrará o sinal de semáforo fixado entre as marcas `10` e `15`.
-4. Os dados serão plotados usando linhas em degraus (`with steps`) com diferentes cores para cada arquivo de entrada, ajudando a identificar discrepâncias de tempo de resposta ou transições de estado incorretas.
-5. O gráfico permanecerá interativo (permitindo zoom com o mouse) até que você feche a janela ou envie o comando de fechamento no terminal.
+5. O gráfico permanecerá interativo (permitindo zoom com o mouse) até que você feche a janela.
