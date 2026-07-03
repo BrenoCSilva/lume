@@ -79,7 +79,9 @@ O comando irá produzir o binário executável `plot_traffic_manager_signals`.
 **Resultado:** Será gerado um arquivo `saida1.txt` com as colunas formatadas:
 
 12 1718290234.123456 
+
 12 1718290234.345678 
+
 13 1718290235.112233 
   
 #### Testando com múltiplos arquivos:
