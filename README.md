@@ -69,16 +69,19 @@ O comando irá produzir o binário executável `estimate_rpm`.
 
 * `rpms.txt`:
 ```text
+VD_RPM <rpm> <timestamp_relative>
 VD_RPM 1554.880000 430.736581 
 ```
 
 * `gears.txt`:
 ```text
+VD_GEAR <gear> <timestamp_relative>
 VD_GEAR 8 430.716332 
 ```
 
 * `velocities.txt`:
 ```text
+VD_VELOCITY <velocity> <timestamp_relative>
 VD_VELOCITY 8.043000 430.734542 
 ```
 
