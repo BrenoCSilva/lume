@@ -7,7 +7,7 @@ A ferramenta de estimar RPM foi criada para processar arquivos de log de audit (
 2. [Guia de Execução e Testes](#guia-de-execucao-e-testes)
    - [Estrutura do Log e Parsing](#1-estrutura-do-log-e-parsing)
    - [Compilação do Módulo](#2-compilacao-do-modulo)
-   - [Geração de Saídas Simplificadas](#3-geracao-de-saidas-simplificadas)
+   - [Geração de Saídas](#3-geracao-de-saidas)
    - [Plotagem Gráfica Comparativa](#4-plotagem-grafica-comparativa)
    
    
