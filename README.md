@@ -126,12 +126,12 @@ marcha 1 quantidade de sinais 10956 -  da marcha 1:    f(v) = 1056.756977 * v + 
  
  #### Comando no Terminal
 ```bash
-  ./gemini meu_audit.txt
+  ./estimate_rpm meu_audit.txt
 ```
 #### Comportamento Esperado na Tela (Interface Gráfica):
 
 1. Uma janela do Gnuplot se abrirá exibindo o título **"Análise de Telemetria (RPM vs Velocidade vs Marcha)"**.
-2. O eixo horizontal (Tempo) se ajustará automaticamente entre o menor e o maior timestamp válido de leitura.
+2. O eixo horizontal (Tempo) se ajustará automaticamente entre o menor e o maior timestamp dos sinais de rpm válidos a partir leitura.
 3. O eixo vertical esquerdo (y1) mostrará o RPM do motor calibrado entre `0` e `2500` RPM. O eixo vertical direito (y2) exibirá a escala conjunta de velocidade (m/s) e marcha ativa entre `-5` e `15`.
-4. O gráfico apresentará as curvas contínuas originais brutas ao fundo (em cores claras) e superporá os pontos discretos filtrados/válidos por cima, facilitando a comparação direta visual do efeito dos filtros de mediana.
+4. O gráfico apresentará as curvas contínuas originais brutas ao fundo (em cores claras) e com pontos discretos os sinais filtrados por cima, facilitando a comparação direta visual do efeito dos dados descartados.
 5. O gráfico permanecerá interativo (permitindo zoom com o mouse) até que você feche a janela.
