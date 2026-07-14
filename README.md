@@ -48,20 +48,20 @@ Navegue até a pasta do módulo e compile o arquivo utilizando o `make` do ambie
 #### Comando no Terminal
 
 ```bash
-  cd vehicle_driver/estimar_rpm
+  cd ~/astro/src/scripts_lume/estimate_rpm
   make
 ```
-O comando irá produzir o binário executável `gemini`.
+O comando irá produzir o binário executável `estimate_rpm`.
 
 
- ### 3. Geração de Saídas Simplificadas
+ ### 3. Geração de Saídas 
 
  Sempre que o executável processar um arquivo de entrada, ele gerará arquivos de saída contendo apenas os dados de telemetria correspondentes e os timestamps relativos.
 
 **Nota:** Certifique-se de que a pasta `saidas/` exista no diretório atual antes de rodar o programa, ou crie-a com o comando `mkdir saidas`
  
 ```bash
-  ./gemini meu_audit.txt
+  ./estimate_rpm meu_audit.txt
 ```
 
    
