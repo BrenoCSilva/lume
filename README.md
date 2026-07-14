@@ -15,8 +15,10 @@ A ferramenta de estimar RPM foi criada para processar arquivos de log de audit (
    
 **1 - Leitura e Parsing do Log:** O programa recebe como argumentos de linha de comando o caminho do arquivo de log de audit. A função `read_file()` varre linha por linha do arquivo em busca das palavras-chave `VD_RPM`, `VD_CURRENT_GEAR` e `ROBOTVELOCITY_ACK`. As linhas encontradas são desmembradas utilizando um padrão `sscanf` que mapeia e armazena os dados relevantes nos vetores de estruturas `rpm`, `gear` e `velocity`. Essas listas de dados são encapsulados em uma estrutura `SignalSeries`.
    
-**2 - Geração de Arquivos de Saída:** Para o arquivo de log passado por argumento, a função `generate_outputs_files()` gera automaticamente arquivos formatados na pasta de saída. Esses arquivos de saída contêm os dados de telemetria (RPM, marcha e velocidade) e seus respectivos `timestamp_relative`. Também é gerado como saída um arquivo chamado `reports.txt`, no qual é apresentada, para cada marcha, a quantidade de sinais identificados após a filtragem dos dados brutos, a expressão matemática que retorna o RPM do veículo a partir da velocidade, e o pareamento desses sinais em uma escala percentual calculada pela função em comparação com seu valor real no log de audit.
-   
+**2 - Geração de Arquivos de Saída:** Para o arquivo de log passado por argumento, a função `generate_outputs_files()` gera automaticamente arquivos formatados na pasta de saída. Esses arquivos de saída contêm os dados de telemetria (RPM, marcha e velocidade) e seus respectivos `timestamp_relative`. Também é gerado como saída um arquivo chamado `reports.txt`, no qual é apresentado, para cada marcha do veículo:
+    1 - A quantidade de sinais identificados após a filtragem dos dados brutos;
+    2 - A expressão matemática que retorna o RPM do veículo a partir da velocidade;
+    3 - O pareamento desses sinais em uma escala percentual. Esses pareamento é realizado a partir da expressão matemárica, o percentual é obtido quando comparado com seu valor real no log de audit.
    
 ## Guia de Execução e Testes
    
@@ -55,6 +57,8 @@ O comando irá produzir o binário executável `gemini`.
  ### 3. Geração de Saídas Simplificadas
 
  Sempre que o executável processar um arquivo de entrada, ele gerará arquivos de saída contendo apenas os dados de telemetria correspondentes e os timestamps relativos.
+
+**Nota:** Certifique-se de que a pasta `saidas/` exista no diretório atual antes de rodar o programa, ou crie-a com o comando `mkdir saidas`
  
 ```bash
   ./gemini meu_audit.txt
