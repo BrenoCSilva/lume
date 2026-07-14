@@ -87,6 +87,23 @@ VD_VELOCITY 8.043000 430.734542
 
 * `reports.txt`:
 ```text
+marcha <número da marcha> quantidade de sinais <quantidade> -  da marcha <número da marcha>:    f(v) = <coeficiente_angular> * v + <coeficiente_linear>
+            Distribuição da acurácia (Estimativa /RPM Real):
+              < 50%       :    <quantidade_sinais> (porcentagem_equivalente)
+              50%  - 60%   :   <quantidade_sinais> (porcentagem_equivalente)
+              60%  - 70%   :   <quantidade_sinais> (porcentagem_equivalente)
+              70%  - 80%   :   <quantidade_sinais> (porcentagem_equivalente)
+              80%  - 90%   :   <quantidade_sinais> (porcentagem_equivalente)
+              90%  - 100%  :   <quantidade_sinais> (porcentagem_equivalente)[* Erro de 10%]
+              100% - 110%  :   <quantidade_sinais> (porcentagem_equivalente)[* Erro de 10%]
+              110% - 120%  :   <quantidade_sinais> (porcentagem_equivalente)
+              120% - 130%  :   <quantidade_sinais> (porcentagem_equivalente)
+              130% - 140%  :   <quantidade_sinais> (porcentagem_equivalente)
+              140% - 150%  :   <quantidade_sinais> (porcentagem_equivalente)
+              > 150%      :    <quantidade_sinais> (porcentagem_equivalente)
+```
+```text
+Exemplo:
 marcha 1 quantidade de sinais 10956 -  da marcha 1:    f(v) = 1056.756977 * v + 70.814914
             Distribuição da acurácia (Estimativa /RPM Real):
               < 50%       :      0 ( 0.00%)
