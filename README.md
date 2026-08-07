@@ -70,7 +70,13 @@ A fim de evitar erros e simplificar o uso, o script foi projetado para descobrir
 python3 offroad_route_evaluator.py /dados/casos_testes -p /dados/testes/minha_pasta/plan_temp.txt
 ```
 
-No entanto caso não seja fornecido esse caminho através da flag na execução do script, o programa investigará o sistema operacional e direcionará o monitoramento do teste automaticamente para o arquivo `/dados/testes/minha_pasta/plan_temp.txt`, dispensando a necessidade de digitar esse caminho no terminal do script! Porém, caso essas duas primeiras tentativas registrem falha, o programa irá procurar o plano recalculado em /dados/plan_recalculado/plan_recalculado.txt.
+No entanto caso não seja fornecido esse caminho através da flag na execução do script, o programa investigará o sistema operacional e direcionará o monitoramento do teste automaticamente para o arquivo correto caso o offroad esteja em execução com a flag correta, dispensando a necessidade de digitar esse caminho no terminal do script. O script através do terminal irá sinalizar aonde ele estará procurando esse arquivo:
+
+```bash
+python3 offroad_route_evaluator.py "/dados/testes_python" -o /home/lume/astro/src/scripts_lume/script_compare_routes/relatorio.txt
+offroad_planner está salvando o plano em '/dados/testes/minha_pasta/plan_temp.txt'  <-- script irá usar esse arquivo para comparar com os arquivos_ideais
+```
+Porém, caso essas duas primeiras tentativas registrem falha, o programa irá procurar o plano recalculado em /dados/plan_recalculado/plan_recalculado.txt.
 
 ---
 #### Execução Gravando um Relatório Final em Arquivo (Flag `-o` / `--output`):
