@@ -1,4 +1,4 @@
-# Resumo e guia de Testes: Avaliador de Rotas Offroad (`offroad_route_evaluator.py`)
+# Resumo e guia de Testes: Avaliador de Rotas Offroad
 
 A ferramenta de avaliação automática de rotas offroad (`offroad_route_evaluator.py`) foi criada para automatizar a execução de testes de regressão do módulo `offroad_planner`. O script é capaz de ler pastas de casos de testes homologados (caminhos ideais), interagir com o simulador do Astro para recalcular a manobra gerada anteriormente através das poses salvas nos arquivos ideais, monitorar as saídas geradas e classificar os desvios de rota em tempo real usando a métrica de **Distância de Hausdorff**.
 
