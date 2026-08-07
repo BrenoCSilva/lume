@@ -1,137 +1,151 @@
-# Resumo e guia de Testes: Estimador de RPM (Vehicle Driver)
-    
-A ferramenta de estimar RPM foi criada para processar arquivos de log de audit (`audit.txt`), extrair os dados de telemetria gerados pelo módulo Vehicle Driver, gerar arquivos de saída e apresentar visualizações gráficas comparativas usando o Gnuplot.
-    
+# Resumo e guia de Testes: Avaliador de Rotas Offroad (`offroad_route_evaluator.py`)
+
+A ferramenta de avaliação automática de rotas offroad (`offroad_route_evaluator.py`) foi criada para automatizar a execução de baterias de testes de regressão do módulo `offroad_planner`. O script é capaz de ler pastas de casos de testes homologados (caminhos ideais), teleportar o veículo virtual no simulador do Astro para as poses iniciais, disparar o planejamento offroad de forma assíncrona até cada objetivo final, monitorar as saídas geradas e classificar os desvios de rota em tempo real usando a métrica de **Distância de Hausdorff**.
+
+---
+
 ## Tópicos
 1. [Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
 2. [Guia de Execução e Testes](#guia-de-execucao-e-testes)
-   - [Estrutura do Log e Parsing](#1-estrutura-do-log-e-parsing)
-   - [Compilação do Módulo](#2-compilacao-do-modulo)
-   - [Geração de Saídas](#3-geracao-de-saidas)
-   - [Plotagem Gráfica Comparativa](#4-plotagem-grafica-comparativa)
-   
-   
-## Resumo do fluxo de operação:
-   
-**1 - Leitura e Parsing do Log:** O programa recebe como argumentos de linha de comando o caminho do arquivo de log de audit. A função `read_file()` varre linha por linha do arquivo em busca das palavras-chave `VD_RPM`, `VD_CURRENT_GEAR` e `ROBOTVELOCITY_ACK`. As linhas encontradas são desmembradas utilizando um padrão `sscanf` que mapeia e armazena os dados relevantes nos vetores de estruturas `rpm`, `gear` e `velocity`. Essas listas de dados são encapsulados em uma estrutura `SignalSeries`.
-   
-**2 - Geração de Arquivos de Saída:** Para o arquivo de log passado por argumento, a função `generate_outputs_files()` gera automaticamente arquivos formatados na pasta de saída. Esses arquivos de saída contêm os dados de telemetria (RPM, marcha e velocidade) e seus respectivos `timestamp_relative`. Também é gerado como saída um arquivo chamado `reports.txt`, no qual é apresentado, para cada marcha do veículo:
-    1 - A quantidade de sinais identificados após a filtragem dos dados brutos;
-    2 - A expressão matemática que retorna o RPM do veículo a partir da velocidade;
-    3 - O pareamento desses sinais em uma escala percentual. Esses pareamento é realizado a partir da expressão matemárica, o percentual é obtido quando comparado com seu valor real no log de audit.
-   
+   - [Filtro e Estrutura das Pastas de Teste](#1-filtro-e-estrutura-das-pastas-de-teste)
+   - [Mecanismo Inteligente de Auto-Detecção (Zero-Config)](#2-mecanismo-inteligente-de-auto-detecao-zero-config)
+   - [Execução da Bateria de Testes](#3-execucao-da-bateria-de-testes)
+   - [Classificação de Desvios Coloridos em Tempo Real](#4-classificacao-de-desvios-coloridos-em-tempo-real)
+   - [Geração do Relatório de Saída](#5-geracao-do-relatorio-de-saida)
+
+---
+
+## Resumo do fluxo de operação
+
+**1 - Descoberta e Filtragem de Casos de Teste:** O script recebe como argumento de linha de comando o caminho da pasta contendo os arquivos ideais. A função `list_files()` realiza uma varredura recursiva inteligente (`os.walk`), ignorando pastas pesadas ou arquivos indesejados (como dumps, mídias ou rascunhos), e mantendo apenas subpastas oficiais de homologação que comecem com `"test_"` ou contenham `"test"` em seu nome.
+
+**2 - Auto-Detecção do Caminho de Saída:** Para saber onde o `offroad_planner` (C++) está configurado para salvar os novos planos calculados, a função `detect_save_path_offroad()` varre a tabela de processos ativos do Linux (`ps aux`), extrai automaticamente a string passada no argumento `-save_offroad_path` do executável ativo e define o caminho de monitoramento. Caso não encontre nenhum processo rodando, o script usa os fallbacks configurados pelo argumento ou o padrão `/dados/testes/`.
+
+**3 - Teleporte e Inicialização Fisiológica (Loop de Teste):** Para cada caso de teste encontrado:
+1. O script lê as coordenadas exatas do caminhão (`robot`) e do destino (`goal`) de dentro do arquivo ideal.
+2. Limpa qualquer arquivo de resultado anterior para evitar leituras de dados antigos de execuções anteriores.
+3. Spawna o utilitário `/home/lume/astro/bin/util_publish_initial_pose` em background com `--wait_time 0` para teleportar o veículo no simulador.
+4. Aguarda **5.0 segundos** (tempo fisiológico de segurança para garantir a convergência das partículas de localização do `localize_ackerman` e carregamento estável dos blocos do mapa de obstáculos ao redor do veículo).
+5. Encerra o publicador inicial de forma limpa (`terminate()` e `wait()`).
+6. Spawna o utilitário `/home/lume/astro/bin/util_publish_final_goal` em background para publicar o destino final, aguardando **5.0 segundos** para o envio da mensagem ao barramento IPC.
+
+**4 - Monitoramento Ativo e Comparação:** O script entra em um loop de espera ativa (`while`) por até **30 segundos** (timeout), verificando a cada 200ms se o arquivo de rota gerada pelo planejador apareceu no disco e foi preenchido. Assim que o arquivo é gravado, o script chama o binário de comparação `compare_routes.py` para calcular a **Distância de Hausdorff** (pior distância espacial) entre o caminho de referência e o caminho recalculado atualmente.
+
+**5 - Apresentação e Geração de Relatório:** O resultado de cada comparação é validado e impresso imediatamente no terminal com cores chamativas e intuitivas baseadas nos níveis de tolerância cinemática do caminhão. No final, se solicitado pelo usuário, a função `save_results()` agrupa e salva o relatório estruturado em um arquivo de texto.
+
+---
+
 ## Guia de Execução e Testes
-   
-Este guia orienta o padrão esperado dos arquivos de log, como compilar o utilitário e como realizar os testes de plotagem comparativa.
- 
-**Requisito do Sistema:** Para que a visualização gráfica abra com sucesso na tela, certifique-se de que o `gnuplot` esteja instalado em sua máquina.
 
-### 1. Estrutura do Log e Parsing
+Este guia orienta sobre os pré-requisitos, regras de nomenclatura de pastas, uso das flags de comando e interpretação dos resultados do avaliador.
 
-   O parser `sscanf` presente na função `read_file()` espera que as linhas de log correspondentes ao veículo sigam estritamente o formato abaixo:
-   
-Padrão Esperado no Log: 
+### 1. Filtro e Estrutura das Pastas de Teste
+
+Para garantir que o script ignore "lixos" ou arquivos de rascunho de engenharia e processe apenas os testes válidos, a pasta fornecida como argumento deve seguir o padrão de nomenclatura contendo `"test_"` ou `"test"` nas subpastas.
+
+**Exemplo de Estrutura de Pastas Esperada:**
+```text
+dados/casos_testes/
+├── test_entrando_pista/        <-- Processado (contém 'test_')
+│   ├── caso_1.txt
+│   └── caso_2.txt
+├── test_saindo_pista/          <-- Processado (contém 'test_')
+│   └── caso_1.txt
+├── need_for_speed.txt          <-- Ignorado (arquivo solto que não está em subpasta aprovada)
+└── mario_galaxy/               <-- Ignorado (nome da pasta não segue o padrão de testes)
+    └── screenshot.png
+```
+
+---
+
+### 2. Mecanismo Inteligente de Auto-Detecção (Zero-Config)
+
+A fim de evitar erros humanos e simplificar o uso do operador, o script foi projetado para descobrir de forma autônoma onde o planejador offroad está gravando os arquivos no disco.
+
+Se você subir o seu planejador com qualquer caminho de salvamento customizado, por exemplo:
 ```bash
-VD_RPM <rpm> <timestamp_velodyne> <ignorado> <timestamp_relative>
-VD_RPM 1554.880000 1777900803.322888 ford_escape_hybrid@200 430.736581
-
-ROBOTVELOCITY_ACK <v> <phi> <timestamp_velodyne> <ignorado> <timestamp_relative>
-ROBOTVELOCITY_ACK 8.043000 0.062370 1777900803.320781 ford_escape_hybrid@200 430.734542
-
-VD_CURRENT_GEAR <current_gear> <raw_gear_value> <timestamp_velodyne> <ignorado> <timestamp_relative>
-VD_CURRENT_GEAR 8 81 1777900803.297890 ford_escape_hybrid@200 430.716332
+./offroad_planner -save_offroad_path /dados/testes/minha_pasta/caso_ativo.txt
 ```
-### 2. Compilação do Módulo
-   
-Navegue até a pasta do módulo e compile o arquivo utilizando o `make` do ambiente:
-   
-#### Comando no Terminal
+O script Python investigará o sistema operacional e direcionará o monitoramento do teste automaticamente para o arquivo `/dados/testes/minha_pasta/caso_ativo.txt`, dispensando a necessidade de digitar esse caminho novamente no terminal do script!
 
+---
+
+### 3. Execução da Bateria de Testes
+
+Para executar o script, passe o caminho da pasta contendo a estrutura de testes descrita acima.
+
+#### Comando de Execução Padrão:
 ```bash
-  cd ~/astro/src/scripts_lume/estimate_rpm
-  make
+python3 offroad_route_evaluator.py /dados/casos_testes
 ```
-O comando irá produzir o binário executável `estimate_rpm`.
 
-
- ### 3. Geração de Saídas 
-
- Sempre que o executável processar um arquivo de entrada, ele gerará arquivos de saída contendo apenas os dados de telemetria correspondentes e os timestamps relativos.
-
-**Nota:** Certifique-se de que a pasta `saidas/` exista no diretório atual antes de rodar o programa, ou crie-a com o comando `mkdir saidas`
- 
+#### Execução Forçando um Caminho de Saída Específico (Flag `-p` / `--path`):
+Se você quiser forçar um arquivo de saída específico manualmente (ignorando o mecanismo de detecção automática por processo):
 ```bash
-  ./estimate_rpm meu_audit.txt
+python3 offroad_route_evaluator.py /dados/casos_testes -p /dados/saida/meu_teste.txt
 ```
 
-   
-**Resultado:** Serão gerados arquivos formatados na pasta `saidas/` (como `rpms.txt`, `gears.txt` e `velocities.txt`) com os dados organizados em colunas, nos moldes dos exemplos abaixo:
-
-* `rpms.txt`:
-```text
-VD_RPM <rpm> <timestamp_relative>
-VD_RPM 1554.880000 430.736581 
-```
-
-* `gears.txt`:
-```text
-VD_GEAR <gear> <timestamp_relative>
-VD_GEAR 8 430.716332 
-```
-
-* `velocities.txt`:
-```text
-VD_VELOCITY <velocity> <timestamp_relative>
-VD_VELOCITY 8.043000 430.734542 
-```
-
-* `reports.txt`:
-```text
-marcha <número da marcha> quantidade de sinais <quantidade> -  da marcha <número da marcha>:    f(v) = <coeficiente_angular> * v + <coeficiente_linear>
-            Distribuição da acurácia (Estimativa /RPM Real):
-              < 50%       :    <quantidade_sinais> (porcentagem_equivalente)
-              50%  - 60%   :   <quantidade_sinais> (porcentagem_equivalente)
-              60%  - 70%   :   <quantidade_sinais> (porcentagem_equivalente)
-              70%  - 80%   :   <quantidade_sinais> (porcentagem_equivalente)
-              80%  - 90%   :   <quantidade_sinais> (porcentagem_equivalente)
-              90%  - 100%  :   <quantidade_sinais> (porcentagem_equivalente)[* Erro de 10%]
-              100% - 110%  :   <quantidade_sinais> (porcentagem_equivalente)[* Erro de 10%]
-              110% - 120%  :   <quantidade_sinais> (porcentagem_equivalente)
-              120% - 130%  :   <quantidade_sinais> (porcentagem_equivalente)
-              130% - 140%  :   <quantidade_sinais> (porcentagem_equivalente)
-              140% - 150%  :   <quantidade_sinais> (porcentagem_equivalente)
-              > 150%      :    <quantidade_sinais> (porcentagem_equivalente)
-```
-```text
-Exemplo:
-marcha 1 quantidade de sinais 10956 -  da marcha 1:    f(v) = 1056.756977 * v + 70.814914
-            Distribuição da acurácia (Estimativa /RPM Real):
-              < 50%       :      0 ( 0.00%)
-              50%  - 60%   :      0 ( 0.00%)
-              60%  - 70%   :      0 ( 0.00%)
-              70%  - 80%   :      0 ( 0.00%)
-              80%  - 90%   :     55 ( 0.50%)
-              90%  - 100%  :   5436 (49.62%)[* Erro de 10%]
-              100% - 110%  :   5378 (49.09%)[* Erro de 10%]
-              110% - 120%  :     87 ( 0.79%)
-              120% - 130%  :      0 ( 0.00%)
-              130% - 140%  :      0 ( 0.00%)
-              140% - 150%  :      0 ( 0.00%)
-              > 150%      :      0 ( 0.00%)
-```
- ---
-
- ### 4. Plotagem Gráfica 
-  .
- 
- #### Comando no Terminal
+#### Execução Gravando um Relatório Final em Arquivo (Flag `-o` / `--output`):
+Para rodar a bateria de testes e salvar as estatísticas consolidadas finais em um arquivo `.txt` de auditoria:
 ```bash
-  ./estimate_rpm meu_audit.txt
+python3 offroad_route_evaluator.py /dados/casos_testes -o meu_relatorio.txt
 ```
-#### Comportamento Esperado na Tela (Interface Gráfica):
 
-1. Uma janela do Gnuplot se abrirá exibindo o título **"Análise de Telemetria (RPM vs Velocidade vs Marcha)"**.
-2. O eixo horizontal (Tempo) se ajustará automaticamente entre o menor e o maior timestamp dos sinais de rpm válidos a partir leitura.
-3. O eixo vertical esquerdo (y1) mostrará o RPM do motor calibrado entre `0` e `2500` RPM. O eixo vertical direito (y2) exibirá a escala conjunta de velocidade (m/s) e marcha ativa entre `-5` e `15`.
-4. O gráfico apresentará as curvas contínuas originais brutas ao fundo (em cores claras) e com pontos discretos os sinais filtrados por cima, facilitando a comparação direta visual do efeito dos dados descartados.
-5. O gráfico permanecerá interativo (permitindo zoom com o mouse) até que você feche a janela.
+---
+
+### 4. Classificação de Desvios Coloridos em Tempo Real
+
+Durante a execução da bateria de testes, o terminal apresentará em tempo real o andamento de cada caso de teste em cores, baseando-se nos limites de segurança e cinemática estabelecidos para veículos de grande porte (como caminhões Axor):
+
+| Status | Cor | Faixa de Distância | Significado para a Engenharia |
+| :---: | :---: | :---: | :--- |
+| **OK** | **🟢 Verde** | `Até 0.50 metros` | **Comportamento Idêntico.** O veículo refez o caminho ideal de forma precisa, cobrindo apenas o ruído natural do Lidar simulado e do filtro de partículas de localização. |
+| **ALERTA** | **🟡 Amarelo** | `0.51m a 1.50 metros` | **Desvio Leve de Trajetória.** O caminhão realizou o mesmo comportamento geral de manobra, mas abriu ligeiramente uma curva ou desviou de alguma borda de obstáculo. |
+| **CRÍTICO** | **🔴 Vermelho** | `Maior que 1.50 metros` | **Comportamento Geométrico Diferente.** O planejador A* tomou uma decisão cinemática totalmente distinta (realizou manobras extras, deu marcha à ré desnecessária ou contornou obstáculos de forma diferente). |
+| **TIMEOUT** | **🔴 Vermelho** | `Tempo limite esgotado` | **Falha de Planejamento.** O planejador offroad falhou em gerar uma rota segura no destino final dentro do limite de 30 segundos de processamento. |
+
+#### Exemplo de Saída no Terminal (Tempo Real):
+```text
+[0/3] Rodando: test_entrando_pista/caso_1.txt
+offroad_planner está salvando o plano em '/dados/testes/caso_3/caso_3.txt'
+
+initial_pose: 7805794.411941 || -389283.923509 || -2.674438
+final_goal: 7805772.957 || -389314.375 || -2.592353
+Nova rota gerada com sucesso! Iniciando comparação...
+
+==========================================
+Resultado da Comparação [🟢 OK]:
+Distância de Hausdorff: 0.0520 metros
+==========================================
+------------------------------------------
+[1/3] Rodando: test_saindo_pista/caso_1.txt
+...
+==========================================
+Resultado da Comparação [🔴 CRÍTICO]:
+Distância de Hausdorff: 7.9492 metros
+==========================================
+```
+
+---
+
+### 5. Geração do Relatório de Saída
+
+Se você utilizou a flag `-o` / `--output`, os resultados consolidados serão gravados de forma limpa, estruturada e categorizada por gravidade para documentação técnica e auditoria rápida:
+
+```text
+============================================================
+RELATÓRIO DE REGRESSÃO OFFROAD
+============================================================
+
+🔴 TIMEOUTS / ERROS DE EXECUÇÃO:
+   test_entrando_pista/caso_2.txt -> Erro: O offroad_planner atingiu o timeout de 30s e não gerou a rota.
+
+🔴 DESVIOS CRÍTICOS (> 1.5m):
+   test_saindo_pista/caso_1.txt -> 7.9492 m
+
+🟡 ALERTAS DE DESVIO (0.5m a 1.5m):
+   test_entrando_pista/caso_3.txt -> 0.8123 m
+
+🟢 SUCESSOS (< 0.5m):
+   test_entrando_pista/caso_1.txt -> 0.0520 m
+```
