@@ -8,9 +8,8 @@ A ferramenta de avaliação automática de rotas offroad (`offroad_route_evaluat
 1. [Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
 2. [Guia de Execução e Testes](#guia-de-execucao-e-testes)
    - [Filtro e Estrutura das Pastas de Teste](#1-filtro-e-estrutura-das-pastas-de-teste)
-   - [Mecanismo Inteligente de Auto-Detecção (Zero-Config)](#2-mecanismo-inteligente-de-auto-detecao-zero-config)
-   - [Execução da Bateria de Testes](#3-execucao-da-bateria-de-testes)
-   - [Classificação de Desvios Coloridos em Tempo Real](#4-classificacao-de-desvios-em-tempo-real)
+   - [Execução de Testes](#2-execucao-testes)
+   - [Classificação de Desvios em Tempo Real](#4-classificacao-de-desvios-em-tempo-real)
    - [Geração do Relatório de Saída](#5-geracao-do-relatorio-de-saida)
 
 ---
