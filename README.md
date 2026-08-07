@@ -43,8 +43,8 @@ dados/casos_testes/
 │   └── test_caso_2.txt         <-- Processado (contém 'test_')
 ├── test_saindo_pista/          <-- Processado (contém 'test_')
 │   └── test_caso_1.txt         <-- Processado (contém 'test_')
-├── need_for_speed.txt          <-- Ignorado (arquivo solto que não está em subpasta aprovada)
-└── mario_galaxy/               <-- Ignorado (nome da pasta não segue o padrão de testes)
+├── need_for_speed.txt          <-- Ignorado (arquivo não contém 'test' no nome)
+└── mario_galaxy/               <-- Ignorado (nome da pasta não segue o padrão de conter 'test')
     └── screenshot.png
 ```
 
