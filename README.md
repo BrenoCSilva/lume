@@ -10,7 +10,7 @@ A ferramenta de avaliação automática de rotas offroad (`offroad_route_evaluat
    - [Filtro e Estrutura das Pastas de Teste](#1-filtro-e-estrutura-das-pastas-de-teste)
    - [Mecanismo Inteligente de Auto-Detecção (Zero-Config)](#2-mecanismo-inteligente-de-auto-detecao-zero-config)
    - [Execução da Bateria de Testes](#3-execucao-da-bateria-de-testes)
-   - [Classificação de Desvios Coloridos em Tempo Real](#4-classificacao-de-desvios-coloridos-em-tempo-real)
+   - [Classificação de Desvios Coloridos em Tempo Real](#4-classificacao-de-desvios-em-tempo-real)
    - [Geração do Relatório de Saída](#5-geracao-do-relatorio-de-saida)
 
 ---
@@ -87,7 +87,7 @@ python3 offroad_route_evaluator.py /dados/casos_testes -o meu_relatorio.txt
 ```
 ---
 
-### 4. Classificação de Desvios Coloridos em Tempo Real
+### 4. Classificação de Desvios em Tempo Real
 
 Durante a execução da bateria de testes, o terminal apresentará em tempo real o andamento de cada caso de teste em cores, baseando-se nos limites de segurança e cinemática estabelecidos para veículos de grande porte (como caminhões Axor):
 
