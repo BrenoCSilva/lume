@@ -1,144 +1,124 @@
-# Resumo e guia de Testes: Avaliador de Rotas Offroad
-
-A ferramenta de avaliação automática de rotas offroad (`offroad_route_evaluator.py`) foi criada para automatizar a execução de testes de regressão do módulo `offroad_planner`. O script é capaz de ler pastas de casos de testes homologados (caminhos ideais), interagir com o simulador do Astro para recalcular a manobra gerada anteriormente através das poses salvas nos arquivos ideais, monitorar as saídas geradas e classificar os desvios de rota em tempo real usando a métrica de **Distância de Hausdorff**.
+# Documentação Técnica: Execução do Ensaio de PID sem a flag `-tune_pid_mode`
 
 ---
 
-## Tópicos
-1. [Resumo do fluxo de operação](#resumo-do-fluxo-de-operacao)
-2. [Guia de Execução e Testes](#guia-de-execucao-e-testes)
-   - [Filtro e Estrutura das Pastas de Teste](#1-filtro-e-estrutura-das-pastas-de-teste)
-   - [Execução de Testes](#2-execucao-testes)
-   - [Classificação de Desvios em Tempo Real](#4-classificacao-de-desvios-em-tempo-real)
-   - [Geração do Relatório de Saída](#5-geracao-do-relatorio-de-saida)
+## 1. Introdução e Objetivo da Task
 
----
-
-## Resumo do fluxo de operação
-
-**1 - Descoberta e Filtragem de Casos de Teste:** O script recebe como argumento de linha de comando o caminho da pasta contendo os arquivos ideais. A função `list_files()` realiza uma varredura recursiva ignorando pastas ou arquivos indesejados (como .png, .pdf, tudo diferente do .txt), além de validar somentes pastas e arquivos que comecem com `"test_"` ou contenham `"test"` em seu nome, evitando verificação de arquivos/pastas indesejadas.
-
-**2 - Auto-Detecção do Caminho de Saída:** O script opera em paralelo com a execução do sistema astro, principalmente com o módulo `offroad_planner`. O script inicialmente irá identificar após a filtragem dos arquivos de interesse a pose_intial e final_goal descrita no plano_ideal.txt. Enviar ao astro e aguardar o novo plano gerado pelo offroad. Por isso é de extrema importância que ao executar o offroad a flag `-save_offroad_path` esteja no argumento do executável ativo. Determinando onde o offroad irá armazenar o plano gerado a partir das poses que o script publicou. O salvamento é necessário, pois o programa irá validar o plano gerado comparando ele com o plano_ideal.txt.
-
-**3 - Monitoramento Ativo e Comparação:** O script entra em um loop, verificando se o arquivo de rota gerada pelo planejador apareceu no disco e foi preenchido. Assim que o arquivo é gravado, o script chama o binário de comparação `compare_routes.py` para calcular a **Distância de Hausdorff** (pior distância espacial) entre o caminho de referência e o caminho recalculado atualmente.
-
-**4 - Apresentação e Geração de Relatório:** O resultado de cada comparação é validado e impresso imediatamente no terminal com cores baseadas nos níveis de tolerância. No final, se solicitado pelo usuário, a função `save_results()` agrupa e salva o relatório estruturado em um arquivo de texto.
-
----
-
-## Guia de Execução e Testes
-
-Este guia orienta sobre os pré-requisitos, regras de nomenclatura de pastas, uso das flags de comando e interpretação dos resultados do script.
-
-### 1. Filtro e Estrutura das Pastas de Teste
-
-Para garantir que o script ignore "lixos" ou arquivos de rascunho e processe apenas os testes válidos, a pasta fornecida como argumento deve seguir o padrão de nomenclatura contendo `"test_"` ou `"test"` nas subpastas.
-
-**Exemplo de Estrutura de Pastas Esperada:**
-```text
-dados/casos_testes/
-├── test_entrando_pista/        <-- Processado (contém 'test_')
-│   ├── caso_1.txt              <-- Ignorado (arquivo não contém 'test' no nome)
-│   └── test_caso_2.txt         <-- Processado (contém 'test_')
-├── test_saindo_pista/          <-- Processado (contém 'test_')
-│   └── test_caso_1.txt         <-- Processado (contém 'test_')
-├── need_for_speed.txt          <-- Ignorado (arquivo não contém 'test' no nome)
-└── mario_galaxy/               <-- Ignorado (nome da pasta não segue o padrão de conter 'test')
-    └── screenshot.png
-```
-
----
-
-### 2. Execução de Testes
-
-Para executar o script, passe o caminho da pasta contendo a estrutura de testes descrita acima.
-
-#### Comando de Execução Padrão:
+### 1.1. Contexto Original
+Historicamente, para realizar o ensaio e a sintonia fina dos controladores de velocidade e direção (PID) na plataforma ASTRO, utilizava-se o binário `./ford_escape_hybrid_tune_pid` em conjunto com o `./ford_escape_hybrid` rodando com a flag:
 ```bash
-python3 offroad_route_evaluator.py /dados/casos_testes
-```
-Como descrito anteriormente, o script precisa que o offroad salve temporariamente o plano gerado, portanto é indispensável que o offroad seja executado com a flag: 
-
-```bash
-./offroad_planner -save_offroad_path /dados/testes/minha_pasta/plan_temp.txt
+./ford_escape_hybrid -tune_pid_mode on
 ```
 
-A fim de evitar erros e simplificar o uso, o script foi projetado para descobrir de forma autônoma onde o planejador offroad está gravando temporariamente a rota do plano recalculado no disco. Porém, a primeira verificação feita é confirmar se o caminho para esse arquivo foi passado como argumento através da flag  `-p` / `--path`:
-
-```bash
-python3 offroad_route_evaluator.py /dados/casos_testes -p /dados/testes/minha_pasta/plan_temp.txt
+A flag `-tune_pid_mode on` atuava como um "atalho" de emergência no código-fonte do `vehicle_driver`. Ela instruía o módulo a ignorar toda a máquina de estados de segurança, as travas de hardware, o estado do freio de estacionamento e as permissões de navegação, atribuindo a velocidade da trajetória diretamente à variável de controle:
+```cpp
+if (tune_pid_mode)
+{
+    g_desired_velocity = v; // Atalho: burlava todas as checagens do sistema
+}
 ```
 
-No entanto caso não seja fornecido esse caminho através da flag na execução do script, o programa investigará o sistema operacional e direcionará o monitoramento do teste automaticamente para o arquivo correto caso o offroad esteja em execução com a flag correta, dispensando a necessidade de digitar esse caminho no terminal do script. O script através do terminal irá sinalizar aonde ele estará procurando esse arquivo:
+### 1.2. O Problema
+Esse atalho criava uma divergência crítica entre o **ambiente de teste de PID** e o **veículo em operação autônoma real**:
+1. O controlador não era testado com as proteções reais de engate de marcha da transmissão.
+2. Não se validavam as travas de liberação de atuação (`unlock`) e início de movimento (`go`).
+3. O código ficava poluído com bifurcações condicionais que não representavam a operação real do carro.
 
-```bash
-python3 offroad_route_evaluator.py "/dados/testes_python" -o /home/lume/astro/src/scripts_lume/script_compare_routes/relatorio.txt
-offroad_planner está salvando o plano em '/dados/testes/minha_pasta/plan_temp.txt'  <-- script irá usar esse arquivo para comparar com os arquivos_ideais
-```
-Porém, caso essas duas primeiras tentativas registrem falha, o programa irá procurar o plano recalculado em /dados/plan_recalculado/plan_recalculado.txt.
-
----
-#### Execução Gravando um Relatório Final em Arquivo (Flag `-o` / `--output`):
-
-Para rodar a bateria de testes e salvar os resultados finais em um arquivo `.txt` execute o programa com a flag -o:
-```bash
-python3 offroad_route_evaluator.py /dados/casos_testes -o meu_relatorio.txt
-```
----
-
-### 4. Classificação de Desvios em Tempo Real
-
-Durante a execução da bateria de testes, o terminal apresentará em tempo real o andamento de cada caso de teste em cores, baseando-se nos limites de segurança e cinemática estabelecidos para veículos de grande porte (como caminhões Axor):
-
-| Status | Cor | Faixa de Distância | Significado para a Engenharia |
-| :---: | :---: | :---: | :--- |
-| **OK** | **🟢 Verde** | `Até 0.50 metros` | **Comportamento Idêntico.** O veículo refez o caminho ideal de forma precisa, cobrindo apenas o ruído natural. |
-| **ALERTA** | **🟡 Amarelo** | `0.51m a 1.50 metros` | **Desvio Leve de Trajetória.** O caminhão realizou o mesmo comportamento geral de manobra, mas abriu ligeiramente uma curva ou desviou de alguma borda de obstáculo. |
-| **CRÍTICO** | **🔴 Vermelho** | `Maior que 1.50 metros` | **Comportamento Geométrico Diferente.** O planejador tomou uma decisão totalmente distinta (realizou manobras extras, deu marcha à ré desnecessária ou contornou obstáculos de forma diferente). |
-| **TIMEOUT** | **🔴 Vermelho** | `Tempo limite esgotado` | **Falha de Planejamento.** O planejador offroad falhou em gerar uma rota segura no destino final dentro do limite de 30 segundos de processamento. |
-
-#### Exemplo de Saída no Terminal (Tempo Real):
-```text
-[0/3] Rodando: test_entrando_pista/caso_1.txt
-offroad_planner está salvando o plano em '/dados/testes/caso_3/caso_3.txt'
-
-initial_pose: 7805794.411941 || -389283.923509 || -2.674438
-final_goal: 7805772.957 || -389314.375 || -2.592353
-Nova rota gerada com sucesso! Iniciando comparação...
-
-==========================================
-Resultado da Comparação [🟢 OK]:
-Distância de Hausdorff: 0.0520 metros
-==========================================
-------------------------------------------
-[1/3] Rodando: test_saindo_pista/caso_1.txt
-...
-==========================================
-Resultado da Comparação [🔴 CRÍTICO]:
-Distância de Hausdorff: 7.9492 metros
-==========================================
-```
+### 1.3. O Objetivo da Task
+O objetivo desta tarefa foi **reabilitar e padronizar o teste de PID sem o uso da flag `-tune_pid_mode on`**, garantindo que:
+- O `vehicle_driver` seja executado em seu **modo normal e legítimo** de produção (`./ford_escape_hybrid -can vcan0`).
+- Os controladores PID respondam através do pipeline oficial de controle e segurança.
+- O ensaio possa ser executado em ambiente de bancada/simulação **sem a necessidade de rodar a pilha completa de navegação** (`route_planner`, `behavior_selector`, `task_manager`, etc.).
 
 ---
 
-### 5. Geração do Relatório de Saída
+## 2. O Desafio Arquitetural: A Trava do Modo Normal
 
-Se você utilizou a flag `-o` / `--output`, os resultados  serão gravados de forma limpa, estruturada e categorizada por gravidade para documentação:
+Ao desativar a flag `-tune_pid_mode`, o `vehicle_driver` cai compulsoriamente no bloco `else` da função de despacho de comandos (`vehicle_driver_main.cpp`), onde o movimento só é autorizado se **cinco condições simultâneas** forem satisfeitas:
 
-```text
-============================================================
-RELATÓRIO DE REGRESSÃO OFFROAD
-============================================================
-
-🔴 TIMEOUTS / ERROS DE EXECUÇÃO:
-   test_entrando_pista/caso_2.txt -> Erro: O offroad_planner atingiu o timeout de 30s e não gerou a rota.
-
-🔴 DESVIOS CRÍTICOS (> 1.5m):
-   test_saindo_pista/caso_1.txt -> 7.9492 m
-
-🟡 ALERTAS DE DESVIO (0.5m a 1.5m):
-   test_entrando_pista/caso_3.txt -> 0.8123 m
-
-🟢 SUCESSOS (< 0.5m):
-   test_entrando_pista/caso_1.txt -> 0.0520 m
+```cpp
+if (g_go_state && g_unlock_state &&
+    (behavior_selector_low_level_state != Stopped) &&
+    (behavior_selector_low_level_state != End_Of_Path_Reached2) &&
+    (behavior_selector_going_backwards != -1))
+{
+    // MOVIMENTO AUTORIZADO:
+    // Avalia o debounce mecânico da marcha e aplica g_desired_velocity = v;
+}
+else
+{
+    // MOVIMENTO BLOQUEADO:
+    g_desired_velocity = 0.0;
+    set_gear_command_to_neutral_if_needed(); // Força o câmbio para Neutro!
+}
 ```
+
+Se qualquer um desses cinco requisitos for falso, o sistema entra no bloco `else`: a velocidade desejada é zerada e a transmissão é forçada para **Neutro (128)**, impedindo qualquer movimentação do veículo.
+
+---
+
+## 3. Análise Detalhada dos 5 Requisitos de Bloqueio
+
+Abaixo está o detalhamento de cada uma das condições, explicando o que representam no veículo real e por que elas travavam o teste quando os módulos superiores estavam desligados:
+
+### 3.1. `g_go_state` (Autorização de Partida / Freio de Mão)
+- **O que representa:** Indica se o veículo recebeu a ordem de partir. No veículo real, o estado `0` mantém o freio de estacionamento acionado e corta a aceleração.
+- **Quem envia normalmente:** O módulo `navigator_ackerman` ou o botão "GO" da interface gráfica `navigator_gui2`.
+- **Por que travava:** Sem o `navigator_ackerman` ativo, `g_go_state` iniciava em `0` e permanecia em `0`.
+
+### 3.2. `g_unlock_state` (Trava de Segurança dos Atuadores)
+- **O que representa:** É a trava de segurança física/lógica dos atuadores (volante, acelerador e freio). Impede que motores elétricos recebam corrente sem liberação explícita do operador.
+- **Quem envia normalmente:** Módulos de auditoria/segurança ou o utilitário `util_publish_lock_unlock_message -unlock`.
+- **Por que travava:** Sem uma mensagem de desbloqueio, `g_unlock_state` iniciava travado (`0`).
+
+### 3.3. `behavior_selector_low_level_state != Stopped` (Autorização Comportamental)
+- **O que representa:** O seletor de comportamentos avalia pedestres, semáforos, cruzamentos e obstáculos. Se detectar perigo ou parada programada, seu estado vai para `Stopped`.
+- **Quem envia normalmente:** O módulo `behavior_selector`.
+- **Por que travava:** Quando o `behavior_selector` não está rodando, a variável inicia por padrão com o valor enum `Stopped`. Além disso, dentro da física da simulação (`simulator_ackerman_simulation.c`), se o estado do BS for `Stopped`, o próprio simulador zera a tração das rodas.
+
+### 3.4. `behavior_selector_low_level_state != End_Of_Path_Reached2` (Fim de Trajetória)
+- **O que representa:** Indica se o veículo atingiu o ponto final do plano de navegação.
+- **Quem envia normalmente:** O módulo `behavior_selector`.
+- **Por que travava:** Sem envio ativo, era necessário assegurar que o estado não assumisse esse código de parada terminal.
+
+### 3.5. `behavior_selector_going_backwards != -1` (Decisão de Sentido de Marcha)
+- **O que representa:** Define se o veículo deve trafegar para frente (`0`) ou para trás / ré (`1`). O valor `-1` representa um estado de transição ou indecisão direcional (por exemplo, quando o veículo acabou de trocar de intenção de sentido e precisa aguardar estabilização).
+- **Quem envia normalmente:** A mensagem de IPC `path_goals_and_annotations` emitida pelo `behavior_selector`.
+- **Por que travava:** Se nenhuma meta for publicada ou se o sinal oscilar com intervalo inferior a 3 segundos, `going_backwards` é travado em `-1`. Consequentemente, o `vehicle_driver` comuta para Neutro.
+
+---
+
+## 4. A Justificativa da Solução: Auto-Habilitação no `tune_pid.c`
+
+Para solucionar esse impasse sem precisar reativar módulos pesados que não dizem respeito ao controle PID (como SLAM, mapas globais e planejadores de missão), a rotina do `vehicle_driver_tune_pid.c` foi modificada para **emular o papel essencial desses sinais de segurança durante a inicialização**:
+
+```c
+static void
+arm_vehicle_driver_for_motion(double target_velocity)
+{
+    // 1. Libera os atuadores
+    astro_ford_escape_unlock();
+
+    // 2. Solta o freio de estacionamento (seta g_go_state = 1)
+    astro_navigator_ackerman_go();
+
+    // 3. Emula o Behavior Selector e define sentido de marcha
+    // Aguarda 3.5s para acomodação da caixa de câmbio (Neutro -> Low/Drive)
+    double start_wait = astro_get_time();
+    while (astro_get_time() - start_wait < 3.5)
+    {
+        publish_behavior_selector_state(Initializing);
+        publish_behavior_selector_path_goals_and_annotations(target_velocity);
+        astro_ipc_sleep(0.1);
+    }
+}
+```
+
+Com essa estrutura:
+1. `g_unlock_state` é setado para `1`.
+2. `g_go_state` é setado para `1`.
+3. O estado comportamental passa a ser `Initializing` (diferente de `Stopped` e de `End_Of_Path_Reached2`).
+4. `going_backwards` é definido com base no sinal de `target_velocity` (engatando `LOW` para valores positivos e `REVERSE` para negativos).
+
+Dessa forma, o `vehicle_driver` entra de forma legítima e transparente no bloco de **MOVIMENTO AUTORIZADO**, permitindo que os testes de sintonia de PID ocorram com a fidelidade real da dinâmica veicular.
+
