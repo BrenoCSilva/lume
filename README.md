@@ -1,124 +1,156 @@
-# Documentação Técnica: Execução do Ensaio de PID sem a flag `-tune_pid_mode`
+# Arquitetura e Fluxo de Execução: Controladores PID e Integração JAUS
+
+Este documento descreve detalhadamente o papel dos controladores PID, o fluxo de dados no módulo `vehicle_driver` e a integração com o protocolo OpenJAUS/Torc, explicando o desafio de execução em bancada e a solução implementada.
 
 ---
 
-## 1. Introdução e Objetivo da Task
+## 1. O que é o PID e sua Relação com o Vehicle Driver
 
-### 1.1. Contexto Original
-Historicamente, para realizar o ensaio e a sintonia fina dos controladores de velocidade e direção (PID) na plataforma ASTRO, utilizava-se o binário `./ford_escape_hybrid_tune_pid` em conjunto com o `./ford_escape_hybrid` rodando com a flag:
-```bash
-./ford_escape_hybrid -tune_pid_mode on
+O **PID** (`sharedlib/libcontrol/libpid`) é a biblioteca matemática responsável por calcular os comandos físicos de freio, aceleração, volante e marcha necessários para manter o veículo atuando com a precisão e a velocidade de trajetória desejadas.
+
+A biblioteca PID é puramente computacional: **ela não sabe como se comunicar com o hardware**. Ela funciona como uma ferramenta especializada utilizada pelo **`vehicle_driver`**, que é o módulo executivo responsável por arbitrar essas ordens e despachá-las para os barramentos físicos do veículo (barramento CAN e rede Ethernet Torc/JAUS), que são quem de fato acionam os atuadores.
+
+```mermaid
+flowchart LR
+    A["Planejador<br/>(Trajetória Desejada)"] --> VD["vehicle_driver"]
+    B["Sensores / CAN<br/>(Estado Atual Real)"] --> VD
+    VD <--> PID["Biblioteca libpid<br/>(Cálculo Matemático Kp, Ki, Kd)"]
+    VD --> HW["Atuadores do Veículo<br/>(CAN / JAUS / ByWire)"]
 ```
 
-A flag `-tune_pid_mode on` atuava como um "atalho" de emergência no código-fonte do `vehicle_driver`. Ela instruía o módulo a ignorar toda a máquina de estados de segurança, as travas de hardware, o estado do freio de estacionamento e as permissões de navegação, atribuindo a velocidade da trajetória diretamente à variável de controle:
-```cpp
-if (tune_pid_mode)
-{
-    g_desired_velocity = v; // Atalho: burlava todas as checagens do sistema
-}
-```
+### Entradas e Saídas do PID
 
-### 1.2. O Problema
-Esse atalho criava uma divergência crítica entre o **ambiente de teste de PID** e o **veículo em operação autônoma real**:
-1. O controlador não era testado com as proteções reais de engate de marcha da transmissão.
-2. Não se validavam as travas de liberação de atuação (`unlock`) e início de movimento (`go`).
-3. O código ficava poluído com bifurcações condicionais que não representavam a operação real do carro.
+O PID recebe continuamente o estado real do veículo comparado à referência desejada:
+- **Entradas:**
+  - Velocidade atual ($v_{atual}$) vs. Velocidade desejada ($v_{desejada}$).
+  - Curvatura/ângulo atual ($\phi_{atual}$) vs. Curvatura/ângulo desejado ($\phi_{desejado}$).
 
-### 1.3. O Objetivo da Task
-O objetivo desta tarefa foi **reabilitar e padronizar o teste de PID sem o uso da flag `-tune_pid_mode on`**, garantindo que:
-- O `vehicle_driver` seja executado em seu **modo normal e legítimo** de produção (`./ford_escape_hybrid -can vcan0`).
-- Os controladores PID respondam através do pipeline oficial de controle e segurança.
-- O ensaio possa ser executado em ambiente de bancada/simulação **sem a necessidade de rodar a pilha completa de navegação** (`route_planner`, `behavior_selector`, `task_manager`, etc.).
+- **Saídas (Esforços Físicos Calculados):**
+  - **Acelerador (Throttle):** $0\%$ a $100\%$.
+  - **Freio (Brakes):** $0\%$ a $\text{max\_brake}\%$.
+  - **Volante / Esterçamento (Steering):** $-100\%$ a $+100\%$.
+  - **Comando de Marcha (Gear):** Frente (*Drive / Low*) ou Ré (*Reverse*).
 
 ---
 
-## 2. O Desafio Arquitetural: A Trava do Modo Normal
+## 2. Resumo do Fluxo do Vehicle Driver
 
-Ao desativar a flag `-tune_pid_mode`, o `vehicle_driver` cai compulsoriamente no bloco `else` da função de despacho de comandos (`vehicle_driver_main.cpp`), onde o movimento só é autorizado se **cinco condições simultâneas** forem satisfeitas:
+O ciclo de operação do `vehicle_driver` estrutura-se em 6 etapas sequenciais:
 
-```cpp
-if (g_go_state && g_unlock_state &&
-    (behavior_selector_low_level_state != Stopped) &&
-    (behavior_selector_low_level_state != End_Of_Path_Reached2) &&
-    (behavior_selector_going_backwards != -1))
-{
-    // MOVIMENTO AUTORIZADO:
-    // Avalia o debounce mecânico da marcha e aplica g_desired_velocity = v;
-}
-else
-{
-    // MOVIMENTO BLOQUEADO:
-    g_desired_velocity = 0.0;
-    set_gear_command_to_neutral_if_needed(); // Força o câmbio para Neutro!
-}
-```
-
-Se qualquer um desses cinco requisitos for falso, o sistema entra no bloco `else`: a velocidade desejada é zerada e a transmissão é forçada para **Neutro (128)**, impedindo qualquer movimentação do veículo.
+1. **Recebe o plano de navegação:**
+   Escuta o planejador de trajetória e rotas via IPC (`motion_planner`, `rrt`, `obstacle_avoider`).
+2. **Coleta os sensores:**
+   Lê a velocidade real do veículo (odometria) e a posição angular das rodas vindas dos sensores e decodificadas do barramento CAN.
+3. **Consulta o PID:**
+   Passa os dados de erro ($e(t) = \text{alvo} - \text{atual}$) para a biblioteca de controle e pergunta: *"Quanto devo acelerar, frear e virar agora?"*.
+4. **Aplica travas de segurança:**
+   Verifica paradas de emergência, falhas em sensores críticos e se o motorista humano tocou no volante ou pedais (*manual override*).
+5. **Comunica com a máquina:**
+   Converte as porcentagens calculadas em bytes e pacotes dos protocolos específicos do veículo e os despacha para o barramento CAN (ou via interfaces ByWire, OpenJAUS, ODrive, etc.).
+6. **Gera telemetria:**
+   Publica mensagens de diagnóstico do PID para gravação na caixa-preta (`audit`) e visualização em tempo real nas telas (`viewer_3D`, `central_log_view`).
 
 ---
 
-## 3. Análise Detalhada dos 5 Requisitos de Bloqueio
+## 3. Modo Normal (Navegação) vs. Modo Tune PID (Calibração)
 
-Abaixo está o detalhamento de cada uma das condições, explicando o que representam no veículo real e por que elas travavam o teste quando os módulos superiores estavam desligados:
+No `vehicle_driver`, existem dois contextos distintos de operação:
 
-### 3.1. `g_go_state` (Autorização de Partida / Freio de Mão)
-- **O que representa:** Indica se o veículo recebeu a ordem de partir. No veículo real, o estado `0` mantém o freio de estacionamento acionado e corta a aceleração.
-- **Quem envia normalmente:** O módulo `navigator_ackerman` ou o botão "GO" da interface gráfica `navigator_gui2`.
-- **Por que travava:** Sem o `navigator_ackerman` ativo, `g_go_state` iniciava em `0` e permanecia em `0`.
-
-### 3.2. `g_unlock_state` (Trava de Segurança dos Atuadores)
-- **O que representa:** É a trava de segurança física/lógica dos atuadores (volante, acelerador e freio). Impede que motores elétricos recebam corrente sem liberação explícita do operador.
-- **Quem envia normalmente:** Módulos de auditoria/segurança ou o utilitário `util_publish_lock_unlock_message -unlock`.
-- **Por que travava:** Sem uma mensagem de desbloqueio, `g_unlock_state` iniciava travado (`0`).
-
-### 3.3. `behavior_selector_low_level_state != Stopped` (Autorização Comportamental)
-- **O que representa:** O seletor de comportamentos avalia pedestres, semáforos, cruzamentos e obstáculos. Se detectar perigo ou parada programada, seu estado vai para `Stopped`.
-- **Quem envia normalmente:** O módulo `behavior_selector`.
-- **Por que travava:** Quando o `behavior_selector` não está rodando, a variável inicia por padrão com o valor enum `Stopped`. Além disso, dentro da física da simulação (`simulator_ackerman_simulation.c`), se o estado do BS for `Stopped`, o próprio simulador zera a tração das rodas.
-
-### 3.4. `behavior_selector_low_level_state != End_Of_Path_Reached2` (Fim de Trajetória)
-- **O que representa:** Indica se o veículo atingiu o ponto final do plano de navegação.
-- **Quem envia normalmente:** O módulo `behavior_selector`.
-- **Por que travava:** Sem envio ativo, era necessário assegurar que o estado não assumisse esse código de parada terminal.
-
-### 3.5. `behavior_selector_going_backwards != -1` (Decisão de Sentido de Marcha)
-- **O que representa:** Define se o veículo deve trafegar para frente (`0`) ou para trás / ré (`1`). O valor `-1` representa um estado de transição ou indecisão direcional (por exemplo, quando o veículo acabou de trocar de intenção de sentido e precisa aguardar estabilização).
-- **Quem envia normalmente:** A mensagem de IPC `path_goals_and_annotations` emitida pelo `behavior_selector`.
-- **Por que travava:** Se nenhuma meta for publicada ou se o sinal oscilar com intervalo inferior a 3 segundos, `going_backwards` é travado em `-1`. Consequentemente, o `vehicle_driver` comuta para Neutro.
+| Característica | Modo Normal (Navegação Autônoma) | Modo Tune PID (Calibração e Sintonia) |
+| :--- | :--- | :--- |
+| **Pré-requisitos** | Exige mapa, missão, GPS, desvio de obstáculos e autorização contínua do *Behavior Selector*. | Ignora missões, mapas e o *Behavior Selector*. |
+| **Origem do Plano** | Vem de planejadores dinâmicos globais e locais (`route_planner`, `mpp`). | Vem de um programa de estímulo dedicado (`ford_escape_hybrid_tune_pid`). |
+| **Estímulo Aplicado** | Trajetórias reais da via com curvas, pedestres e cruzamentos. | Injeção de perfis sintéticos padronizados (ex: rampa trapezoidal de 0 a 2 m/s, degraus de velocidade ou senoides no volante). |
+| **Objetivo** | Levar o veículo do ponto A ao ponto B com segurança. | **Medir e calibrar os ganhos ($K_p, K_i, K_d$)**, verificando se o veículo oscila, ultrapassa o valor alvo (*overshoot*) ou demora para responder. |
 
 ---
 
-## 4. A Justificativa da Solução: Auto-Habilitação no `tune_pid.c`
+## 4. Como os Comandos Chegam aos Atuadores: O Protocolo JAUS
 
-Para solucionar esse impasse sem precisar reativar módulos pesados que não dizem respeito ao controle PID (como SLAM, mapas globais e planejadores de missão), a rotina do `vehicle_driver_tune_pid.c` foi modificada para **emular o papel essencial desses sinais de segurança durante a inicialização**:
+Após o PID calcular os esforços percentuais de freio, acelerador e direção, esses valores precisam alcançar os servomotores físicos do veículo. No caso da Ford Escape Hybrid e dos veículos baseados na arquitetura ByWire Torc, isso é feito através do protocolo **OpenJAUS**:
+- A comunicação ocorre via rede Ethernet através de pacotes UDP na porta padronizada **3794**.
+- Alternativamente, em plataformas sem módulo Torc, essa comunicação é feita diretamente via barramento CAN nativo (modo DBC).
 
-```c
-static void
-arm_vehicle_driver_for_motion(double target_velocity)
-{
-    // 1. Libera os atuadores
-    astro_ford_escape_unlock();
+O `vehicle_driver` é o módulo responsável por empacotar esses esforços calculados pelo PID e transmiti-los ao JAUS.
 
-    // 2. Solta o freio de estacionamento (seta g_go_state = 1)
-    astro_navigator_ackerman_go();
+---
 
-    // 3. Emula o Behavior Selector e define sentido de marcha
-    // Aguarda 3.5s para acomodação da caixa de câmbio (Neutro -> Low/Drive)
-    double start_wait = astro_get_time();
-    while (astro_get_time() - start_wait < 3.5)
-    {
-        publish_behavior_selector_state(Initializing);
-        publish_behavior_selector_path_goals_and_annotations(target_velocity);
-        astro_ipc_sleep(0.1);
-    }
-}
+## 5. O Desafio: Por que o JAUS não funcionava sem o veículo físico?
+
+Durante os ensaios de bancada e simulação local, nos deparamos com o seguinte problema: **o PID não executava e o carro não se movia**.
+
+### A Causa: Arquitetura Estritamente Orientada a Eventos (*Event-Driven*)
+
+A implementação original do JAUS em [`vehicle_driver_jaus.cpp`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_jaus.cpp) foi projetada para ser **orientada a eventos físicos**:
+
+1. A função central de controle do `vehicle_driver` (`report_curvature_message_handler()`) **não possuía um temporizador próprio**.
+2. Ela dependia exclusivamente de um callback do OpenJAUS:
+   ```cpp
+   static void
+   torc_report_curvature_message_handler(OjCmpt XGV_CCU, JausMessage curvature_message)
+   {
+       if (reportCurvature)
+       {
+           report_curvature_message_handler(); // Dispara o cálculo do PID
+           publish_ford_escape_steering_throttle_and_brakes_command(XGV_CCU); // Envia os esforços
+       }
+   }
+   ```
+3. **No carro real:** A caixa física da Torc (computador CCU) conectada ao cabo de rede fica transmitindo pacotes UDP `REPORT_CURVATURE` continuamente a 40 Hz ~ 50 Hz. Toda vez que um pacote físico chega pela porta 3794, o OpenJAUS aciona o callback e o PID roda.
+4. **Na bancada / simulação:** Como o hardware físico da Torc não existe na bancada, **nenhum pacote UDP chegava pela porta 3794**. O código ficava indefinidamente congelado à espera de um hardware inexistente, e o PID nunca era acionado.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    Note over Hardware Real, vehicle_driver: CENÁRIO 1: No Carro Real (Com Hardware Torc)
+    Hardware Real->>vehicle_driver: Pacote UDP REPORT_CURVATURE (50 Hz)
+    vehicle_driver->>vehicle_driver: Callback torc_report_curvature_message_handler()
+    vehicle_driver->>vehicle_driver: Executa report_curvature_message_handler() (PID)
+    vehicle_driver->>Hardware Real: Envia Wrench Efforts (Acelerador/Freio/Volante)
+
+    Note over Hardware Real, vehicle_driver: CENÁRIO 2: Na Bancada / Simulação Sem o Hardware
+    Hardware Real--xvehicle_driver: Sem pacotes UDP na porta 3794!
+    vehicle_driver--xvehicle_driver: Callback NUNCA é chamado
+    vehicle_driver--xvehicle_driver: PID congelado! Veículo não anda!
 ```
 
-Com essa estrutura:
-1. `g_unlock_state` é setado para `1`.
-2. `g_go_state` é setado para `1`.
-3. O estado comportamental passa a ser `Initializing` (diferente de `Stopped` e de `End_Of_Path_Reached2`).
-4. `going_backwards` é definido com base no sinal de `target_velocity` (engatando `LOW` para valores positivos e `REVERSE` para negativos).
+---
 
-Dessa forma, o `vehicle_driver` entra de forma legítima e transparente no bloco de **MOVIMENTO AUTORIZADO**, permitindo que os testes de sintonia de PID ocorram com a fidelidade real da dinâmica veicular.
+## 6. A Solução: O Marca-Passo Periódico (*Heartbeat*)
+
+Para permitir que o `vehicle_driver` opere em qualquer computador sem depender da presença física do veículo ou da caixa da Torc:
+
+1. **Criação do Temporizador Periódico no `vehicle_driver_main.cpp`:**
+   Adicionamos um timer cíclico de alta precisão via IPC (`astro_ipc_addPeriodicTimer`):
+   ```cpp
+   astro_ipc_addPeriodicTimer(FORD_ESCAPE_CYCLE_TIME, (TIMER_HANDLER_TYPE) tune_pid_timer_handler, NULL);
+   ```
+
+2. **O Papel do `tune_pid_timer_handler`:**
+   Esse timer atua como um **marca-passo**: a cada ciclo (40 Hz / 25 ms), ele força a chamada de:
+   ```cpp
+   static void
+   tune_pid_timer_handler(...)
+   {
+       report_curvature_message_handler(); // Executa o PID e atualiza marchas/velocidade
+       jaus_publish_wrench_efforts();       // Envia os comandos para a rede/CAN
+   }
+   ```
+
+3. **Proteção contra Duplicação no Veículo Real:**
+   Para evitar que no carro real haja duplo envio de comandos (um pelo hardware Torc e outro pelo timer), o timer verifica se há dados reais chegando da Torc nos últimos 200 ms:
+   ```cpp
+   if ((astro_get_time() - last_torc_curvature_message_time) < 0.2)
+   {
+       return; // O hardware físico está ativo: o timer se cala e cede a vez ao Torc nativo!
+   }
+   ```
+
+---
+
+## 7. Conclusão
+
+Com essa arquitetura:
+- **Na bancada e no simulador CAN (`vcan0`):** O timer mantém o laço do PID pulsando continuamente a 40 Hz, permitindo a calibração precisa dos parâmetros do veículo sem travar.
+- **No veículo real com Torc-JAUS:** O sistema detecta a presença dos pacotes físicos e preserva o fluxo nativo original, garantindo segurança total contra duplicação de comandos.
 
