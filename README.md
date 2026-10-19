@@ -1,156 +1,170 @@
-# Arquitetura e Fluxo de Execução: Controladores PID e Integração JAUS
+# Diagnóstico e Solução: Erro ASTRO 113 e o Parâmetro `motion_command_timeout`
 
-Este documento descreve detalhadamente o papel dos controladores PID, o fluxo de dados no módulo `vehicle_driver` e a integração com o protocolo OpenJAUS/Torc, explicando o desafio de execução em bancada e a solução implementada.
+Este documento explica em detalhes o que é o **Erro 113**, a cadeia de eventos de segurança que ele desencadeia no `vehicle_driver`, por que ele passou a ocorrer após a remoção da flag `-tune_pid_mode`, e como o ajuste de `motion_command_timeout = 20.0` contornou o problema.
 
 ---
 
-## 1. O que é o PID e sua Relação com o Vehicle Driver
+## 1. O que é o Erro 113 no Sistema ASTRO?
 
-O **PID** (`sharedlib/libcontrol/libpid`) é a biblioteca matemática responsável por calcular os comandos físicos de freio, aceleração, volante e marcha necessários para manter o veículo atuando com a precisão e a velocidade de trajetória desejadas.
+No arquivo global de definições de erros da plataforma ASTRO ([`include/astro/astro_global_error_code_list.def`](file:///home/lume/astro/include/astro/astro_global_error_code_list.def#L96)), encontramos:
 
-A biblioteca PID é puramente computacional: **ela não sabe como se comunicar com o hardware**. Ela funciona como uma ferramenta especializada utilizada pelo **`vehicle_driver`**, que é o módulo executivo responsável por arbitrar essas ordens e despachá-las para os barramentos físicos do veículo (barramento CAN e rede Ethernet Torc/JAUS), que são quem de fato acionam os atuadores.
-
-```mermaid
-flowchart LR
-    A["Planejador<br/>(Trajetória Desejada)"] --> VD["vehicle_driver"]
-    B["Sensores / CAN<br/>(Estado Atual Real)"] --> VD
-    VD <--> PID["Biblioteca libpid<br/>(Cálculo Matemático Kp, Ki, Kd)"]
-    VD --> HW["Atuadores do Veículo<br/>(CAN / JAUS / ByWire)"]
+```c
+ASTRO_ERROR_REG(113, 1, "One second has elapsed since the last plan reception.")
 ```
 
-### Entradas e Saídas do PID
+- **Código:** `113`
+- **Severidade:** `1` (Alta Severidade — Parada Média / Controlada com pisca-alerta).
+- **Descrição:** *"Passou-se um segundo desde a recepção do último plano."*
 
-O PID recebe continuamente o estado real do veículo comparado à referência desejada:
-- **Entradas:**
-  - Velocidade atual ($v_{atual}$) vs. Velocidade desejada ($v_{desejada}$).
-  - Curvatura/ângulo atual ($\phi_{atual}$) vs. Curvatura/ângulo desejado ($\phi_{desejado}$).
+### O Papel Funcional do Erro 113
+O Erro 113 atua como um **Watchdog (Dead Man's Switch / Dispositivo de Homem Morto)**:
+Em veículos autônomos, trajetórias têm validade de curto prazo (frações de segundo). O planejador dinâmico de movimento (`motion_planner`, `rrt`) deve recalcular e republicar novas trajetórias a cada 50 ms ou 100 ms.
 
-- **Saídas (Esforços Físicos Calculados):**
-  - **Acelerador (Throttle):** $0\%$ a $100\%$.
-  - **Freio (Brakes):** $0\%$ a $\text{max\_brake}\%$.
-  - **Volante / Esterçamento (Steering):** $-100\%$ a $+100\%$.
-  - **Comando de Marcha (Gear):** Frente (*Drive / Low*) ou Ré (*Reverse*).
+Se o veículo está autorizado a andar (`g_go_state == 1`), mas fica **mais de 1,0 segundo sem receber um novo comando de movimento**, o sistema deduz que o planejador travou, caiu ou perdeu a conexão com o IPC. Por segurança, o veículo corta a tração e freia imediatamente.
 
 ---
 
-## 2. Resumo do Fluxo do Vehicle Driver
+## 2. A Cadeia de Consequências no Código (Passo a Passo)
 
-O ciclo de operação do `vehicle_driver` estrutura-se em 6 etapas sequenciais:
-
-1. **Recebe o plano de navegação:**
-   Escuta o planejador de trajetória e rotas via IPC (`motion_planner`, `rrt`, `obstacle_avoider`).
-2. **Coleta os sensores:**
-   Lê a velocidade real do veículo (odometria) e a posição angular das rodas vindas dos sensores e decodificadas do barramento CAN.
-3. **Consulta o PID:**
-   Passa os dados de erro ($e(t) = \text{alvo} - \text{atual}$) para a biblioteca de controle e pergunta: *"Quanto devo acelerar, frear e virar agora?"*.
-4. **Aplica travas de segurança:**
-   Verifica paradas de emergência, falhas em sensores críticos e se o motorista humano tocou no volante ou pedais (*manual override*).
-5. **Comunica com a máquina:**
-   Converte as porcentagens calculadas em bytes e pacotes dos protocolos específicos do veículo e os despacha para o barramento CAN (ou via interfaces ByWire, OpenJAUS, ODrive, etc.).
-6. **Gera telemetria:**
-   Publica mensagens de diagnóstico do PID para gravação na caixa-preta (`audit`) e visualização em tempo real nas telas (`viewer_3D`, `central_log_view`).
-
----
-
-## 3. Modo Normal (Navegação) vs. Modo Tune PID (Calibração)
-
-No `vehicle_driver`, existem dois contextos distintos de operação:
-
-| Característica | Modo Normal (Navegação Autônoma) | Modo Tune PID (Calibração e Sintonia) |
-| :--- | :--- | :--- |
-| **Pré-requisitos** | Exige mapa, missão, GPS, desvio de obstáculos e autorização contínua do *Behavior Selector*. | Ignora missões, mapas e o *Behavior Selector*. |
-| **Origem do Plano** | Vem de planejadores dinâmicos globais e locais (`route_planner`, `mpp`). | Vem de um programa de estímulo dedicado (`ford_escape_hybrid_tune_pid`). |
-| **Estímulo Aplicado** | Trajetórias reais da via com curvas, pedestres e cruzamentos. | Injeção de perfis sintéticos padronizados (ex: rampa trapezoidal de 0 a 2 m/s, degraus de velocidade ou senoides no volante). |
-| **Objetivo** | Levar o veículo do ponto A ao ponto B com segurança. | **Medir e calibrar os ganhos ($K_p, K_i, K_d$)**, verificando se o veículo oscila, ultrapassa o valor alvo (*overshoot*) ou demora para responder. |
-
----
-
-## 4. Como os Comandos Chegam aos Atuadores: O Protocolo JAUS
-
-Após o PID calcular os esforços percentuais de freio, acelerador e direção, esses valores precisam alcançar os servomotores físicos do veículo. No caso da Ford Escape Hybrid e dos veículos baseados na arquitetura ByWire Torc, isso é feito através do protocolo **OpenJAUS**:
-- A comunicação ocorre via rede Ethernet através de pacotes UDP na porta padronizada **3794**.
-- Alternativamente, em plataformas sem módulo Torc, essa comunicação é feita diretamente via barramento CAN nativo (modo DBC).
-
-O `vehicle_driver` é o módulo responsável por empacotar esses esforços calculados pelo PID e transmiti-los ao JAUS.
-
----
-
-## 5. O Desafio: Por que o JAUS não funcionava sem o veículo físico?
-
-Durante os ensaios de bancada e simulação local, nos deparamos com o seguinte problema: **o PID não executava e o carro não se movia**.
-
-### A Causa: Arquitetura Estritamente Orientada a Eventos (*Event-Driven*)
-
-A implementação original do JAUS em [`vehicle_driver_jaus.cpp`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_jaus.cpp) foi projetada para ser **orientada a eventos físicos**:
-
-1. A função central de controle do `vehicle_driver` (`report_curvature_message_handler()`) **não possuía um temporizador próprio**.
-2. Ela dependia exclusivamente de um callback do OpenJAUS:
-   ```cpp
-   static void
-   torc_report_curvature_message_handler(OjCmpt XGV_CCU, JausMessage curvature_message)
-   {
-       if (reportCurvature)
-       {
-           report_curvature_message_handler(); // Dispara o cálculo do PID
-           publish_ford_escape_steering_throttle_and_brakes_command(XGV_CCU); // Envia os esforços
-       }
-   }
-   ```
-3. **No carro real:** A caixa física da Torc (computador CCU) conectada ao cabo de rede fica transmitindo pacotes UDP `REPORT_CURVATURE` continuamente a 40 Hz ~ 50 Hz. Toda vez que um pacote físico chega pela porta 3794, o OpenJAUS aciona o callback e o PID roda.
-4. **Na bancada / simulação:** Como o hardware físico da Torc não existe na bancada, **nenhum pacote UDP chegava pela porta 3794**. O código ficava indefinidamente congelado à espera de um hardware inexistente, e o PID nunca era acionado.
+Quando o tempo limite de 1,0 s expira, uma sequência de proteções é disparada em cascata dentro de [`vehicle_driver_main.cpp`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_main.cpp):
 
 ```mermaid
-sequenceDiagram
-    autonumber
-    Note over Hardware Real, vehicle_driver: CENÁRIO 1: No Carro Real (Com Hardware Torc)
-    Hardware Real->>vehicle_driver: Pacote UDP REPORT_CURVATURE (50 Hz)
-    vehicle_driver->>vehicle_driver: Callback torc_report_curvature_message_handler()
-    vehicle_driver->>vehicle_driver: Executa report_curvature_message_handler() (PID)
-    vehicle_driver->>Hardware Real: Envia Wrench Efforts (Acelerador/Freio/Volante)
-
-    Note over Hardware Real, vehicle_driver: CENÁRIO 2: Na Bancada / Simulação Sem o Hardware
-    Hardware Real--xvehicle_driver: Sem pacotes UDP na porta 3794!
-    vehicle_driver--xvehicle_driver: Callback NUNCA é chamado
-    vehicle_driver--xvehicle_driver: PID congelado! Veículo não anda!
+flowchart TD
+    A["Sem novos planos por mais de 1.0s<br/>(current_time - last_msg >= timeout)"] --> B["Dispara Erro 113 via IPC<br/>(EXEC_COOLDOWN a cada 0.5s)"]
+    B --> C["Handler recebe severidade 1<br/>(astro_error_message_handler)"]
+    C --> D["Ativa medium_stop_mode = 1<br/>Liga pisca-alerta (set_turn_signal 3)"]
+    D --> E["set_speed_according_to_severity_level()<br/>FORÇA g_desired_velocity = 0.0"]
+    E --> F["Veículo corta aceleração e freia!"]
 ```
 
+### 1. Detecção do Timeout (Linha 1097):
+```cpp
+if ((last_motion_command_message_time > 0.0) &&
+    ((current_time - last_motion_command_message_time) >= motion_command_timeout) &&
+    (current_time > 0.0) && 
+    (g_go_state == 1))
+{
+    char error_message[1024];
+    snprintf(error_message, sizeof(error_message), "One second has elapsed since the last plan reception.\n");
+    EXEC_COOLDOWN(astro_global_publish_astro_error_message_custom_string(ASTRO_ERROR_CODE_113, error_message), 0.5);
+}
+```
+
+### 2. Recepção no Handler de Erros (Linha 2358):
+O `vehicle_driver` assina mensagens globais de erro via IPC. Ao receber a mensagem com severidade `1`:
+```cpp
+if (message->error_data.error_severity == 1)
+{
+    medium_stop_mode = 1;
+
+    // Aciona o pisca-alerta do carro
+    set_g_turn_signal_command(3);
+    dbc_state.g_turn_signal_command = 1;
+}
+```
+
+### 3. Corte da Velocidade no Laço de Controle (Linha 2928):
+Dentro da função `set_speed_according_to_severity_level()` (chamada antes de enviar a referência ao PID):
+```cpp
+if (medium_stop_mode || max_stop_mode)
+{
+    g_desired_velocity = 0.0; // Anula a velocidade desejada!
+}
+```
+
+### 4. A Armadilha do Cooldown (Por que o carro não voltava a andar):
+O código até prevê desligar o `medium_stop_mode` se passarem 0,9 segundos sem novos erros:
+```cpp
+if ((astro_get_time() - last_severe_astro_error_message_timestamp) > 0.9)
+{
+    medium_stop_mode = 0;
+}
+```
+Porém, como a condição de falta de plano continuava verdadeira e o `EXEC_COOLDOWN` republicava o erro a cada **0,5 segundos**, o cronômetro era resetado antes de atingir os 0,9 s. O veículo ficava permanentemente congelado com velocidade `0.0`.
+
 ---
 
-## 6. A Solução: O Marca-Passo Periódico (*Heartbeat*)
+## 3. Por que o Erro 113 Ocorria com o `tune_pid`?
 
-Para permitir que o `vehicle_driver` opere em qualquer computador sem depender da presença física do veículo ou da caixa da Torc:
+O binário de calibração [`ford_escape_hybrid_tune_pid`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_tune_pid.c) possui um paradigma de envio diferente dos planejadores contínuos:
 
-1. **Criação do Temporizador Periódico no `vehicle_driver_main.cpp`:**
-   Adicionamos um timer cíclico de alta precisão via IPC (`astro_ipc_addPeriodicTimer`):
-   ```cpp
-   astro_ipc_addPeriodicTimer(FORD_ESCAPE_CYCLE_TIME, (TIMER_HANDLER_TYPE) tune_pid_timer_handler, NULL);
+1. **Envio da Trajetória em Bloco Único:**
+   Ele gera um vetor completo de 400 pontos contendo a trajetória inteira de teste (ex: $1.0\text{s de espera} + 4.0\text{s de aceleração} + 4.0\text{s de patamar} + 4.0\text{s de frenagem} + 1.0\text{s final} = \mathbf{14.0\text{ segundos}}$).
+2. **Intervalo entre Publicações de 14 Segundos:**
+   No `main()` do `vehicle_driver_tune_pid.c`:
+   ```c
+   timer_period = t0 + t1 + t2 + t3 + t4; // = 14.0 segundos
+   astro_ipc_addPeriodicTimer(timer_period, timer_handler, NULL);
    ```
+   O `tune_pid` só publica uma nova mensagem a cada **14 segundos**!
 
-2. **O Papel do `tune_pid_timer_handler`:**
-   Esse timer atua como um **marca-passo**: a cada ciclo (40 Hz / 25 ms), ele força a chamada de:
-   ```cpp
-   static void
-   tune_pid_timer_handler(...)
-   {
-       report_curvature_message_handler(); // Executa o PID e atualiza marchas/velocidade
-       jaus_publish_wrench_efforts();       // Envia os comandos para a rede/CAN
-   }
-   ```
-
-3. **Proteção contra Duplicação no Veículo Real:**
-   Para evitar que no carro real haja duplo envio de comandos (um pelo hardware Torc e outro pelo timer), o timer verifica se há dados reais chegando da Torc nos últimos 200 ms:
-   ```cpp
-   if ((astro_get_time() - last_torc_curvature_message_time) < 0.2)
-   {
-       return; // O hardware físico está ativo: o timer se cala e cede a vez ao Torc nativo!
-   }
-   ```
+### O Conflito Temporal:
+- No segundo $t = 0$: O `tune_pid` publica a trajetória de 14 segundos.
+- O `vehicle_driver` recebe e começa a executar o plano.
+- No segundo $t = 1.0$: Passou 1,0 s desde o último recebimento. O `motion_command_timeout` padrão (1.0 s) estoura!
+- O `vehicle_driver` dispara o **Erro 113**, entra em `medium_stop_mode` e **zera a velocidade no 1º segundo de teste**, abortando o ensaio antes que o carro pudesse atingir a velocidade máxima planejada!
 
 ---
 
-## 7. Conclusão
+## 4. Por que esse erro NÃO acontecia com a flag `-tune_pid_mode on`?
 
-Com essa arquitetura:
-- **Na bancada e no simulador CAN (`vcan0`):** O timer mantém o laço do PID pulsando continuamente a 40 Hz, permitindo a calibração precisa dos parâmetros do veículo sem travar.
-- **No veículo real com Torc-JAUS:** O sistema detecta a presença dos pacotes físicos e preserva o fluxo nativo original, garantindo segurança total contra duplicação de comandos.
+Observe novamente a 4ª condição da linha 1097:
+```cpp
+if ((last_motion_command_message_time > 0.0) &&
+    (...) &&
+    (g_go_state == 1)) // <--- A CHAVE DA QUESTÃO!
+```
+
+- No modo antigo (`-tune_pid_mode on`), o `ford_escape_hybrid_tune_pid` **nunca enviava o comando GO** (`astro_navigator_ackerman_go()`).
+- Por isso, a variável `g_go_state` permanecia em `0`.
+- Como `g_go_state == 0`, a condição `(g_go_state == 1)` era **falsa**, e o watchdog de 1 segundo ficava **dormente**!
+- Além disso, com `tune_pid_mode == 1`, a linha 1260 atribuía `g_desired_velocity = v;` direto, sem checar travas.
+
+Quando removemos a flag `-tune_pid_mode on` para rodar no fluxo normal, passamos a enviar o comando GO (`g_go_state = 1`). Com `g_go_state = 1`, o watchdog armou e o Erro 113 se manifestou imediatamente!
+
+---
+
+## 5. A Solução: Ajuste do `motion_command_timeout`
+
+Para permitir que o `vehicle_driver` execute trajetórias de longa duração enviadas em bloco único pelo `tune_pid` sem disparar o watchdog, ajustamos a tolerância de timeout:
+
+No [`src/vehicle_driver/vehicle_driver_main.cpp#L224`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_main.cpp#L224):
+
+```cpp
+// VALOR ORIGINAL DE FÁBRICA:
+// double motion_command_timeout = 1.0;
+
+// VALOR AJUSTADO PARA O ENSAIO:
+double motion_command_timeout = 20.0;
+```
+
+### Por que 20.0 segundos?
+Como a trajetória de ensaio configurada dura 14 segundos ($t_0 + t_1 + t_2 + t_3 + t_4 = 14\text{ s}$), um timeout de **20 segundos**:
+1. Permite que os 14 segundos de ensaio sejam executados integralmente e suavemente ponto a ponto.
+2. Mantém uma margem de segurança de 6 segundos até o próximo envio do `tune_pid`.
+3. **Evita que o Erro 113 seja disparado** durante a execução do perfil de velocidade.
+
+---
+
+## 6. Como Aplicar Sem Modificar o Código-Fonte (Boas Práticas)
+
+O parâmetro `motion_command_timeout` foi registrado no ASTRO como parâmetro de linha de comando/arquivo de configuração:
+```cpp
+{(char *) "vehicle_driver", (char *) "motion_command_timeout", ASTRO_PARAM_DOUBLE, &(motion_command_timeout), 1, NULL}
+```
+
+Isso significa que o `vehicle_driver_main.cpp` pode manter seu valor padrão original (`1.0`) e o valor estendido de 20 segundos pode ser passado dinamicamente:
+
+### Via Linha de Comando:
+```bash
+./ford_escape_hybrid -can vcan0 -vehicle_driver:motion_command_timeout 20.0
+```
+
+### Via Arquivo de Processo (`process.ini`):
+```ini
+[vehicle_driver]
+motion_command_timeout 20.0
+```
+
+Dessa forma, o `vehicle_driver` opera com a segurança de 1.0 s na operação autônoma real da rua, e utiliza 20.0 s de tolerância quando parametrizado para os ensaios de calibração de bancada.
 
