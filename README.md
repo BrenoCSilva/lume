@@ -82,18 +82,18 @@ while (fabs(current_velocity) > 0.0)
 ### 3.1. O Método de Euler com Velocidade Alvo Virtual ($\pm 0{,}5\,\text{m/s}$)
 * O código adota `full_time_interval = 0.1s` e `delta_t = 0.05s`. A cada iteração macro de $0{,}1\,\text{s}$, são executados $n = 2$ micro-passos do método de Euler em `astro_libcarmodel_recalc_pos_ackerman()`.
 * No modelo cinemático, a aceleração de transição é calculada por:
-  $$a = \frac{v_{\text{alvo}} - v_{\text{atual}}}{\Delta t_{\text{interval}}}$$
+  $$a = \frac{v_{\text{alvo}} - v_{\text{atual}}}{\Delta t}$$
 * A velocidade alvo é fixada arbitrariamente em `vel_sign * 0.5`. O objetivo dessa velocidade virtual não é avaliar a aceleração em si, mas sim **gerar com precisão geométrica o arco de curvatura espacial** que o caminhão e suas carretas descreverão ao manter o volante fixo em `odometry_phi`.
 
 ### 3.2. Recálculo da Velocidade Real pela Equação de Torricelli
 Assim que a nova pose espacial é encontrada, a velocidade real do caminhão é recalculada através da cinemática clássica pela função [`compute_final_velocity_using_torricelli()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L952-L963):
 
-$$v^2 = v_0^2 + 2 \cdot a \cdot \Delta s \implies v = \sqrt{v_0^2 + 2 \cdot (-a_{\text{max\_dec\_forward}}) \cdot \Delta s}$$
+$$v^2 = v_0^2 + 2 \cdot a \cdot \Delta s \implies v = \sqrt{v_0^2 + 2 \cdot a \cdot \Delta s}$$
 
 Onde:
 * $v_0$ é a velocidade do passo anterior;
-* $a = -a_{\text{max\_dec\_forward}}$ (ou $a_{\text{max\_dec\_reverse}}$ se em marcha ré);
-* $\Delta s = \text{DIST2D}(\text{iterative\_pose}, \text{prev\_pose})$ é o deslocamento percorrido naquele micro-passo.
+* $a = -a_{\max}$ (onde $a_{\max}$ é o parâmetro `maximum_deceleration_forward`, ou positivo se em marcha ré via `maximum_deceleration_reverse`);
+* $\Delta s = \text{DIST2D}(p_{\text{atual}}, p_{\text{anterior}})$ é o deslocamento percorrido naquele micro-passo.
 
 Se $v^2 \le 0$, a função retorna $0{,}0\,\text{m/s}$, indicando que o veículo atingiu a parada total.
 
@@ -202,4 +202,5 @@ for (; i < num_motion_commands; i++)
 * **Módulo de Auditoria:** Publica pacote de auditoria via `send_potential_collision_info_to_audit()`.
 * **Modo Manual:** Por padrão, o *potential collision* não atua quando o veículo está sob comando humano manual (`manual_override == 1`). Para forçar a proteção ativa mesmo em modo manual (ex.: assistência de condução), utiliza-se o parâmetro:
   `obstacle_avoider_manual_override_activate 1`
+
 
