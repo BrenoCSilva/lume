@@ -13,12 +13,15 @@ O **`obstacle_avoider`** é o módulo de segurança crítica responsável por ga
 O módulo atua como uma barreira de segurança (*safety shield*) posicionada entre o planejador de trajetória ([MPP / Frenet](file:///home/lume/astro/src/mpp/)) e o controlador de baixo nível ([`base_ackerman`](file:///home/lume/astro/src/base_ackerman/)):
 
 ```mermaid
-flowchart LR
-    MPP["Planejador (MPP)<br/>Comandos (v, phi, t)"] --> OA["Obstacle Avoider<br/>Validação & Freio"]
-    LOC["Localize (GPS / Odometria)<br/>Globalpos atual"] --> OA
-    MAPS["Mapas de Obstáculos<br/>Distância, Ocupação, Moving Objects"] --> OA
-    OA --> BA["base_ackerman<br/>Comandos Validados"]
-    OA --> AUDIT["Auditoria & Falhas<br/>ASTRO_ERROR_CODE"]
+flowchart TD
+    MPP["Planejador MPP<br/>(Comandos de Movimento)"] --> OA
+    LOC["Localize / GPS<br/>(Pose Global do Veículo)"] --> OA
+    MAPS["Mapas de Obstáculos<br/>(Distância, Ocupação, Objetos Móveis)"] --> OA
+
+    OA["Obstacle Avoider<br/>(Validação & Modulação de Velocidade)"]
+
+    OA --> BA["base_ackerman<br/>(Comandos Seguros Publicados)"]
+    OA --> AUDIT["Auditoria & Telemetria<br/>(Alarmes ASTRO_ERROR_CODE)"]
 ```
 
 ---
@@ -30,39 +33,39 @@ O sistema opera de forma orientada a eventos. O fluxo de avaliação e interven�
 ```mermaid
 flowchart TD
     subgraph Gatilhos ["1. Gatilhos de Entrada (Event-Driven)"]
-        T1["Novo Plano do MPP"] --> H1["robot_ackerman_motion_command_message_handler()"]
-        T2["Novo Globalpos do Localize"] --> H2["localize_ackerman_globalpos_message_handler()"]
-        T3["Novo Mapa de Distâncias"] --> H3["distance_map_message_handler()"]
+        T1["Novo Plano MPP"] --> H1["Handler MPP<br/>(robot_ackerman_motion_command)"]
+        T2["Novo Globalpos GPS"] --> H2["Handler Localize<br/>(localize_ackerman_globalpos)"]
+        T3["Novo Mapa Distâncias"] --> H3["Handler Mapa Distâncias<br/>(obstacle_distance_mapper)"]
     end
 
     subgraph Emergencia ["2. Simulação de Emergência (Potential Collision)"]
-        H2 --> PC["astro_obstacle_avoider_set_trajectory_from_deceleration()<br/><i>Simulação com volante travado (phi) + Torricelli</i>"]
-        PC --> EXT["set_extension_trajectory_from_deceleration()<br/><i>Extensão de segurança de N metros</i>"]
-        EXT --> ACC["Atualiza global_acc_to_avoid_potential_collision"]
+        H2 --> PC["Simulação de Frenagem<br/>set_trajectory_from_deceleration()<br/>Volante travado em phi + Torricelli"]
+        PC --> EXT["Extensão de Segurança<br/>set_extension_trajectory()<br/>Projeção de N metros à frente"]
+        EXT --> ACC["Atualiza Aceleração de Emergência<br/>global_acc_to_avoid_potential_collision"]
     end
 
-    H1 -->|"Imediato"| OA_TIMER["obstacle_avoider_timer_handler()"]
-    ACC -->|"Rate limit ~14 Hz"| OA_TIMER
-    H3 -->|"Rate limit ~14 Hz"| OA_TIMER
+    H1 -->|"Imediato"| OA_TIMER["Handler Central de Decisão<br/>obstacle_avoider_timer_handler()"]
+    ACC -->|"Frequência max ~14 Hz"| OA_TIMER
+    H3 -->|"Frequência max ~14 Hz"| OA_TIMER
 
     subgraph PipelineOA ["3. Pipeline do Timer Handler"]
-        OA_TIMER --> TRAT_PC["potential_collision_treatment()<br/><i>Filtro de 5 ciclos -> velocity_recalculate_with_acceleration()</i>"]
-        TRAT_PC --> CENTR["limit_centripetal_acceleration_reducing_velocity()<br/><i>Proteção contra tombamento em curvas</i>"]
-        CENTR --> PHI_LIM["limit_current_velocity_according_to_max_phi()<br/><i>Envelope seguro de velocidade vs. esterçamento</i>"]
-        PHI_LIM --> OA_CORE["obstacle_avoider()<br/><i>Validação Preventiva de Trajetória Futura</i>"]
+        OA_TIMER --> TRAT_PC["Tratamento Potential Collision<br/>potential_collision_treatment()<br/>Filtro 5 ciclos -> Desacelera com Acc"]
+        TRAT_PC --> CENTR["Limite de Aceleração Centrípeta<br/>limit_centripetal_acceleration...<br/>Proteção contra tombamento em curvas"]
+        CENTR --> PHI_LIM["Limite de Velocidade por Phi<br/>limit_current_velocity_to_max_phi()<br/>Envelope seguro esterçamento x vel"]
+        PHI_LIM --> OA_CORE["Inicia Validação Preventiva<br/>obstacle_avoider()"]
     end
 
     subgraph LoopCore ["4. Loop Preventivo Central (do-while)"]
-        OA_CORE --> SIM["build_predicted_trajectory()<br/><i>Modelo de Ackermann com carretas</i>"]
-        SIM --> CHK_PRES{"Colisão no Presente?<br/><i>(pose atual ou colisão prévia)</i>"}
-        CHK_PRES -- Sim --> ZERO["Zera velocidades imediatamente (v = 0)<br/><i>Publica ASTRO_ERROR_CODE_201</i>"]
-        CHK_PRES -- Não --> CHK_FUT{"Colisão Futura no Plano?<br/><i>(Mapas / Distância de parada insuficiente)</i>"}
-        CHK_FUT -- Sim --> REC["velocity_recalculate()<br/><i>Atenua velocidades com fator 0.95</i>"]
+        OA_CORE --> SIM["Simulação Física Ackermann<br/>build_predicted_trajectory()<br/>Integração do cavalo + carretas"]
+        SIM --> CHK_PRES{"Colisão no Presente?<br/>(Pose atual ou colisão prévia)"}
+        CHK_PRES -- Sim --> ZERO["Zera velocidades (v = 0)<br/>Dispara ASTRO_ERROR_CODE_201"]
+        CHK_PRES -- Não --> CHK_FUT{"Colisão Futura no Plano?<br/>(Mapas ou frenagem insuficiente)"}
+        CHK_FUT -- Sim --> REC["Atenua Velocidades<br/>velocity_recalculate()<br/>Fator progressivo 0.95"]
         REC --> SIM
-        CHK_FUT -- Não --> FIN["Plano Validado com Sucesso"]
+        CHK_FUT -- Não --> FIN["Plano Validado com Sucesso<br/>Trajetória Segura Aprovada"]
     end
 
-    ZERO --> PUB["obstacle_avoider_publish_base_ackerman_motion_command()"]
+    ZERO --> PUB["Publicação Final<br/>obstacle_avoider_publish_base_ackerman()<br/>Envia comandos validados para a base"]
     FIN --> PUB
 ```
 
