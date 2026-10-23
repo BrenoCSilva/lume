@@ -236,20 +236,50 @@ O `obstacle_avoider_timer_handler()` é chamado periodicamente a cada $\approx 2
 
 Durante um teste em veículo real, a inspeção da fila com prints detalhados registrou exatamente a transição entre um plano antigo e a chegada de um novo plano do MPP:
 
-### 6.1 Fase 1: Condução Normal no Plano Antigo
-O robô trafegava executando um plano com degraus de $\Delta t = 0{,}060\text{ s}$ ($60\text{ ms}$). O timer do Obstacle Avoider consumia e descartava 1 ou 2 comandos por ciclo:
+### 6.1 Fase 1: Condução Normal e Consumo Degrau a Degrau no Plano Inicial
+O robô trafegava executando um plano com degraus de $\Delta t = 0{,}060\text{ s}$ ($60\text{ ms}$). Observe como a fila inicial começa em $v \approx 0{,}09\text{ m/s}$ com o primeiro comando quase expirando (`time = 0.004056s`), e a cada ciclo o timer descarta 1 ou 2 comandos conforme o tempo passa, avançando a velocidade suavemente:
 
+#### Início da Fila (Velocidade em $0{,}09\text{ m/s}$):
 ```text
+plano atual:
+ 0 --> v = 0.097019 | time = 0.004056  <-- Quase expirando (restam apenas 4 ms!)
+ 1 --> v = 0.099197 | time = 0.060000
+ 2 --> v = 0.101375 | time = 0.060000
+ 3 --> v = 0.103554 | time = 0.060000
+ ...
+ 507 --> v = 1.199176 | time = 0.060000
 soma_tempo: 30.445634
+
 [CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.09 m/s). Novo Cmd[0]: v=0.10 m/s (Restam 507 cmds na fila)
-...
-soma_tempo: 30.053487
-[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.11 m/s). Novo Cmd[0]: v=0.11 m/s (Restam 500 cmds na fila)
-...
+```
+
+#### Poucos Ciclos Depois (Velocidade em $0{,}10\text{ m/s}$):
+O antigo `Cmd[0]` expirou. O novo comando do topo passa a ser executado e a fila reduz:
+```text
+plano atual:
+ 0 --> v = 0.101375 | time = 0.047110  <-- Novo início do plano (com tempo fatiado após avanço)
+ 1 --> v = 0.103554 | time = 0.060000
+ 2 --> v = 0.105732 | time = 0.060000
+ ...
+soma_tempo: 30.287110
+
+[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.10 m/s). Novo Cmd[0]: v=0.10 m/s (Restam 504 cmds na fila)
+```
+
+#### Imediatamente Antes da Chegada do Novo Plano (Velocidade em $0{,}11\text{ m/s}$):
+O caminhão continuou acelerando suavemente até $0{,}11\text{ m/s}$, restando 499 comandos na fila:
+```text
+plano atual:
+ 0 --> v = 0.112266 | time = 0.034136  <-- Velocidade atual de cruzeiro do robô
+ 1 --> v = 0.114444 | time = 0.060000
+ 2 --> v = 0.116623 | time = 0.060000
+ ...
+ 499 --> v = 1.199176 | time = 0.060000
 soma_tempo: 29.974136
+
 [CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.11 m/s). Novo Cmd[0]: v=0.11 m/s (Restam 499 cmds na fila)
 ```
-* O veículo já havia acelerado e estava trafegando a **$v = 0{,}11\text{ m/s}$**.
+* O veículo estava fisicamente em movimento a **$v = 0{,}11\text{ m/s}$**.
 
 ---
 
