@@ -104,17 +104,17 @@ Imagine o seguinte cenário de condução real:
 
 2. **A latência do MPP:**
    * O MPP demora **$120\text{ ms}$** para calcular as clothoides, resolver otimizações e transmitir a mensagem via IPC/ROS.
-   * Quando a mensagem chega no Obstacle Avoider, o relógio real do robô (`astro_get_time()`) já avançou e marca:
-     $$\text{current\_time} = \mathbf{10:20:30.120}$$
+   * Quando a mensagem chega no Obstacle Avoider, o relógio real do robô (`current_time = astro_get_time()`) já avançou e marca:
+     $$t_{\text{atual}} = \mathbf{10:20:30.120}$$
 
 3. **O que acontece dentro do loop:**
    * `time_consumed` inicia em `10:20:30.000`.
    * **$i = 0$:** `time_consumed += 0.050` $\to \mathbf{10:20:30.050}$.  
-     *Termina em 30.050, mas já são 30.120!* $\to$ **Já passou! (Passado)**
+     *Termina em 30.050s, mas já são 30.120s!* $\to$ **Já passou! (Passado)**
    * **$i = 1$:** `time_consumed += 0.050` $\to \mathbf{10:20:30.100}$.  
-     *Termina em 30.100, mas já são 30.120!* $\to$ **Já passou! (Passado)**
+     *Termina em 30.100s, mas já são 30.120s!* $\to$ **Já passou! (Passado)**
    * **$i = 2$:** `time_consumed += 0.050` $\to \mathbf{10:20:30.150}$.  
-     *Termina em 30.150, e o relógio marca 30.120!* $\to \mathbf{10:20:30.150 > 10:20:30.120}$!  
+     *Termina em 30.150s, e o relógio marca 30.120s!* $\to$ Término no futuro!  
      **`break` no $i = 2$!**
 
 ```
@@ -182,7 +182,7 @@ O sistema protege o veículo forçando a velocidade imediatamente a $0{,}00\text
 
 ---
 
-## 4. Diagrama de Sequência Integrado (MPP $\longleftrightarrow$ OA)
+## 4. Diagrama de Sequência Integrado (MPP ↔ OA)
 
 Agora que a lógica matemática está clara, o fluxo de comunicação entre o MPP e o Obstacle Avoider pode ser compreendido detalhadamente com os valores reais de tempo:
 
@@ -193,14 +193,14 @@ sequenceDiagram
     participant OA as Obstacle Avoider
 
     Note over MPP: 1. Foto dos sensores em t = 10:20:30.000<br/>Calcula clothoides (demora 120 ms)
-    MPP->>OA: Envia plano com timestamp = 10:20:30.000<br/>(Cmd[0]=50ms, Cmd[1]=50ms, Cmd[2]=50ms...)
+    MPP->>OA: Envia plano com timestamp = 10:20:30.000<br/>(degraus de comando com dt = 50 ms cada)
 
-    Note over OA: 2. Mensagem chega ao OA no relógio:<br/>current_time = 10:20:30.120 (Latência = 120 ms)
-    Note over OA: 3. Executa consume_motion_command_time():<br/>time_consumed começa em 10:20:30.000
+    Note over OA: 2. Mensagem chega ao OA no relogio:<br/>current_time = 10:20:30.120 (Latencia = 120 ms)
+    Note over OA: 3. Executa consume_motion_command_time():<br/>time_consumed comeca em 10:20:30.000
 
-    Note over OA: • Cmd[0]: fim = 30.000 + 0.050 = 30.050s <= 30.120s (Expirou!)<br/>• Cmd[1]: fim = 30.050 + 0.050 = 30.100s <= 30.120s (Expirou!)<br/>• Cmd[2]: fim = 30.100 + 0.050 = 30.150s > 30.120s (ATIVO NO PRESENTE!)
+    Note over OA: - Cmd[0]: fim = 30.050s (menor que 30.120s: Expirou!)<br/>- Cmd[1]: fim = 30.100s (menor que 30.120s: Expirou!)<br/>- Cmd[2]: fim = 30.150s (maior que 30.120s: ATIVO NO PRESENTE!)
 
-    Note over OA: 4. Reindexação da Fila:<br/>• Descarta Cmd[0] e Cmd[1]<br/>• Cmd[2] é promovido a novo Cmd[0]<br/>• Tempo residual do Cmd[0] = 30.150 - 30.120 = 0.030s<br/>• time_of_last_update = 10:20:30.120
+    Note over OA: 4. Reindexacao da Fila:<br/>- Descarta Cmd[0] e Cmd[1]<br/>- Cmd[2] promovido a novo Cmd[0]<br/>- Tempo residual do Cmd[0] = 30.150 - 30.120 = 0.030s<br/>- time_of_last_update = 10:20:30.120
 ```
 
 ---
@@ -257,11 +257,11 @@ flowchart TD
     A["consume_motion_command_time()"] --> B["current_time = astro_get_time()<br/>time_consumed = time_of_last_update"]
     B --> C["Loop i = 0 até N comandos"]
     C --> D["time_consumed += cmd[i].time"]
-    D --> E{"time_consumed > current_time?<br/>(O fim deste cmd está no futuro?)"}
+    D --> E{"time_consumed &gt; current_time?<br/>(O fim deste cmd está no futuro?)"}
     E -- Não (Cmd no passado) --> C
     E -- Sim (Cmd no presente) --> F["Interrompe loop (break em i)"]
 
-    F --> G{"i < N comandos?"}
+    F --> G{"i &lt; N comandos?"}
     G -- Sim --> H["Cmd[0] = Cmd[i]<br/>Cmd[0].time = time_consumed - current_time"]
     H --> I["Desloca comandos restantes j = 1..N-i<br/>time_of_last_update = current_time"]
     I --> J{"i > 0?"}
