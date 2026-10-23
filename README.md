@@ -232,127 +232,115 @@ O `obstacle_avoider_timer_handler()` é chamado periodicamente a cada $\approx 2
 
 ---
 
-## 6. Estudo de Caso Real: Transição de Plano e o Descarte de 70 Comandos
+## 6. Estudo de Caso Real: Transição de Plano e o Descarte de 50 Comandos
 
-Durante um teste em veículo real, a inspeção da fila com prints detalhados registrou exatamente a transição entre um plano antigo e a chegada de um novo plano do MPP:
+Durante um teste em veículo real com a telemetria aprimorada em horas, minutos e segundos (`HH:MM:SS.mmm`), registrou-se exatamente o comportamento do algoritmo na transição entre o consumo normal de um plano anterior e a chegada de um novo plano do MPP.
 
 ### 6.1 Fase 1: Condução Normal e Consumo Degrau a Degrau no Plano Inicial
-O robô trafegava executando um plano com degraus de $\Delta t = 0{,}060\text{ s}$ ($60\text{ ms}$). Observe como a fila inicial começa em $v \approx 0{,}09\text{ m/s}$ com o primeiro comando quase expirando (`time = 0.004056s`), e a cada ciclo o timer descarta 1 ou 2 comandos conforme o tempo passa, avançando a velocidade suavemente:
+O robô trafegava executando o plano anterior. Observe como, nos ciclos periódicos, o timer descarta comandos conforme o tempo avança a cada $\approx 70\text{ ms} \dots 90\text{ ms}$:
 
-#### Início da Fila (Velocidade em $0{,}09\text{ m/s}$):
 ```text
-plano atual:
- 0 --> v = 0.097019 | time = 0.004056  <-- Quase expirando (restam apenas 4 ms!)
- 1 --> v = 0.099197 | time = 0.060000
- 2 --> v = 0.101375 | time = 0.060000
- 3 --> v = 0.103554 | time = 0.060000
- ...
- 507 --> v = 1.199176 | time = 0.060000
-soma_tempo: 30.445634
+plano atual (base_time = 10:43:39.712 | current_time = 10:43:39.790 | latencia = 0.078s):
+   0 --> v = 0.238041 | dt = 0.035774 | t_fim = 10:43:39.748 [PASSADO - EXPIRADO]
+   1 --> v = 0.246283 | dt = 0.060000 | t_fim = 10:43:39.808 [FUTURO - ATIVO]
+   2 --> v = 0.254526 | dt = 0.060000 | t_fim = 10:43:39.868 [FUTURO - ATIVO]
+   3 --> v = 0.262769 | dt = 0.060000 | t_fim = 10:43:39.928 [FUTURO - ATIVO]
+ [...]
+ soma_tempo: 18.151193
 
-[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.09 m/s). Novo Cmd[0]: v=0.10 m/s (Restam 507 cmds na fila)
+  [CONSUMO TEMPO] [10:43:39.790] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.24 m/s). Novo Cmd[0]: v=0.25 m/s (Restam 302 cmds na fila)
 ```
 
-#### Poucos Ciclos Depois (Velocidade em $0{,}10\text{ m/s}$):
-O antigo `Cmd[0]` expirou. O novo comando do topo passa a ser executado e a fila reduz:
+Poucos ciclos depois, imediatamente antes da chegada do novo plano:
 ```text
-plano atual:
- 0 --> v = 0.101375 | time = 0.047110  <-- Novo início do plano (com tempo fatiado após avanço)
- 1 --> v = 0.103554 | time = 0.060000
- 2 --> v = 0.105732 | time = 0.060000
- ...
-soma_tempo: 30.287110
-
-[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.10 m/s). Novo Cmd[0]: v=0.10 m/s (Restam 504 cmds na fila)
+  [CONSUMO TEMPO] [10:43:39.961] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.26 m/s). Novo Cmd[0]: v=0.27 m/s (Restam 299 cmds na fila)
 ```
-
-#### Imediatamente Antes da Chegada do Novo Plano (Velocidade em $0{,}11\text{ m/s}$):
-O caminhão continuou acelerando suavemente até $0{,}11\text{ m/s}$, restando 499 comandos na fila:
-```text
-plano atual:
- 0 --> v = 0.112266 | time = 0.034136  <-- Velocidade atual de cruzeiro do robô
- 1 --> v = 0.114444 | time = 0.060000
- 2 --> v = 0.116623 | time = 0.060000
- ...
- 499 --> v = 1.199176 | time = 0.060000
-soma_tempo: 29.974136
-
-[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.11 m/s). Novo Cmd[0]: v=0.11 m/s (Restam 499 cmds na fila)
-```
-* O veículo estava fisicamente em movimento a **$v = 0{,}11\text{ m/s}$**.
+* O veículo estava fisicamente em movimento a $v \approx 0{,}26\text{ m/s} \dots 0{,}27\text{ m/s}$.
 
 ---
 
 ### 6.2 Fase 2: Chegada do Novo Plano do MPP (Antes do Consumo)
-Imediatamente a seguir, o MPP enviou um novo plano completo com **474 comandos** (índices `0` a `473`). 
+Em seguida, o MPP transmitiu um novo plano contendo **380 comandos** (índices `0` a `379`). O print capturou esse plano recém-chegado com os timestamps absolutos calculados em relação ao `base_time` da mensagem:
+
+```text
+plano atual (base_time = 10:43:38.973 | current_time = 10:43:39.986 | latencia = 1.013s):
+   0 --> v = -0.000999 | dt = 0.020000 | t_fim = 10:43:38.993 [PASSADO - EXPIRADO]
+   1 --> v =  0.001749 | dt = 0.020000 | t_fim = 10:43:39.013 [PASSADO - EXPIRADO]
+   2 --> v =  0.004496 | dt = 0.020000 | t_fim = 10:43:39.033 [PASSADO - EXPIRADO]
+   3 --> v =  0.007244 | dt = 0.020000 | t_fim = 10:43:39.053 [PASSADO - EXPIRADO]
+  [...]
+  48 --> v =  0.130886 | dt = 0.020000 | t_fim = 10:43:39.953 [PASSADO - EXPIRADO]
+  49 --> v =  0.133633 | dt = 0.020000 | t_fim = 10:43:39.973 [PASSADO - EXPIRADO]
+  50 --> v =  0.136381 | dt = 0.020000 | t_fim = 10:43:39.993 [FUTURO - ATIVO]
+  51 --> v =  0.139129 | dt = 0.020000 | t_fim = 10:43:40.013 [FUTURO - ATIVO]
+  52 --> v =  0.141876 | dt = 0.020000 | t_fim = 10:43:40.033 [FUTURO - ATIVO]
+  [...]
+ 378 --> v =  2.719122 | dt = 0.060000 | t_fim = 10:43:58.833 [FUTURO - ATIVO]
+ 379 --> v =  2.726719 | dt = 0.055294 | t_fim = 10:43:58.888 [FUTURO - ATIVO]
+ soma_tempo: 19.915294
+```
 
 > [!CAUTION]
 > **Esclarecimento Crucial: O Descarte é 100% TEMPORAL (Não por Velocidade):**  
-> A função `consume_motion_command_time()` **não consulta a velocidade ($v$)** para decidir quais comandos descartar. Ela não "busca um comando que tenha a velocidade atual do robô". O critério de descarte é **estritamente cronológico baseado no relógio**:
-> * Se o instante de término do comando for anterior ao relógio atual ($t_{\text{fim}} \le t_{\text{atual}}$), o comando pertence ao passado e é descartado.
-> * A velocidade no comando 70 coincidir com a velocidade real do carro ($0{,}11\text{ m/s}$) é uma **consequência física**: o robô acelerou por $1{,}40\text{ s}$ no mundo real e o MPP também planejou uma aceleração ao longo desses mesmos $1{,}40\text{ s}$.
+> A função `consume_motion_command_time()` **não consulta a velocidade ($v$)** para decidir quais comandos descartar. O critério de descarte é **estritamente cronológico baseado no relógio**:
+> * Se o instante de término do comando for anterior ou igual ao relógio atual ($t_{\text{fim}} \le t_{\text{atual}}$, ou seja, `time_consumed <= current_time`), o comando pertence ao passado e é descartado.
+> * Se o instante de término for estritamente posterior ($t_{\text{fim}} > t_{\text{atual}}$), o comando pertence ao presente/futuro. O loop sofre um `break` e esse comando se torna o novo início da fila.
 
-Ao somar o timestamp base do plano ($T_{\text{base}}$) com a duração $\Delta t$ de cada degrau, a linha do tempo absoluta de cada comando fica evidente:
+Ao somar o timestamp base do plano ($T_{\text{base}} = \text{10:43:38.973}$) com a duração $\Delta t$ de cada degrau, a linha do tempo absoluta de cada comando fica evidente:
 
-| Índice | Velocidade ($v$) | Duração ($\Delta t$) | Timestamp de Término ($t_{\text{fim}} = T_{\text{base}} + \sum \Delta t$) | Comparação com o Relógio Atual ($t_{\text{atual}} = T_{\text{base}} + 1{,}388\text{ s}$) | Decisão do OA |
+| Índice | Velocidade ($v$) | Duração ($\Delta t$) | Timestamp de Término ($t_{\text{fim}}$) | Comparação com o Relógio Atual ($t_{\text{atual}} = \text{10:43:39.986}$) | Decisão do OA |
 | :---: | :---: | :---: | :---: | :---: | :---: |
-| `Cmd[0]` | $-0{,}001\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 0{,}020\text{ s}$ | $T_{\text{base}} + 0{,}020 \le t_{\text{atual}}$ | **PASSADO** (Expirado!) |
-| `Cmd[1]` | $+0{,}001\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 0{,}040\text{ s}$ | $T_{\text{base}} + 0{,}040 \le t_{\text{atual}}$ | **PASSADO** (Expirado!) |
-| `Cmd[2]` | $+0{,}002\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 0{,}060\text{ s}$ | $T_{\text{base}} + 0{,}060 \le t_{\text{atual}}$ | **PASSADO** (Expirado!) |
+| `Cmd[0]` | $-0{,}001\text{ m/s}$ | $0{,}020\text{ s}$ | `10:43:38.993` | $38{,}993 \le 39{,}986$ | **PASSADO** (Expirado!) |
+| `Cmd[1]` | $+0{,}002\text{ m/s}$ | $0{,}020\text{ s}$ | `10:43:39.013` | $39{,}013 \le 39{,}986$ | **PASSADO** (Expirado!) |
+| `Cmd[2]` | $+0{,}004\text{ m/s}$ | $0{,}020\text{ s}$ | `10:43:39.033` | $39{,}033 \le 39{,}986$ | **PASSADO** (Expirado!) |
 | ... | ... | ... | ... | ... | ... |
-| `Cmd[68]` | $+0{,}110\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 1{,}380\text{ s}$ | $T_{\text{base}} + 1{,}380 \le t_{\text{atual}}$ | **PASSADO** (Expirado!) |
-| `Cmd[69]` | $+0{,}112\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 1{,}400\text{ s}$ | $T_{\text{base}} + 1{,}400 > t_{\text{atual}}$ | **PRESENTE!** (`break` no $i = 70$) |
-| `Cmd[70]` | $+0{,}113\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 1{,}420\text{ s}$ | $T_{\text{base}} + 1{,}420 > t_{\text{atual}}$ | Futuro (Ativo) |
-
-#### Saída do Log com Timestamp Acumulado e Status:
-```text
-plano atual (base_timestamp = 1729689630.000000 | current_time = 1729689631.387885 | latencia = 1.388s):
-   0 --> v = -0.000999 | dt = 0.020000 | t_fim = 1729689630.020000 [PASSADO - EXPIRADO]
-   1 --> v =  0.000635 | dt = 0.020000 | t_fim = 1729689630.040000 [PASSADO - EXPIRADO]
-   2 --> v =  0.002268 | dt = 0.020000 | t_fim = 1729689630.060000 [PASSADO - EXPIRADO]
-   ...
-  68 --> v =  0.110088 | dt = 0.020000 | t_fim = 1729689631.380000 [PASSADO - EXPIRADO]
-  69 --> v =  0.111721 | dt = 0.020000 | t_fim = 1729689631.400000 [FUTURO - ATIVO -> BREAK!]
-  70 --> v =  0.113355 | dt = 0.020000 | t_fim = 1729689631.420000 [FUTURO - ATIVO]
-```
+| `Cmd[48]` | $+0{,}131\text{ m/s}$ | $0{,}020\text{ s}$ | `10:43:39.953` | $39{,}953 \le 39{,}986$ | **PASSADO** (Expirado!) |
+| `Cmd[49]` | $+0{,}134\text{ m/s}$ | $0{,}020\text{ s}$ | `10:43:39.973` | $39{,}973 \le 39{,}986$ | **PASSADO** (Expirado!) |
+| `Cmd[50]` | $+0{,}136\text{ m/s}$ | $0{,}020\text{ s}$ | `10:43:39.993` | $39{,}993 > 39{,}986$ | **PRESENTE!** (`break` no $i = 50$) |
+| `Cmd[51]` | $+0{,}139\text{ m/s}$ | $0{,}020\text{ s}$ | `10:43:40.013` | $40{,}013 > 39{,}986$ | Futuro (Ativo) |
 
 ---
 
 ### 6.3 Fase 3: A Compensação de Latência em Ação
-O MPP demorou cerca de **$1{,}40\text{ segundos}$** calculando essa nova rota ($70 \times 0{,}020\text{ s} = 1{,}40\text{ s}$). Durante esse tempo, o caminhão continuou andando no mundo real.
+O MPP gerou o plano com timestamp base `10:43:38.973`. Entre a captura dos sensores, cálculo das clothoides e transmissão IPC, a mensagem chegou ao Obstacle Avoider quando o relógio já marcava `10:43:39.986`.
+* **Latência real medida:**
+  $$\text{Latência} = t_{\text{atual}} - T_{\text{base}} = 39{,}986 - 38{,}973 = \mathbf{1{,}013\text{ segundos}}$$
 
-Ao executar `consume_motion_command_time()`, a função detectou que os primeiros 70 comandos já pertenciam ao passado e realizou o descarte em massa:
+Durante esse $1{,}013\text{ s}$, o caminhão continuou trafegando no mundo real.
+Ao executar `consume_motion_command_time()`, a função detectou que os índices `0` a `49` (**exatamente 50 comandos**) pertenciam ao passado e realizou o descarte em bloco:
 
 ```text
-[CONSUMO TEMPO] O tempo passou! Descartou 70 comando(s) executado(s) (v_antiga=-0.00 m/s). Novo Cmd[0]: v=0.11 m/s (Restam 404 cmds na fila)
+  [CONSUMO TEMPO] [10:43:39.986] O tempo passou! Descartou 50 comando(s) executado(s) (v_antiga=-0.00 m/s). Novo Cmd[0]: v=0.14 m/s (Restam 330 cmds na fila)
 ```
-* **Contagem de comandos:** $474\text{ comandos originais} - 70\text{ descartados} = \mathbf{404\text{ comandos restantes}}$.
+* **Contagem de comandos:** $380\text{ comandos originais} - 50\text{ descartados} = \mathbf{330\text{ comandos restantes}}$.
 
 ---
 
-### 6.4 Fase 4: O Plano Sincronizado Resultante
-No ciclo imediatamente seguinte, o print confirma que o antigo `Cmd[70]` assumiu a posição zero, perfeitamente sincronizado com a velocidade real do veículo ($0{,}11\text{ m/s}$):
+### 6.4 Fase 4: O Plano Sincronizado Resultante e a Precisão Residual
+No ciclo seguinte, a telemetria confirma que o antigo `Cmd[50]` assumiu a posição inicial da fila (`Cmd[0]`):
 
 ```text
-plano atual (após compensação):
- 0 --> v = 0.113355 | time = 0.012115  <-- Antigo Cmd[70], com tempo residual fatiado!
- 1 --> v = 0.114988 | time = 0.020000  <-- Antigo Cmd[71]
- 2 --> v = 0.116622 | time = 0.060000  <-- Antigo Cmd[72]
- 3 --> v = 0.121523 | time = 0.060000
- ...
- 403 --> v = 2.077500 | time = 0.006491
-soma_tempo: 24.098606
+plano atual (base_time = 10:43:39.986 | current_time = 10:43:40.078 | latencia = 0.093s):
+   0 --> v = 0.136381 | dt = 0.007277 | t_fim = 10:43:39.993 [PASSADO - EXPIRADO]
+   1 --> v = 0.139129 | dt = 0.020000 | t_fim = 10:43:40.013 [PASSADO - EXPIRADO]
+   2 --> v = 0.141876 | dt = 0.020000 | t_fim = 10:43:40.033 [PASSADO - EXPIRADO]
+   3 --> v = 0.144624 | dt = 0.020000 | t_fim = 10:43:40.053 [PASSADO - EXPIRADO]
+   4 --> v = 0.147371 | dt = 0.020000 | t_fim = 10:43:40.073 [PASSADO - EXPIRADO]
+   5 --> v = 0.150119 | dt = 0.020000 | t_fim = 10:43:40.093 [FUTURO - ATIVO]
+   [...]
 ```
 
-E a fila voltou ao consumo normal ciclo a ciclo:
-```text
-[CONSUMO TEMPO] O tempo passou! Descartou 3 comando(s)... Novo Cmd[0]: v=0.12 m/s (Restam 401 cmds na fila)
-[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s)... Novo Cmd[0]: v=0.13 m/s (Restam 400 cmds na fila)
-```
+#### A Precisão Matemática do Tempo Residual:
+O comando 50 original tinha duração nominal de $\Delta t = 0{,}020\text{ s}$ e terminava em `10:43:39.993277`.  
+O relógio atual no instante do descarte era `10:43:39.986000`.  
+Portanto, a fatia temporal restante desse comando era:
+$$\Delta t_{\text{restante}} = t_{\text{fim}} - t_{\text{atual}} = 39{,}993277 - 39{,}986000 = \mathbf{0{,}007277\text{ s}}\ (7{,}277\text{ ms})$$
+
+O campo `dt` do novo `Cmd[0]` recebeu com exatidão cirúrgica **`0.007277`**, e o `base_time` foi atualizado para `10:43:39.986`.
 
 > [!TIP]
 > **Impacto na Condução:**  
-> Se esse descarte de 70 comandos não existisse, o caminhão receberia um comando de frear bruscamente até $0{,}00\text{ m/s}$ (o início obsoleto do plano de 1.4s atrás), gerando um tranco violento na transmissão e desestabilizando o engate das carretas. A compensação de latência garantiu uma transição $100\%$ contínua e suave.
+> Se esse descarte de 50 comandos não existisse, o caminhão receberia um comando de velocidade quase nula ($-0{,}001\text{ m/s}$, gerado pelo MPP 1 segundo atrás antes de acelerar), provocando um solavanco indevido na transmissão. A compensação de latência garantiu que o caminhão continuasse sua trajetória com total suavidade.
 
 ---
 
@@ -370,7 +358,7 @@ flowchart TD
     F --> G{"i &lt; N comandos?"}
     G -- Sim --> H["Cmd[0] = Cmd[i]<br/>Cmd[0].time = time_consumed - current_time"]
     H --> I["Desloca comandos restantes j = 1..N-i<br/>time_of_last_update = current_time"]
-    I --> J{"i > 0?"}
+    I --> J{"i &gt; 0?"}
     J -- Sim --> K["Imprime [CONSUMO TEMPO]<br/>Descartou i comandos"]
     J -- Não --> L["Fim do ciclo (Cmd[0] ainda ativo com tempo fatiado)"]
     K --> L
