@@ -207,75 +207,98 @@ sequenceDiagram
 
 ---
 
-## 5. Comportamento Contínuo nos Ciclos Periódicos do Timer
+## 5. Consumo Contínuo Entre Planos (Regime Permanente a Cada ~0.07s a 0.09s)
 
-O que acontece nos ciclos seguintes, enquanto o MPP ainda não enviou outro plano?
+O que acontece nos ciclos seguintes enquanto o MPP ainda não enviou um novo plano?
 
-O `obstacle_avoider_timer_handler()` é chamado periodicamente a cada $\approx 20\text{ ms}$ ($0{,}020\text{ s}$):
+> [!IMPORTANT]
+> **O Princípio do Reúso e Consumo Contínuo da Fila:**  
+> Enquanto o MPP não envia um novo plano, o Obstacle Avoider **trabalha com o plano que ele mesmo modificou e encurtou na iteração passada**.  
+> A cada nova iteração — definida pela chegada de mensagens do GPS/odometria ou mapas, cuja taxa é restringida pelo filtro `can_execute_obstacle_avoider_handler()` a intervalos de pelo menos $0{,}07\text{ s}$ ($70\text{ ms}$) —, a função `consume_motion_command_time()` é chamada exatamente nessa faixa de intervalo ($\approx 75\text{ ms} \dots 90\text{ ms}$) e consome comandos em consequência do tempo real transcorrido.
 
-1. **Ciclo seguinte ($20\text{ ms}$ depois, $t = 10:20:30.140$):**
-   * `time_consumed` inicia em `10:20:30.120`.
-   * $i = 0$: `time_consumed += Cmd[0].time` ($0{,}030\text{ s}$) $\to 10:20:30.150$.
-   * Como $10:20:30.150 > 10:20:30.140$, ocorre o **`break` no $i = 0$**.
-   * Nenhum comando é descartado! O `Cmd[0]` continua ativo, mas sua duração residual é atualizada para:
-     $$\Delta t = 30{,}150 - 30{,}140 = \mathbf{0{,}010\text{ s}}\ (10\text{ ms})$$
-   * `time_of_last_update` é atualizado para `10:20:30.140`.
+A telemetria capturada no veículo ilustra com perfeição esse regime permanente operando na janela de $\approx 0{,}075\text{ s} \dots 0{,}090\text{ s}$:
 
-2. **Segundo ciclo ($40\text{ ms}$ depois, $t = 10:20:30.160$):**
-   * `time_consumed` inicia em `10:20:30.140`.
-   * $i = 0$: `time_consumed += Cmd[0].time` ($0{,}010\text{ s}$) $\to 10:20:30.150 \le 10:20:30.160$ (O `Cmd[0]` expirou!).
-   * $i = 1$: `time_consumed += Cmd[1].time` ($0{,}050\text{ s}$) $\to 10:20:30.200 > 10:20:30.160$ (**`break` no $i = 1$**).
-   * O comando antigo é descartado, `Cmd[1]` vira o novo `Cmd[0]`, e o log avisa:
-     ```text
-     [CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s)...
-     ```
+### 5.1 Ciclo 1: Consumo de 1 Comando ($t = \text{10:43:39.552} \to \text{10:43:39.627}$, $\text{latência} = 0{,}075\text{ s}$)
+
+```text
+  [CONSUMO TEMPO] [10:43:39.552] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.21 m/s). Novo Cmd[0]: v=0.21 m/s (Restam 306 cmds na fila)
+plano atual (base_time = 10:43:39.552 | current_time = 10:43:39.627 | latencia = 0.075s):
+   0 --> v = 0.213312 | dt = 0.015578 | t_fim = 10:43:39.568 [PASSADO - EXPIRADO]
+   1 --> v = 0.221555 | dt = 0.060000 | t_fim = 10:43:39.628 [FUTURO - ATIVO]
+   2 --> v = 0.229798 | dt = 0.060000 | t_fim = 10:43:39.688 [FUTURO - ATIVO]
+   3 --> v = 0.238041 | dt = 0.060000 | t_fim = 10:43:39.748 [FUTURO - ATIVO]
+   4 --> v = 0.246283 | dt = 0.060000 | t_fim = 10:43:39.808 [FUTURO - ATIVO]
+ [...]
+ 305 --> v = 2.726719 | dt = 0.055419 | t_fim = 10:43:57.863 [FUTURO - ATIVO]
+ soma_tempo: 18.310997
+```
+* **Análise temporal:**
+  * O relógio avançou de `39.552` para `39.627` ($\Delta t = 0{,}075\text{ s} = 75\text{ ms}$).
+  * O `Cmd[0]` da iteração passada tinha tempo residual de $0{,}015578\text{ s}$ ($15{,}5\text{ ms}$) e terminava em `10:43:39.568`. Como $39{,}568 \le 39{,}627$, ele expirou.
+  * O `Cmd[1]` terminava em `10:43:39.628` ($> 39{,}627$), provocando o `break` no $i = 1$.
+  * **Ação:** Descartou 1 comando. O antigo `Cmd[1]` assumiu a posição `0`, restando míseros $39{,}628 - 39{,}627459 = \mathbf{0{,}000541\text{ s}}$ ($0{,}5\text{ ms}$) de tempo residual.
 
 ---
 
-### 5.1 Detalhes de Implementação: Disparo dos Handlers e Sincronização Envio-Recebimento
+### 5.2 Ciclo 2: O Descarte de 2 Comandos ($t = \text{10:43:39.627} \to \text{10:43:39.712}$, $\text{latência} = 0{,}085\text{ s}$)
 
-> [!NOTE]
-> **Frequência Efetiva e o Filtro de 70 ms:**  
-> Como detalhado no documento [`01_arquitetura_e_fluxo_geral.md`](file:///home/lume/astro/src/obstacle_avoider/docs/01_arquitetura_e_fluxo_geral.md), a função central é orientada a eventos. Quando novos planos do MPP chegam, ela executa **imediatamente**; na ausência de novos planos, as chamadas periódicas são disparadas pelos handlers de odometria/GPS e mapa sob o estrangulador `can_execute_obstacle_avoider_handler()` ($> 70\text{ ms}$, ou seja, $\approx 12\text{ a }14\text{ Hz}$).
+```text
+  [CONSUMO TEMPO] [10:43:39.627] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.21 m/s). Novo Cmd[0]: v=0.22 m/s (Restam 305 cmds na fila)
+plano atual (base_time = 10:43:39.627 | current_time = 10:43:39.712 | latencia = 0.085s):
+   0 --> v = 0.221555 | dt = 0.000541 | t_fim = 10:43:39.628 [PASSADO - EXPIRADO]
+   1 --> v = 0.229798 | dt = 0.060000 | t_fim = 10:43:39.688 [PASSADO - EXPIRADO]
+   2 --> v = 0.238041 | dt = 0.060000 | t_fim = 10:43:39.748 [FUTURO - ATIVO]
+   3 --> v = 0.246283 | dt = 0.060000 | t_fim = 10:43:39.808 [FUTURO - ATIVO]
+ [...]
+ soma_tempo: 18.235960
+```
+* **Análise temporal:**
+  * O relógio avançou $85\text{ ms}$ (de `39.627` para `39.712`).
+  * O `Cmd[0]` tinha apenas $0{,}000541\text{ s}$ e expirou em `39.628`.
+  * O `Cmd[1]` tinha duração de $60\text{ ms}$ e terminava em `39.688`. Como $39{,}688 \le 39{,}712$, ele **também expirou no mesmo ciclo**!
+  * O `Cmd[2]` terminava em `39.748` ($> 39{,}712$), interrompendo o loop no $i = 2$.
+  * **Ação:** Descartou **2 comandos** em um único ciclo! O `Cmd[2]` virou o novo `Cmd[0]`, com tempo residual fatiado em:
+    $$\Delta t_{\text{restante}} = 39{,}748 - 39{,}712 = \mathbf{0{,}035774\text{ s}}\ (35{,}7\text{ ms})$$
 
-#### Por que o MPP Carimba o Timestamp no Início (Sensores) e Não no Fim do Cálculo?
-Surge frequentemente a dúvida: *"Se o MPP carimbasse o timestamp após concluir o cálculo, não teríamos apenas a latência da rede IPC, sem precisar compensar o tempo do cálculo?"*
+---
 
-A razão técnica é a **ancoragem física da trajetória**:
-1. **Condição Inicial do Planejador:** O MPP calcula as clothoides partindo exatamente da posição, velocidade e orientação medidas pelos sensores no instante $t_0$. Logo, o `Cmd[0]` prescreve o movimento a partir de $t_0$.
-2. **O Risco do Carimbo Pós-Cálculo:** Se o MPP carimbasse o plano com o horário de término $t_1 = t_0 + 1{,}0\text{ s}$, o Obstacle Avoider interpretaria que o `Cmd[0]` (velocidade e esterçamento do passado) deveria ser executado no presente. Isso introduziria um atraso de transporte (*pure phase delay*) severo na malha fechada, comandando manobras defasadas no caminhão.
-3. **Divisão de Responsabilidades:** O MPP trabalha com a verdade sólida da captura inicial ($t_0$) sem precisar prever tempo de CPU ou *jitter* de otimização. Cabe ao Obstacle Avoider, em posse do relógio de tempo real (`astro_get_time()`), medir a latência total acumulada ($\Delta t = t_{\text{atual}} - t_0$) e descartar os comandos que o caminhão já percorreu fisicamente na pista.
+### 5.3 Ciclos 3 e 4: A Alternância Natural Entre 1 e 2 Comandos
+
+```text
+  [CONSUMO TEMPO] [10:43:39.712] O tempo passou! Descartou 2 comando(s) executado(s) (v_antiga=0.22 m/s). Novo Cmd[0]: v=0.24 m/s (Restam 303 cmds na fila)
+plano atual (base_time = 10:43:39.712 | current_time = 10:43:39.790 | latencia = 0.078s):
+   0 --> v = 0.238041 | dt = 0.035774 | t_fim = 10:43:39.748 [PASSADO - EXPIRADO]
+   1 --> v = 0.246283 | dt = 0.060000 | t_fim = 10:43:39.808 [FUTURO - ATIVO]
+ [...]
+  [CONSUMO TEMPO] [10:43:39.790] O tempo passou! Descartou 1 comando(s)... Novo Cmd[0]: v=0.25 m/s (Restam 302 cmds na fila)
+plano atual (base_time = 10:43:39.790 | current_time = 10:43:39.871 | latencia = 0.081s):
+   0 --> v = 0.246283 | dt = 0.018093 | t_fim = 10:43:39.808 [PASSADO - EXPIRADO]
+   1 --> v = 0.254526 | dt = 0.060000 | t_fim = 10:43:39.868 [PASSADO - EXPIRADO]
+   2 --> v = 0.262769 | dt = 0.060000 | t_fim = 10:43:39.928 [FUTURO - ATIVO]
+ [...]
+  [CONSUMO TEMPO] [10:43:39.871] O tempo passou! Descartou 2 comando(s)... Novo Cmd[0]: v=0.26 m/s (Restam 300 cmds na fila)
+```
+
+#### Por que ocorre a alternância entre descartar 1 e 2 comandos?
+* Cada comando planejado tem duração nominal de **$60\text{ ms}$** ($0{,}060\text{ s}$).
+* A janela de liberação do rate limiter varia entre **$75\text{ ms}$ e $90\text{ ms}$** ($> 60\text{ ms}$).
+* Como a janela de avaliação ($75\text{ ms} \dots 90\text{ ms}$) é maior do que a duração de um único comando ($60\text{ ms}$):
+  * **Quando o `Cmd[0]` herda um tempo residual médio ($\approx 35\text{ ms}$):** os $78\text{ ms}$ decorridos consomem esses $35\text{ ms}$ e penetram no comando seguinte $\to$ **descarta 1 comando**.
+  * **No ciclo seguinte:** o novo `Cmd[0]` começa com um tempo residual minúsculo ($\approx 0{,}5\text{ ms} \dots 18\text{ ms}$). Como a janela decorrida é de $81\text{ ms} \dots 85\text{ ms}$, ela consome esse resíduo e ainda engole integralmente o `Cmd[1]` de $60\text{ ms}$ ($18 + 60 = 78\text{ ms} \le 81\text{ ms}$) $\to$ **descarta 2 comandos**!
+
+Imediatamente antes da chegada do novo plano, o ciclo de `10:43:39.961` confirmou essa dinâmica:
+```text
+  [CONSUMO TEMPO] [10:43:39.961] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.26 m/s). Novo Cmd[0]: v=0.27 m/s (Restam 299 cmds na fila)
+```
+O veículo continuou trafegando suavemente a $v = 0{,}27\text{ m/s}$ com 299 comandos válidos na fila modificada.
 
 ---
 
 ## 6. Estudo de Caso Real: Transição de Plano e o Descarte de 50 Comandos
 
-Durante um teste em veículo real com a telemetria aprimorada em horas, minutos e segundos (`HH:MM:SS.mmm`), registrou-se exatamente o comportamento do algoritmo na transição entre o consumo normal de um plano anterior e a chegada de um novo plano do MPP.
+Logo após o ciclo acima, ocorreu o evento de transição: o MPP concluiu seu ciclo de otimização e entregou um **novo plano completo** ao Obstacle Avoider.
 
-### 6.1 Fase 1: Condução Normal e Consumo Degrau a Degrau no Plano Inicial
-O robô trafegava executando o plano anterior. Observe como, nos ciclos periódicos, o timer descarta comandos conforme o tempo avança a cada $\approx 70\text{ ms} \dots 90\text{ ms}$:
-
-```text
-plano atual (base_time = 10:43:39.712 | current_time = 10:43:39.790 | latencia = 0.078s):
-   0 --> v = 0.238041 | dt = 0.035774 | t_fim = 10:43:39.748 [PASSADO - EXPIRADO]
-   1 --> v = 0.246283 | dt = 0.060000 | t_fim = 10:43:39.808 [FUTURO - ATIVO]
-   2 --> v = 0.254526 | dt = 0.060000 | t_fim = 10:43:39.868 [FUTURO - ATIVO]
-   3 --> v = 0.262769 | dt = 0.060000 | t_fim = 10:43:39.928 [FUTURO - ATIVO]
- [...]
- soma_tempo: 18.151193
-
-  [CONSUMO TEMPO] [10:43:39.790] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.24 m/s). Novo Cmd[0]: v=0.25 m/s (Restam 302 cmds na fila)
-```
-
-Poucos ciclos depois, imediatamente antes da chegada do novo plano:
-```text
-  [CONSUMO TEMPO] [10:43:39.961] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.26 m/s). Novo Cmd[0]: v=0.27 m/s (Restam 299 cmds na fila)
-```
-* O veículo estava fisicamente em movimento a $v \approx 0{,}26\text{ m/s} \dots 0{,}27\text{ m/s}$.
-
----
-
-### 6.2 Fase 2: Chegada do Novo Plano do MPP (Antes do Consumo)
+### 6.1 Fase 1: Chegada do Novo Plano do MPP (Antes do Consumo)
 Em seguida, o MPP transmitiu um novo plano contendo **380 comandos** (índices `0` a `379`). O print capturou esse plano recém-chegado com os timestamps absolutos calculados em relação ao `base_time` da mensagem:
 
 ```text
@@ -317,7 +340,7 @@ Ao somar o timestamp base do plano ($T_{\text{base}} = \text{10:43:38.973}$) com
 
 ---
 
-### 6.3 Fase 3: A Compensação de Latência em Ação
+### 6.2 Fase 2: A Compensação de Latência em Ação
 O MPP gerou o plano com timestamp base `10:43:38.973`. Entre a captura dos sensores, cálculo das clothoides e transmissão IPC, a mensagem chegou ao Obstacle Avoider quando o relógio já marcava `10:43:39.986`.
 * **Latência real medida:**
   $$\text{Latência} = t_{\text{atual}} - T_{\text{base}} = 39{,}986 - 38{,}973 = \mathbf{1{,}013\text{ segundos}}$$
@@ -332,7 +355,7 @@ Ao executar `consume_motion_command_time()`, a função detectou que os índices
 
 ---
 
-### 6.4 Fase 4: O Plano Sincronizado Resultante e a Precisão Residual
+### 6.3 Fase 3: O Plano Sincronizado Resultante e a Precisão Residual
 No ciclo seguinte, a telemetria confirma que o antigo `Cmd[50]` assumiu a posição inicial da fila (`Cmd[0]`):
 
 ```text
