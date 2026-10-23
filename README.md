@@ -284,29 +284,37 @@ soma_tempo: 29.974136
 ---
 
 ### 6.2 Fase 2: Chegada do Novo Plano do MPP (Antes do Consumo)
-Imediatamente a seguir, o MPP enviou um novo plano completo com **474 comandos** (índices `0` a `473`). O print capturou esse plano novo **antes** do `consume_motion_command_time()` atuar:
+Imediatamente a seguir, o MPP enviou um novo plano completo com **474 comandos** (índices `0` a `473`). 
 
+> [!CAUTION]
+> **Esclarecimento Crucial: O Descarte é 100% TEMPORAL (Não por Velocidade):**  
+> A função `consume_motion_command_time()` **não consulta a velocidade ($v$)** para decidir quais comandos descartar. Ela não "busca um comando que tenha a velocidade atual do robô". O critério de descarte é **estritamente cronológico baseado no relógio**:
+> * Se o instante de término do comando for anterior ao relógio atual ($t_{\text{fim}} \le \text{current\_time}$), o comando pertence ao passado e é descartado.
+> * A velocidade no comando 70 coincidir com a velocidade real do carro ($0{,}11\text{ m/s}$) é uma **consequência física**: o robô acelerou por $1{,}40\text{ s}$ no mundo real e o MPP também planejou uma aceleração ao longo desses mesmos $1{,}40\text{ s}$.
+
+Ao somar o timestamp base do plano ($T_{\text{base}}$) com a duração $\Delta t$ de cada degrau, a linha do tempo absoluta de cada comando fica evidente:
+
+| Índice | Velocidade ($v$) | Duração ($\Delta t$) | Timestamp de Término ($t_{\text{fim}} = T_{\text{base}} + \sum \Delta t$) | Comparação com o Relógio Atual ($t_{\text{atual}} = T_{\text{base}} + 1{,}388\text{ s}$) | Decisão do OA |
+| :---: | :---: | :---: | :---: | :---: | :---: |
+| `Cmd[0]` | $-0{,}001\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 0{,}020\text{ s}$ | $T_{\text{base}} + 0{,}020 \le t_{\text{atual}}$ | **PASSADO** (Expirado!) |
+| `Cmd[1]` | $+0{,}001\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 0{,}040\text{ s}$ | $T_{\text{base}} + 0{,}040 \le t_{\text{atual}}$ | **PASSADO** (Expirado!) |
+| `Cmd[2]` | $+0{,}002\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 0{,}060\text{ s}$ | $T_{\text{base}} + 0{,}060 \le t_{\text{atual}}$ | **PASSADO** (Expirado!) |
+| ... | ... | ... | ... | ... | ... |
+| `Cmd[68]` | $+0{,}110\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 1{,}380\text{ s}$ | $T_{\text{base}} + 1{,}380 \le t_{\text{atual}}$ | **PASSADO** (Expirado!) |
+| `Cmd[69]` | $+0{,}112\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 1{,}400\text{ s}$ | $T_{\text{base}} + 1{,}400 > t_{\text{atual}}$ | **PRESENTE!** (`break` no $i = 70$) |
+| `Cmd[70]` | $+0{,}113\text{ m/s}$ | $0{,}020\text{ s}$ | $T_{\text{base}} + 1{,}420\text{ s}$ | $T_{\text{base}} + 1{,}420 > t_{\text{atual}}$ | Futuro (Ativo) |
+
+#### Saída do Log com Timestamp Acumulado e Status:
 ```text
-plano atual (recém-chegado do MPP):
- 0 --> v = -0.000999 | time = 0.020000
- 1 --> v =  0.000635 | time = 0.020000
- 2 --> v =  0.002268 | time = 0.020000
- ...
- 68 --> v = 0.110088 | time = 0.020000
- 69 --> v = 0.111721 | time = 0.020000
- 70 --> v = 0.113355 | time = 0.020000  <-- Este comando casa com a velocidade atual (0.11 m/s)!
- 71 --> v = 0.114988 | time = 0.020000
- 72 --> v = 0.116622 | time = 0.060000
- ...
- 472 --> v = 2.076970 | time = 0.060000
- 473 --> v = 2.077500 | time = 0.006491
-soma_tempo: 25.506491
+plano atual (base_timestamp = 1729689630.000000 | current_time = 1729689631.387885 | latencia = 1.388s):
+   0 --> v = -0.000999 | dt = 0.020000 | t_fim = 1729689630.020000 [PASSADO - EXPIRADO]
+   1 --> v =  0.000635 | dt = 0.020000 | t_fim = 1729689630.040000 [PASSADO - EXPIRADO]
+   2 --> v =  0.002268 | dt = 0.020000 | t_fim = 1729689630.060000 [PASSADO - EXPIRADO]
+   ...
+  68 --> v =  0.110088 | dt = 0.020000 | t_fim = 1729689631.380000 [PASSADO - EXPIRADO]
+  69 --> v =  0.111721 | dt = 0.020000 | t_fim = 1729689631.400000 [FUTURO - ATIVO -> BREAK!]
+  70 --> v =  0.113355 | dt = 0.020000 | t_fim = 1729689631.420000 [FUTURO - ATIVO]
 ```
-
-> [!NOTE]
-> Observe duas características cruciais do novo plano:
-> 1. Os primeiros 70 comandos foram gerados com degraus curtos de $\Delta t = 0{,}020\text{ s}$ ($20\text{ ms}$).
-> 2. O plano planejou uma arrancada partindo do repouso ($v \approx 0{,}00\text{ m/s}$) até $0{,}11\text{ m/s}$ no comando 70.
 
 ---
 
