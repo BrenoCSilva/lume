@@ -103,7 +103,7 @@ Imagine o seguinte cenário de condução real:
    * Cada comando do plano dura $\Delta t = 0{,}050\text{ s}$ ($50\text{ ms}$).
 
 2. **A latência do MPP:**
-   * O MPP demora $120\text{ ms}$ para calcular as clothoides, resolver otimizações e transmitir a mensagem via IPC/ROS.
+   * O MPP demora **$120\text{ ms}$** para calcular as clothoides, resolver otimizações e transmitir a mensagem via IPC/ROS.
    * Quando a mensagem chega no Obstacle Avoider, o relógio real do robô (`astro_get_time()`) já avançou e marca:
      $$\text{current\_time} = \mathbf{10:20:30.120}$$
 
