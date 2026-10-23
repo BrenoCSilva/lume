@@ -298,8 +298,33 @@ O veículo continuou trafegando suavemente a $v = 0{,}27\text{ m/s}$ com 299 com
 
 Logo após o ciclo acima, ocorreu o evento de transição: o MPP concluiu seu ciclo de otimização e entregou um **novo plano completo** ao Obstacle Avoider.
 
-### 6.1 Fase 1: Chegada do Novo Plano do MPP (Antes do Consumo)
-Em seguida, o MPP transmitiu um novo plano contendo **380 comandos** (índices `0` a `379`). O print capturou esse plano recém-chegado com os timestamps absolutos calculados em relação ao `base_time` da mensagem:
+### 6.1 Fase 1: Chegada do Novo Plano do MPP e o Salto Temporal do `time_consumed`
+
+#### O Ponto Crucial: Como o `time_consumed` é Inicializado em Cada Cenário
+Para entender a sincronização entre os módulos, observe onde e como a variável `astro_robot_ackerman_motion_command_time_of_last_update` é atualizada no código:
+
+* **No regime contínuo (Seção 5 - enquanto não chega novo plano):**  
+  A variável é atualizada **no final da própria função** [`consume_motion_command_time()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L444) com o relógio corrente:
+  ```cpp
+  astro_robot_ackerman_motion_command_time_of_last_update = current_time;
+  ```
+  Assim, em cada ciclo periódio de odometria/mapa, o `time_consumed` iniciava com o horário em que o consumo foi feito pela última vez (apenas $\approx 75\text{ ms} \dots 90\text{ ms}$ atrás).
+
+* **Na chegada do novo plano do MPP:**  
+  Dentro do handler de recebimento da mensagem ([`navigator_ackerman_plan_message_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1533)), a variável é **imediatamente sobrescrita com o timestamp do plano do MPP**:
+  ```cpp
+  astro_robot_ackerman_motion_command_time_of_last_update = motion_command_message->timestamp;
+  ```
+  Quando a função `consume_motion_command_time()` é chamada logo em seguida, o `time_consumed` não começa no ciclo anterior, mas é **puxado de volta para o timestamp do MPP**: `10:43:38.973`!
+
+---
+
+#### Por que o MPP enviou um plano com timestamp tão antigo em relação ao relógio atual?
+Ao receber o plano, o relógio do Obstacle Avoider já marcava **`10:43:39.986`**, mas o plano recebido trazia o carimbo **`10:43:38.973`** (mais de $1$ segundo de diferença!).
+
+**A justificativa física:** O MPP resolve as equações diferenciais e clothoides ancorado na posição, velocidade e orientação reais em que o caminhão se encontrava no momento da leitura dos sensores ($t_0$). O cálculo de otimização e o trânsito das mensagens IPC consumiram $1{,}013\text{ segundos}$. O MPP **deve** carimbar esse timestamp inicial $t_0$, pois o comando `Cmd[0]` do plano reflete fisicamente o estado do veículo naquele instante.
+
+O print capturou exatamente esse plano recém-chegado com **380 comandos** (índices `0` a `379`), com o `base_time` ajustado para o passado antes de o algoritmo de consumo atuar:
 
 ```text
 plano atual (base_time = 10:43:38.973 | current_time = 10:43:39.986 | latencia = 1.013s):
