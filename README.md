@@ -182,25 +182,27 @@ O sistema protege o veículo forçando a velocidade imediatamente a $0{,}00\text
 
 ---
 
-## 4. Diagrama de Sequência Integrado (MPP ↔ OA)
+## 4. Diagrama de Sequência e Linha do Tempo
 
-Agora que a lógica matemática está clara, o fluxo de comunicação entre o MPP e o Obstacle Avoider pode ser compreendido detalhadamente com os valores reais de tempo:
+A relação temporal entre a emissão do plano pelo MPP e a compensação de latência pelo Obstacle Avoider é ilustrada abaixo:
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant MPP as Planejador MPP
+    participant IPC as Barramento IPC / ROS
     participant OA as Obstacle Avoider
+    participant Clock as Relógio Real (astro_get_time)
 
-    Note over MPP: 1. Foto dos sensores em t = 10:20:30.000<br/>Calcula clothoides (demora 120 ms)
-    MPP->>OA: Envia plano com timestamp = 10:20:30.000<br/>(degraus de comando com dt = 50 ms cada)
-
-    Note over OA: 2. Mensagem chega ao OA no relogio:<br/>current_time = 10:20:30.120 (Latencia = 120 ms)
-    Note over OA: 3. Executa consume_motion_command_time():<br/>time_consumed comeca em 10:20:30.000
-
-    Note over OA: - Cmd[0]: fim = 30.050s (menor que 30.120s: Expirou!)<br/>- Cmd[1]: fim = 30.100s (menor que 30.120s: Expirou!)<br/>- Cmd[2]: fim = 30.150s (maior que 30.120s: ATIVO NO PRESENTE!)
-
-    Note over OA: 4. Reindexacao da Fila:<br/>- Descarta Cmd[0] e Cmd[1]<br/>- Cmd[2] promovido a novo Cmd[0]<br/>- Tempo residual do Cmd[0] = 30.150 - 30.120 = 0.030s<br/>- time_of_last_update = 10:20:30.120
+    Note over MPP,Clock: Instante t = 10:20:30.000 (Foto dos Sensores)
+    MPP->>MPP: Inicia otimização das Clothoides (Duração = 150 ms)
+    Note over Clock: O tempo avança: 10:20:30.050 ... 30.100 ... 30.150
+    MPP->>IPC: Publica mensagem com timestamp = 10:20:30.000
+    IPC->>OA: Mensagem recebida no OA
+    Note over OA,Clock: Relógio atual do OA = 10:20:30.150! (Latência = 150 ms)
+    OA->>OA: consume_motion_command_time() detecta que Cmd[0], Cmd[1] e Cmd[2] expiraram!
+    OA->>OA: Descarta os 3 comandos obsoletos
+    OA->>OA: Define Cmd[3] como o novo Cmd[0] (Sincronizado com o Presente)
 ```
 
 ---
