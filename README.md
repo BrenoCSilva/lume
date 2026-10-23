@@ -232,23 +232,89 @@ O `obstacle_avoider_timer_handler()` é chamado periodicamente a cada $\approx 2
 
 ---
 
-## 6. Interpretação dos Logs Reais no `/tmp/potencial_collision.log`
+## 6. Estudo de Caso Real: Transição de Plano e o Descarte de 70 Comandos
 
-Monitorando a execução real com `tail -f /tmp/potencial_collision.log`, você verá dois padrões claros de log:
+Durante um teste em veículo real, a inspeção da fila com prints detalhados registrou exatamente a transição entre um plano antigo e a chegada de um novo plano do MPP:
 
-### Padrão A: Descarte em Massa (Novo Plano do MPP com Latência)
+### 6.1 Fase 1: Condução Normal no Plano Antigo
+O robô trafegava executando um plano com degraus de $\Delta t = 0{,}060\text{ s}$ ($60\text{ ms}$). O timer do Obstacle Avoider consumia e descartava 1 ou 2 comandos por ciclo:
+
 ```text
-  [CONSUMO TEMPO] O tempo passou! Descartou 51 comando(s) executado(s) (v_antiga=1.66 m/s). Novo Cmd[0]: v=1.60 m/s (Restam 317 cmds na fila)
+soma_tempo: 30.445634
+[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.09 m/s). Novo Cmd[0]: v=0.10 m/s (Restam 507 cmds na fila)
+...
+soma_tempo: 30.053487
+[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.11 m/s). Novo Cmd[0]: v=0.11 m/s (Restam 500 cmds na fila)
+...
+soma_tempo: 29.974136
+[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.11 m/s). Novo Cmd[0]: v=0.11 m/s (Restam 499 cmds na fila)
 ```
-* **O que significa:** O MPP demorou cerca de $250\text{ ms}$ entre tirar a foto dos sensores e o plano chegar ao Obstacle Avoider.
-* **O que a função fez:** Eliminou de imediato os 51 comandos que correspondiam a esses $250\text{ ms}$ do passado. O caminhão começa executando a trajetória exatamente a partir da sua posição presente.
+* O veículo já havia acelerado e estava trafegando a **$v = 0{,}11\text{ m/s}$**.
 
-### Padrão B: Descarte Unitário Contínuo (Ciclos do Timer)
+---
+
+### 6.2 Fase 2: Chegada do Novo Plano do MPP (Antes do Consumo)
+Imediatamente a seguir, o MPP enviou um novo plano completo com **474 comandos** (índices `0` a `473`). O print capturou esse plano novo **antes** do `consume_motion_command_time()` atuar:
+
 ```text
-  [CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=1.62 m/s). Novo Cmd[0]: v=1.56 m/s (Restam 188 cmds na fila)
+plano atual (recém-chegado do MPP):
+ 0 --> v = -0.000999 | time = 0.020000
+ 1 --> v =  0.000635 | time = 0.020000
+ 2 --> v =  0.002268 | time = 0.020000
+ ...
+ 68 --> v = 0.110088 | time = 0.020000
+ 69 --> v = 0.111721 | time = 0.020000
+ 70 --> v = 0.113355 | time = 0.020000  <-- Este comando casa com a velocidade atual (0.11 m/s)!
+ 71 --> v = 0.114988 | time = 0.020000
+ 72 --> v = 0.116622 | time = 0.060000
+ ...
+ 472 --> v = 2.076970 | time = 0.060000
+ 473 --> v = 2.077500 | time = 0.006491
+soma_tempo: 25.506491
 ```
-* **O que significa:** O timer do Obstacle Avoider rodou, e o tempo decorrido foi suficiente para consumir e encerrar o degrau de tempo do comando do topo.
-* **O que a função fez:** Descartou o comando concluído e avançou a fila suavemente degrau por degrau.
+
+> [!NOTE]
+> Observe duas características cruciais do novo plano:
+> 1. Os primeiros 70 comandos foram gerados com degraus curtos de $\Delta t = 0{,}020\text{ s}$ ($20\text{ ms}$).
+> 2. O plano planejou uma arrancada partindo do repouso ($v \approx 0{,}00\text{ m/s}$) até $0{,}11\text{ m/s}$ no comando 70.
+
+---
+
+### 6.3 Fase 3: A Compensação de Latência em Ação
+O MPP demorou cerca de **$1{,}40\text{ segundos}$** calculando essa nova rota ($70 \times 0{,}020\text{ s} = 1{,}40\text{ s}$). Durante esse tempo, o caminhão continuou andando no mundo real.
+
+Ao executar `consume_motion_command_time()`, a função detectou que os primeiros 70 comandos já pertenciam ao passado e realizou o descarte em massa:
+
+```text
+[CONSUMO TEMPO] O tempo passou! Descartou 70 comando(s) executado(s) (v_antiga=-0.00 m/s). Novo Cmd[0]: v=0.11 m/s (Restam 404 cmds na fila)
+```
+* **Contagem de comandos:** $474\text{ comandos originais} - 70\text{ descartados} = \mathbf{404\text{ comandos restantes}}$.
+
+---
+
+### 6.4 Fase 4: O Plano Sincronizado Resultante
+No ciclo imediatamente seguinte, o print confirma que o antigo `Cmd[70]` assumiu a posição zero, perfeitamente sincronizado com a velocidade real do veículo ($0{,}11\text{ m/s}$):
+
+```text
+plano atual (após compensação):
+ 0 --> v = 0.113355 | time = 0.012115  <-- Antigo Cmd[70], com tempo residual fatiado!
+ 1 --> v = 0.114988 | time = 0.020000  <-- Antigo Cmd[71]
+ 2 --> v = 0.116622 | time = 0.060000  <-- Antigo Cmd[72]
+ 3 --> v = 0.121523 | time = 0.060000
+ ...
+ 403 --> v = 2.077500 | time = 0.006491
+soma_tempo: 24.098606
+```
+
+E a fila voltou ao consumo normal ciclo a ciclo:
+```text
+[CONSUMO TEMPO] O tempo passou! Descartou 3 comando(s)... Novo Cmd[0]: v=0.12 m/s (Restam 401 cmds na fila)
+[CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s)... Novo Cmd[0]: v=0.13 m/s (Restam 400 cmds na fila)
+```
+
+> [!TIP]
+> **Impacto na Condução:**  
+> Se esse descarte de 70 comandos não existisse, o caminhão receberia um comando de frear bruscamente até $0{,}00\text{ m/s}$ (o início obsoleto do plano de 1.4s atrás), gerando um tranco violento na transmissão e desestabilizando o engate das carretas. A compensação de latência garantiu uma transição $100\%$ contínua e suave.
 
 ---
 
