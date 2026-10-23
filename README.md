@@ -289,7 +289,7 @@ Imediatamente a seguir, o MPP enviou um novo plano completo com **474 comandos**
 > [!CAUTION]
 > **Esclarecimento Crucial: O Descarte é 100% TEMPORAL (Não por Velocidade):**  
 > A função `consume_motion_command_time()` **não consulta a velocidade ($v$)** para decidir quais comandos descartar. Ela não "busca um comando que tenha a velocidade atual do robô". O critério de descarte é **estritamente cronológico baseado no relógio**:
-> * Se o instante de término do comando for anterior ao relógio atual ($t_{\text{fim}} \le \text{current\_time}$), o comando pertence ao passado e é descartado.
+> * Se o instante de término do comando for anterior ao relógio atual ($$t_{\text{fim}} \le \text{current\_time}$$), o comando pertence ao passado e é descartado.
 > * A velocidade no comando 70 coincidir com a velocidade real do carro ($0{,}11\text{ m/s}$) é uma **consequência física**: o robô acelerou por $1{,}40\text{ s}$ no mundo real e o MPP também planejou uma aceleração ao longo desses mesmos $1{,}40\text{ s}$.
 
 Ao somar o timestamp base do plano ($T_{\text{base}}$) com a duração $\Delta t$ de cada degrau, a linha do tempo absoluta de cada comando fica evidente:
