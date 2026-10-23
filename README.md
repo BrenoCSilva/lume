@@ -41,34 +41,9 @@ typedef struct
 
 ---
 
-## 3. Linha do Tempo e Compensação de Latência
+## 3. O Algoritmo Passo a Passo e a Lógica Matemática
 
-A relação temporal entre a emissão do plano pelo MPP e o consumo pelo Obstacle Avoider é ilustrada abaixo:
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant MPP as Planejador MPP
-    participant IPC as Barramento IPC / ROS
-    participant OA as Obstacle Avoider
-    participant Clock as Relógio Real (astro_get_time)
-
-    Note over MPP,Clock: Instante t = 10:20:30.000 (Foto dos Sensores)
-    MPP->>MPP: Inicia otimização das Clothoides (Duração = 150 ms)
-    Note over Clock: O tempo avança: 10:20:30.050 ... 30.100 ... 30.150
-    MPP->>IPC: Publica mensagem com timestamp = 10:20:30.000
-    IPC->>OA: Mensagem recebida no OA
-    Note over OA,Clock: Relógio atual do OA = 10:20:30.150! (Latência = 150 ms)
-    OA->>OA: consume_motion_command_time() detecta que Cmd[0], Cmd[1] e Cmd[2] expiraram!
-    OA->>OA: Descarta os 3 comandos obsoletos
-    OA->>OA: Define Cmd[3] como o novo Cmd[0] (Sincronizado com o Presente)
-```
-
----
-
-## 4. O Algoritmo Passo a Passo
-
-O código de [`consume_motion_command_time()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L387-L465) executa as seguintes etapas:
+O código de [`consume_motion_command_time()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L387-L465) inicia obtendo o relógio atual do robô e o carimbo de referência:
 
 ```cpp
 static void
@@ -85,9 +60,14 @@ consume_motion_command_time(int motion_command_vetor, FILE *out_act)
     time_consumed = astro_robot_ackerman_motion_command_time_of_last_update;
 ```
 
+* **`current_time`**: O relógio do sistema no exato instante presente (`astro_get_time()`).
+* **`time_consumed`**: Inicia com `astro_robot_ackerman_motion_command_time_of_last_update`. Essa variável guarda:
+  * O timestamp em que o MPP gerou o plano (quando chega um novo plano do MPP); OU
+  * O timestamp do último consumo efetuado (quando o timer periódico está rodando).
+
+---
+
 ### Etapa 1: A Varredura de Término dos Comandos
-O acumulador `time_consumed` inicia no carimbo de referência `time_of_last_update` (momento do último consumo ou da geração do plano). A cada iteração:
-$$t_{\text{fim}}(i) = t_{\text{ref}} + \sum_{k=0}^{i} \Delta t_k$$
 
 ```cpp
     for (i = 0; i < num_motion_commands_in_vector[motion_command_vetor]; i++)
@@ -101,21 +81,64 @@ $$t_{\text{fim}}(i) = t_{\text{ref}} + \sum_{k=0}^{i} \Delta t_k$$
     }
 ```
 
-* **`time_consumed <= current_time`**: O término do comando $i$ já ficou no passado. O comando já foi cumprido pelas rodas e deve ser descartado.
-* **`time_consumed > current_time`**: O término do comando $i$ está além do relógio atual. **Este é o comando ativo no instante presente!** O loop é interrompido com o índice `i`.
+A cada iteração do `for`, a pergunta matemática que está sendo feita é:
+> **"Em que segundo exato do relógio o comando $i$ vai terminar de ser executado?"**
+
+* `time_consumed` começa no instante de referência inicial (`time_of_last_update`).
+* A cada comando somado (`time_consumed += Cmd[i].time`), `time_consumed` avança para o instante em que **aquele comando termina**.
+* O teste `if (time_consumed > current_time)` pergunta:
+  > **"O término deste comando $i$ está no futuro (depois do agora)?"**
+  * **Se for NÃO** (`time_consumed <= current_time`): Esse comando já expirou no passado! O carro já deveria tê-lo executado. O loop continua para o próximo comando.
+  * **Se for SIM** (`time_consumed > current_time`): **`break`!** Encontramos o primeiro comando cujo término ainda está no futuro. **É este comando que o carro deve estar executando EXATAMENTE AGORA!**
+
+---
+
+### Exemplo Prático com Linha do Tempo
+
+Imagine o seguinte cenário de condução real:
+
+1. **O MPP gera um plano:**
+   * O MPP tira uma foto dos sensores às **`10:20:30.000`** e começa a calcular a trajetória.
+   * `timestamp = 10:20:30.000`.
+   * Cada comando do plano dura $\Delta t = 0{,}050\text{ s}$ ($50\text{ ms}$).
+
+2. **A latência do MPP:**
+   * O MPP demora **$120\text{ ms}$** para calcular as clothoides, resolver otimizações e transmitir a mensagem via IPC/ROS.
+   * Quando a mensagem chega no Obstacle Avoider, o relógio real do robô (`astro_get_time()`) já avançou e marca:
+     $$\text{current\_time} = \mathbf{10:20:30.120}$$
+
+3. **O que acontece dentro do loop:**
+   * `time_consumed` inicia em `10:20:30.000`.
+   * **$i = 0$:** `time_consumed += 0.050` $\to \mathbf{10:20:30.050}$.  
+     *Termina em 30.050, mas já são 30.120!* $\to$ **Já passou! (Passado)**
+   * **$i = 1$:** `time_consumed += 0.050` $\to \mathbf{10:20:30.100}$.  
+     *Termina em 30.100, mas já são 30.120!* $\to$ **Já passou! (Passado)**
+   * **$i = 2$:** `time_consumed += 0.050` $\to \mathbf{10:20:30.150}$.  
+     *Termina em 30.150, e o relógio marca 30.120!* $\to \mathbf{10:20:30.150 > 10:20:30.120}$!  
+     **`break` no $i = 2$!**
+
+```
+Linha do Tempo:
+30.000s               30.050s               30.100s        30.120s        30.150s
+  |------ Cmd[0] ------|------ Cmd[1] ------|------ Cmd[2] ---*---|-- Cmd[3] --|
+  [==== Descartado ===][==== Descartado ===][  Consumido  | Resta ]
+                                                          ^
+                                                      AGORA (current_time = 30.120s)
+```
 
 ---
 
 ### Etapa 2: Reindexação e Descarte da Fila
-Se $i < \text{total de comandos}$, os comandos de $0$ a $i-1$ são descartados, e o comando $i$ passa a ocupar o índice `0`:
+
+Ao sair do loop, o índice `i` aponta para o comando que deve ser executado no presente:
 
 ```cpp
     if (i < num_motion_commands_in_vector[motion_command_vetor])
     {
-        // 1. Move o comando vigente para a posição zero
+        // 1. Move o comando vigente (Cmd[i]) para a posição zero da fila
         motion_commands_vector[motion_command_vetor][0] = motion_commands_vector[motion_command_vetor][i];
 
-        // 2. Ajusta a duração restante do comando que acabou de virar Cmd[0]
+        // 2. Ajusta a duração residual que resta do Cmd[0]
         motion_commands_vector[motion_command_vetor][0].time = time_consumed - current_time;
 
         // 3. Desloca todos os comandos futuros para a esquerda
@@ -128,15 +151,17 @@ Se $i < \text{total de comandos}$, os comandos de $0$ a $i-1$ são descartados, 
         astro_robot_ackerman_motion_command_time_of_last_update = current_time;
 ```
 
-#### O Ajuste de Tempo Residual:
-Se o comando $i$ tinha duração de $0{,}050\text{ s}$ e terminaria em $10:20:30.150$, mas o instante atual é $10:20:30.120$, restam apenas:
-$$\Delta t_{\text{restante}} = t_{\text{fim}} - t_{\text{atual}} = 30{,}150 - 30{,}120 = 0{,}030\text{ s}$$
-O código grava exatamente $0{,}030\text{ s}$ no `Cmd[0].time`, garantindo precisão milimétrica.
+#### O Ajuste Milimétrico do Tempo Residual:
+No nosso exemplo, o `Cmd[2]` terminaria em `10:20:30.150`, mas o instante presente é `10:20:30.120`. Logo, esse degrau já foi executado por $20\text{ ms}$, restando apenas:
+$$\Delta t_{\text{restante}} = t_{\text{fim}} - t_{\text{atual}} = 30{,}150 - 30{,}120 = \mathbf{0{,}030\text{ s}}\ (30\text{ ms})$$
+
+O código grava exatamente $0{,}030\text{ s}$ no `Cmd[0].time`, descartando os comandos `Cmd[0]` e `Cmd[1]`. O `Cmd[2]` passa a ser o novo `Cmd[0]`, sincronizado com o instante exato do caminhão.
 
 ---
 
 ### Etapa 3: Tratamento de Esgotamento Total (*Failsafe*)
-Se o tempo decorrido for maior do que a soma de **todos** os comandos do plano (por exemplo, se o MPP travar ou a rede falhar e o robô consumir todo o horizonte de tempo):
+
+Se o tempo decorrido for maior do que a soma de **todos** os comandos da fila (por exemplo, se o MPP travar e parar de enviar planos):
 
 ```cpp
     else
@@ -157,45 +182,71 @@ O sistema protege o veículo forçando a velocidade imediatamente a $0{,}00\text
 
 ---
 
-## 5. Exemplo Numérico Detalhado
+## 4. Diagrama de Sequência Integrado (MPP $\longleftrightarrow$ OA)
 
-Considere um plano emitido pelo MPP com comandos de $\Delta t = 50\text{ ms}$ ($0{,}05\text{ s}$):
+Agora que a lógica matemática está clara, o fluxo de comunicação entre o MPP e o Obstacle Avoider pode ser compreendido detalhadamente com os valores reais de tempo:
 
-| Índice | Comando Original | Duração ($\Delta t$) | Início Teórico | Fim Teórico ($t_{\text{fim}}$) | Status em $t_{\text{atual}} = 10:20:30.120$ |
-| :---: | :---: | :---: | :---: | :---: | :---: |
-| `Cmd[0]` | $v = 1.67\text{ m/s}$ | $0.05\text{ s}$ | $10:20:30.000$ | $10:20:30.050$ | **Passado** (Descartado) |
-| `Cmd[1]` | $v = 1.67\text{ m/s}$ | $0.05\text{ s}$ | $10:20:30.050$ | $10:20:30.100$ | **Passado** (Descartado) |
-| `Cmd[2]` | $v = 1.66\text{ m/s}$ | $0.05\text{ s}$ | $10:20:30.100$ | $10:20:30.150$ | **PRESENTE!** Vira o novo `Cmd[0]` com $\Delta t = 0.03\text{ s}$ |
-| `Cmd[3]` | $v = 1.65\text{ m/s}$ | $0.05\text{ s}$ | $10:20:30.150$ | $10:20:30.200$ | Futuro (Vira o novo `Cmd[1]`) |
+```mermaid
+sequenceDiagram
+    autonumber
+    participant MPP as Planejador MPP
+    participant OA as Obstacle Avoider
 
-```
-Linha do Tempo Real:
-30.000s               30.050s               30.100s        30.120s        30.150s
-  |------ Cmd[0] ------|------ Cmd[1] ------|------ Cmd[2] ---*---|-- Cmd[3] --|
-  [==== Descartado ===][==== Descartado ===][  Consumido  | Resta ]
-                                                          ^
-                                                      AGORA (current_time)
+    Note over MPP: 1. Foto dos sensores em t = 10:20:30.000<br/>Calcula clothoides (demora 120 ms)
+    MPP->>OA: Envia plano com timestamp = 10:20:30.000<br/>(Cmd[0]=50ms, Cmd[1]=50ms, Cmd[2]=50ms...)
+
+    Note over OA: 2. Mensagem chega ao OA no relógio:<br/>current_time = 10:20:30.120 (Latência = 120 ms)
+    Note over OA: 3. Executa consume_motion_command_time():<br/>time_consumed começa em 10:20:30.000
+
+    Note over OA: • Cmd[0]: fim = 30.000 + 0.050 = 30.050s <= 30.120s (Expirou!)<br/>• Cmd[1]: fim = 30.050 + 0.050 = 30.100s <= 30.120s (Expirou!)<br/>• Cmd[2]: fim = 30.100 + 0.050 = 30.150s > 30.120s (ATIVO NO PRESENTE!)
+
+    Note over OA: 4. Reindexação da Fila:<br/>• Descarta Cmd[0] e Cmd[1]<br/>• Cmd[2] é promovido a novo Cmd[0]<br/>• Tempo residual do Cmd[0] = 30.150 - 30.120 = 0.030s<br/>• time_of_last_update = 10:20:30.120
 ```
 
 ---
 
-## 6. Interpretação dos Logs Reais
+## 5. Comportamento Contínuo nos Ciclos Periódicos do Timer
 
-Durante a execução real, monitorando `/tmp/potencial_collision.log`, você observará dois padrões distintos de descarte temporal:
+O que acontece nos ciclos seguintes, enquanto o MPP ainda não enviou outro plano?
+
+O `obstacle_avoider_timer_handler()` é chamado periodicamente a cada $\approx 20\text{ ms}$ ($0{,}020\text{ s}$):
+
+1. **Ciclo seguinte ($20\text{ ms}$ depois, $t = 10:20:30.140$):**
+   * `time_consumed` inicia em `10:20:30.120`.
+   * $i = 0$: `time_consumed += Cmd[0].time` ($0{,}030\text{ s}$) $\to 10:20:30.150$.
+   * Como $10:20:30.150 > 10:20:30.140$, ocorre o **`break` no $i = 0$**.
+   * Nenhum comando é descartado! O `Cmd[0]` continua ativo, mas sua duração residual é atualizada para:
+     $$\Delta t = 30{,}150 - 30{,}140 = \mathbf{0{,}010\text{ s}}\ (10\text{ ms})$$
+   * `time_of_last_update` é atualizado para `10:20:30.140`.
+
+2. **Segundo ciclo ($40\text{ ms}$ depois, $t = 10:20:30.160$):**
+   * `time_consumed` inicia em `10:20:30.140`.
+   * $i = 0$: `time_consumed += Cmd[0].time` ($0{,}010\text{ s}$) $\to 10:20:30.150 \le 10:20:30.160$ (O `Cmd[0]` expirou!).
+   * $i = 1$: `time_consumed += Cmd[1].time` ($0{,}050\text{ s}$) $\to 10:20:30.200 > 10:20:30.160$ (**`break` no $i = 1$**).
+   * O comando antigo é descartado, `Cmd[1]` vira o novo `Cmd[0]`, e o log avisa:
+     ```text
+     [CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s)...
+     ```
+
+---
+
+## 6. Interpretação dos Logs Reais no `/tmp/potencial_collision.log`
+
+Monitorando a execução real com `tail -f /tmp/potencial_collision.log`, você verá dois padrões claros de log:
 
 ### Padrão A: Descarte em Massa (Novo Plano do MPP com Latência)
 ```text
   [CONSUMO TEMPO] O tempo passou! Descartou 51 comando(s) executado(s) (v_antiga=1.66 m/s). Novo Cmd[0]: v=1.60 m/s (Restam 317 cmds na fila)
 ```
-* **Significado:** O MPP demorou cerca de $250\text{ ms}$ para calcular e entregar este plano.
-* **Ação do OA:** Descartou de uma só vez os 51 comandos correspondentes aos $250\text{ ms}$ passados, reposicionando o início do plano exatamente na pose atual do caminhão.
+* **O que significa:** O MPP demorou cerca de $250\text{ ms}$ entre tirar a foto dos sensores e o plano chegar ao Obstacle Avoider.
+* **O que a função fez:** Eliminou de imediato os 51 comandos que correspondiam a esses $250\text{ ms}$ do passado. O caminhão começa executando a trajetória exatamente a partir da sua posição presente.
 
-### Padrão B: Descarte Unitário Contínuo (Ciclos Periódicos do Timer)
+### Padrão B: Descarte Unitário Contínuo (Ciclos do Timer)
 ```text
   [CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=1.62 m/s). Novo Cmd[0]: v=1.56 m/s (Restam 188 cmds na fila)
 ```
-* **Significado:** O Obstacle Avoider roda seu timer a cada $20\text{ ms}$.
-* **Ação do OA:** Conforme o veículo avança e consome os $20\text{ ms}$ a $50\text{ ms}$ de cada degrau de comando, a fila vai sendo fatiada e avançada suavemente comando por comando.
+* **O que significa:** O timer do Obstacle Avoider rodou, e o tempo decorrido foi suficiente para consumir e encerrar o degrau de tempo do comando do topo.
+* **O que a função fez:** Descartou o comando concluído e avançou a fila suavemente degrau por degrau.
 
 ---
 
@@ -206,20 +257,19 @@ flowchart TD
     A["consume_motion_command_time()"] --> B["current_time = astro_get_time()<br/>time_consumed = time_of_last_update"]
     B --> C["Loop i = 0 até N comandos"]
     C --> D["time_consumed += cmd[i].time"]
-    D --> E{"time_consumed > current_time?"}
-    E -- Não (Comando no passado) --> C
-    E -- Sim (Comando no presente) --> F["Interrompe loop (break em i)"]
+    D --> E{"time_consumed > current_time?<br/>(O fim deste cmd está no futuro?)"}
+    E -- Não (Cmd no passado) --> C
+    E -- Sim (Cmd no presente) --> F["Interrompe loop (break em i)"]
 
     F --> G{"i < N comandos?"}
     G -- Sim --> H["Cmd[0] = Cmd[i]<br/>Cmd[0].time = time_consumed - current_time"]
     H --> I["Desloca comandos restantes j = 1..N-i<br/>time_of_last_update = current_time"]
     I --> J{"i > 0?"}
     J -- Sim --> K["Imprime [CONSUMO TEMPO]<br/>Descartou i comandos"]
-    J -- Não --> L["Fim do ciclo (Cmd[0] ainda ativo)"]
+    J -- Não --> L["Fim do ciclo (Cmd[0] ainda ativo com tempo fatiado)"]
     K --> L
 
     G -- Não (Fila Esgotada) --> M["Cmd[0].v = 0.00 m/s<br/>Cmd[0].time = 1.0s"]
     M --> N["Imprime [CONSUMO TOTAL]<br/>Failsafe ativado"]
     N --> L
 ```
-
