@@ -207,28 +207,51 @@ sequenceDiagram
 
 ---
 
-## 5. Comportamento Contínuo nos Ciclos Periódicos do Timer
+## 5. Dinâmica de Disparo e Consumo Contínuo Entre Planos
 
-O que acontece nos ciclos seguintes, enquanto o MPP ainda não enviou outro plano?
+### 5.1 O `obstacle_avoider_timer_handler()` é um Timer Fixo?
+**Não!** Apesar do nome histórico (*timer handler*), a função central **não roda por um timer periódico independente do IPC** (a linha `astro_ipc_addPeriodicTimer` está deliberadamente comentada no [`main()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L2315)).
 
-O `obstacle_avoider_timer_handler()` é chamado periodicamente a cada $\approx 20\text{ ms}$ ($0{,}020\text{ s}$):
+A arquitetura do Obstacle Avoider é **orientada a eventos (*event-driven*)**, disparada por três gatilhos:
 
-1. **Ciclo seguinte ($20\text{ ms}$ depois, $t = 10:20:30.140$):**
-   * `time_consumed` inicia em `10:20:30.120`.
-   * $i = 0$: `time_consumed += Cmd[0].time` ($0{,}030\text{ s}$) $\to 10:20:30.150$.
-   * Como $10:20:30.150 > 10:20:30.140$, ocorre o **`break` no $i = 0$**.
-   * Nenhum comando é descartado! O `Cmd[0]` continua ativo, mas sua duração residual é atualizada para:
-     $$\Delta t = 30{,}150 - 30{,}140 = \mathbf{0{,}010\text{ s}}\ (10\text{ ms})$$
-   * `time_of_last_update` é atualizado para `10:20:30.140`.
-
-2. **Segundo ciclo ($40\text{ ms}$ depois, $t = 10:20:30.160$):**
-   * `time_consumed` inicia em `10:20:30.140`.
-   * $i = 0$: `time_consumed += Cmd[0].time` ($0{,}010\text{ s}$) $\to 10:20:30.150 \le 10:20:30.160$ (O `Cmd[0]` expirou!).
-   * $i = 1$: `time_consumed += Cmd[1].time` ($0{,}050\text{ s}$) $\to 10:20:30.200 > 10:20:30.160$ (**`break` no $i = 1$**).
-   * O comando antigo é descartado, `Cmd[1]` vira o novo `Cmd[0]`, e o log avisa:
-     ```text
-     [CONSUMO TEMPO] O tempo passou! Descartou 1 comando(s)...
+1. **Chegada de um Novo Plano do MPP (`navigator_ackerman_plan_message_handler`):**
+   * Disparo **imediato**. O OA precisa avaliar o novo plano no mesmo instante em que ele chega via IPC, sem nenhuma espera.
+2. **Chegada de Nova Odometria / GPS (`localize_ackerman_globalpos_message_handler`):**
+   * O módulo de localização publica a pose em alta frequência ($50\text{ Hz}$ ou $100\text{ Hz}$).
+   * Para não sobrecarregar a CPU checando colisões desnecessariamente a cada $10\text{ ms}$, essa chamada passa pelo estrangulador [`can_execute_obstacle_avoider_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1103):
+     ```cpp
+     if ((current_time - executed_obstacle_avoider_handler_last_timestamp) > 0.07)
+     {
+         executed_obstacle_avoider_handler_last_timestamp = current_time;
+         return (1); // Permite executar o handler
+     }
      ```
+3. **Chegada de Novo Mapa de Distâncias (`astro_obstacle_distance_mapper_on_distance_map_message_handler`):**
+   * Também passa pelo mesmo estrangulador de $70\text{ ms}$.
+
+Portanto, **enquanto um novo plano do MPP não chega**, quem mantém o `obstacle_avoider_timer_handler()` rodando é a **odometria/GPS e o mapa**, operando a uma taxa efetiva de **$\approx 12\text{ a }14\text{ Hz}$** (a cada $\approx 70\text{ ms} \dots 90\text{ ms}$).
+
+---
+
+### 5.2 O Consumo Passo a Passo na Janela de $\approx 75\text{ ms}$
+
+Como os comandos do MPP normalmente duram $\Delta t = 60\text{ ms}$ (ou $20\text{ ms}$) e o disparador de odometria libera o handler a cada $\approx 75\text{ ms}$, observe o que ocorre ciclo a ciclo:
+
+1. **Ciclo 1 ($t = 10:43:39.552$, `latencia = 0.075s`):**
+   * O tempo decorrido desde o último ciclo foi de $75\text{ ms}$.
+   * O `Cmd[0]` da fila tinha tempo residual de apenas $15\text{ ms}$.
+   * A soma temporal ultrapassa o `Cmd[0]`, descartando-o. O `Cmd[1]` (que durava $60\text{ ms}$) passa a ser o novo `Cmd[0]`, tendo seu tempo fatiado.
+   * Mensagem no log:
+     ```text
+     [CONSUMO TEMPO] [10:43:39.552] O tempo passou! Descartou 1 comando(s)...
+     ```
+
+2. **Ciclo 2 ($85\text{ ms}$ depois, $t = 10:43:39.627$):**
+   * Nova mensagem de odometria passa pelo filtro de $70\text{ ms}$.
+   * `time_consumed` avança mais $85\text{ ms}$, consumindo o resto do `Cmd[0]` e atingindo o `Cmd[1]`.
+   * Novo descarte de 1 ou 2 comandos, mantendo o comando do topo sempre no presente.
+
+É exatamente por isso que, na ausência de novos planos, o veículo continua acelerando e curvando de forma suave: a cada $\approx 75\text{ ms}$, o OA consome a fatia de tempo correspondente e promove o próximo comando da fila.
 
 ---
 
