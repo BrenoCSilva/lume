@@ -167,3 +167,82 @@ sequenceDiagram
         end
     end
 ```
+
+---
+
+## 4. Exemplo Prático: Simulação Completa da Atuação e Recálculo
+
+O log real abaixo (monitorado via `tail -f /tmp/potencial_collision.log`) demonstra todas as etapas descritas nas seções anteriores atuando em conjunto durante a detecção de um obstáculo:
+
+### 4.1 Fase 1: Validação de Persistência (Debounce 1/5 até 5/5) e Primeiro Recálculo
+Quando a Etapa 1 ou a Etapa 2 começa a preencher `global_acc_to_avoid_potential_collision = -1.00 m/s^2`, as 4 primeiras chamadas apenas validam a persistência. Na 5ª chamada consecutiva, o freio de emergência é ativado e a função `velocity_recalculate_with_acceleration()` esmaga o plano de 218 comandos do MPP (que originalmente pedia `v_MPP = 1.38 m/s`):
+
+```text
+[DEBOUNCE 1/5] Obstaculo detectado (acc=-1.00 m/s^2). Validando persistencia...
+[DEBOUNCE 2/5] Obstaculo detectado (acc=-1.00 m/s^2). Validando persistencia...
+[DEBOUNCE 3/5] Obstaculo detectado (acc=-1.00 m/s^2). Validando persistencia...
+[DEBOUNCE 4/5] Obstaculo detectado (acc=-1.00 m/s^2). Validando persistencia...
+>>> [DEBOUNCE 5/5 CONFIRMADO -> FREIO DE EMERGENCIA ATIVADO!] <<< acc = -1.00 m/s^2
+
+  [RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 218 comandos:
+    Cmd[00]: v_MPP = 1.38 -> v_OA = 1.37 m/s | dt=0.02s
+    Cmd[01]: v_MPP = 1.38 -> v_OA = 1.35 m/s | dt=0.02s
+    Cmd[02]: v_MPP = 1.38 -> v_OA = 1.33 m/s | dt=0.02s
+    ...
+    Cmd[22]: v_MPP = 1.38 -> v_OA = 0.93 m/s | dt=0.03s
+    Cmd[23]: v_MPP = 1.38 -> v_OA = 0.87 m/s | dt=0.08s
+    ...
+    Cmd[36]: v_MPP = 1.38 -> v_OA = 0.09 m/s | dt=0.12s
+    Cmd[37]: v_MPP = 1.38 -> v_OA = 0.00 m/s | dt=0.12s [PARADA ALCANÇADA!]
+    [ZERADOS] +180 comandos subsequentes travados em 0.00 m/s
+```
+* **Redução progressiva e dilatação de `dt`:** A velocidade cai degrau a degrau de `1.38 m/s` até atingir a parada no `Cmd[37]`, enquanto o tempo de cada passo (`dt`) aumenta proporcionalmente (`0.02s` $\to$ `0.03s` $\to$ `0.12s`) pois o veículo passa mais devagar por cada segmento.
+* **Travamento do restante da fila:** Do `Cmd[38]` ao `Cmd[217]` (**180 comandos**), todas as velocidades são zeradas (`0.00 m/s`).
+
+---
+
+### 4.2 Fase 2: Atuação Contínua Entre Planos do MPP até Esgotar Velocidades
+Nos ciclos seguintes do timer (enquanto o MPP ainda não enviou um plano novo), observe como o número de comandos cai (`218` $\to$ `214` $\to$ `211`) e o campo `v_MPP` já reflete as velocidades que o próprio OA havia reduzido no ciclo anterior:
+
+```text
+  [RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 214 comandos:
+    Cmd[00]: v_MPP = 1.29 -> v_OA = 1.28 m/s | dt=0.01s
+    Cmd[01]: v_MPP = 1.27 -> v_OA = 1.26 m/s | dt=0.02s
+    ...
+    Cmd[26]: v_MPP = 0.45 -> v_OA = 0.11 m/s | dt=0.18s
+    Cmd[27]: v_MPP = 0.39 -> v_OA = 0.00 m/s | dt=0.20s [PARADA ALCANÇADA!]
+    [ZERADOS] +186 comandos subsequentes travados em 0.00 m/s
+
+  [RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 211 comandos:
+    Cmd[00]: v_MPP = 1.21 -> v_OA = 1.21 m/s | dt=0.00s
+    ...
+    Cmd[21]: v_MPP = 0.31 -> v_OA = 0.14 m/s | dt=0.21s
+    Cmd[22]: v_MPP = 0.21 -> v_OA = 0.00 m/s | dt=0.32s [PARADA ALCANÇADA!]
+    [ZERADOS] +188 comandos subsequentes travados em 0.00 m/s
+
+  [VELOCITY_RECALCULTE] TODOS OS COMANDOS DE V SAO NULOS
+
+  [VELOCITY_RECALCULTE] TODOS OS COMANDOS DE V SAO NULOS
+```
+* **Conexão com o `consume_motion_command_time()`:** A cada ciclo, o consumo temporal descarta os primeiros comandos executados (`218` $\to$ `214` $\to$ `211`) e o `potential_collision_treatment()` reaplica a frenagem sobre o plano que ele mesmo modificou, puxando a parada para cada vez mais perto (`Cmd[37]` $\to$ `Cmd[27]` $\to$ `Cmd[22]`), até que restem apenas comandos nulos na fila (`TODOS OS COMANDOS DE V SAO NULOS`).
+* Assim que o MPP envia um **novo plano** (ex.: `230 comandos` tentando acelerar novamente para `v_MPP = 1.38 m/s`), como o alarme continua ativo, o OA imediatamente recalcula e zera o novo plano também.
+
+---
+
+### 4.3 Fase 3: A Janela de Retenção de $1{,}0\text{ s}$ Mesmo Após o `[DEBOUNCE RESET]`
+Mais adiante no log, ocorre um momento em que a trajetória fica temporariamente livre na leitura atual (`global_acc_to_avoid_potential_collision == 0.0`), disparando o reset do contador:
+
+```text
+[DEBOUNCE RESET] Trajetoria desobstruida. Debounce zerado.
+
+
+  [RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 239 comandos:
+    Cmd[00]: v_MPP = 0.47 -> v_OA = 0.45 m/s | dt=0.02s
+    Cmd[01]: v_MPP = 0.44 -> v_OA = 0.42 m/s | dt=0.03s
+    ...
+    Cmd[11]: v_MPP = 0.15 -> v_OA = 0.06 m/s | dt=0.07s
+    Cmd[12]: v_MPP = 0.12 -> v_OA = 0.00 m/s | dt=0.09s [PARADA ALCANÇADA!]
+    [ZERADOS] +226 comandos subsequentes travados em 0.00 m/s
+```
+* **Por que o recálculo continuou atuando mesmo após o `[DEBOUNCE RESET]`?**  
+  Exatamente por causa da trava temporal `if ((now - last_ativation_timestamp) < 1.0)` descrita no Passo 2! Mesmo que `it_count` tenha sido zerado naquele instante, o sistema **mantém a frenagem de emergência ativa por mais $1{,}0\text{ segundo}$** usando a desaceleração salva em `last_global_acc_to_avoid_potential_collision` (`-1.00 m/s^2`), evitando que uma falha momentânea de detecção solte o freio prematuramente diante do obstáculo.
