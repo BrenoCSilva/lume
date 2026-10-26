@@ -62,6 +62,8 @@ else
 * **Nas iterações 1 a 4 (`it_count < 5`):** O código apenas incrementa `it_count`, sem frear o caminhão ainda. Se o obstáculo sumir antes da 5ª iteração, `it_count` volta a `0` (`[DEBOUNCE RESET]`).
 * **A partir da 5ª iteração consecutiva (`it_count >= 5`):** Confirma-se que o obstáculo é real. Nesse instante, salva-se o horário atual em `last_ativation_timestamp` e congela-se a desaceleração em `last_global_acc_to_avoid_potential_collision`.
 
+![Validação de persistência do Debounce 1/5 até a ativação em 5/5](img/debounce_5_5_confirmado.png)
+
 ---
 
 ### Passo 2: Manutenção do Freio (`< 1.0 s` após a última detecção) e Modo Auditoria
@@ -90,12 +92,8 @@ if ((now - last_ativation_timestamp) < 1.0)
 Com `use_potential_collision == 1`, a função chama [`velocity_recalculate_with_acceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1060-L1177) para modificar diretamente o vetor de comandos ativo (`current_motion_commands_vector`):
 
 ```cpp
-velocity_recalculate_with_acceleration(
-    current_motion_commands_vector, 
-    num_motion_commands,
-    last_global_acc_to_avoid_potential_collision, 
-    (should_print_act ? out_act : NULL)
-);
+	velocity_recalculate_with_acceleration(current_motion_commands_vector, num_motion_commands, last_global_acc_to_avoid_potential_collision);
+
 ```
 
 Dentro de `velocity_recalculate_with_acceleration()`, cada comando $i$ da fila tem sua velocidade reduzida progressivamente usando a desaceleração de emergência (`acceleration`, ex.: $-1{,}00\text{ m/s}^2$) e seu tempo de passo reajustado proporcionalmente:
@@ -109,11 +107,12 @@ for (i = 0; i < num_motion_commands; i++)
     motion_commands_vector[i].v += acceleration * motion_commands_vector[i].time;
     motion_commands_vector[i].time *= (1 - (motion_commands_vector[i].v / original_index_velocity)) + 1;
 
-    set_new_motion_command_needs_to_be_published(1);
+    if (get_new_motion_command_needs_to_be_published() == 0)
+        set_new_motion_command_needs_to_be_published(1); // sinaliza que esse plano deve ser publicado
 
-    bool stopped = (fabs(motion_commands_vector[i].v) < 0.05) ||
-                   (first_sign != astro_sign(motion_commands_vector[i].v));
-    if (stopped)
+    if ((velocidade_atual < 0.05) ||
+        (sinal_velocidade_atual != sinal_velocidade_inicial) || // a frenagem passou do zero e inverteu o sentido
+        (velocidade_atual > velocidade_inicial))                // redundância para impedir aumento indevido de velocidade
     {
         motion_commands_vector[i].time = 1.0;
         motion_commands_vector[i].v = 0.0;
@@ -130,8 +129,8 @@ for (; i < num_motion_commands; i++)
 }
 ```
 * Assim que a velocidade calculada cai abaixo de $0{,}05\text{ m/s}$ (ou inverte de sinal), aquele comando e **todos os comandos subsequentes da fila são cravados em `v = 0.0 m/s` e `time = 1.0 s`**.
-* A flag `set_new_motion_command_needs_to_be_published(1)` avisa o final do `obstacle_avoider_timer_handler()` que o plano foi modificado pelo OA e precisa ser republicado imediatamente para o controle de baixo nível.
-* Por fim, publica-se o erro **`ASTRO_ERROR_CODE_204`** via IPC (com cooldown de $0{,}5\text{ s}$) e registra-se o evento em `./potential_collision_error_log.txt`.
+* A flag `set_new_motion_command_needs_to_be_published(1)` avisa o final do `obstacle_avoider_timer_handler()` que o plano foi modificado pelo OA e precisa ser republicado imediatamente.
+* Por fim, publica-se o erro **`ASTRO_ERROR_CODE_204`** via IPC (com cooldown de $0{,}5\text{ s}$) 
 
 ---
 
@@ -172,7 +171,7 @@ sequenceDiagram
 
 ## 4. Exemplo Prático: Simulação Completa da Atuação e Recálculo
 
-O log real abaixo (monitorado via `tail -f /tmp/potencial_collision.log`) demonstra todas as etapas descritas nas seções anteriores atuando em conjunto durante a detecção de um obstáculo:
+O log simulado abaixo demonstra todas as etapas descritas nas seções anteriores atuando em conjunto durante a detecção de um obstáculo:
 
 ### 4.1 Fase 1: Validação de Persistência (Debounce 1/5 até 5/5) e Primeiro Recálculo
 Quando a Etapa 1 ou a Etapa 2 começa a preencher `global_acc_to_avoid_potential_collision = -1.00 m/s^2`, as 4 primeiras chamadas apenas validam a persistência. Na 5ª chamada consecutiva, o freio de emergência é ativado e a função `velocity_recalculate_with_acceleration()` esmaga o plano de 218 comandos do MPP (que originalmente pedia `v_MPP = 1.38 m/s`):
@@ -236,7 +235,7 @@ Mais adiante no log, ocorre um momento em que a trajetória fica temporariamente
 [DEBOUNCE RESET] Trajetoria desobstruida. Debounce zerado.
 
 
-  [RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 239 comandos:
+  [RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 239 comandos: // o plano antes tinha tamanho 211 se aumentou eh pq o mpp enviou
     Cmd[00]: v_MPP = 0.47 -> v_OA = 0.45 m/s | dt=0.02s
     Cmd[01]: v_MPP = 0.44 -> v_OA = 0.42 m/s | dt=0.03s
     ...
@@ -245,4 +244,31 @@ Mais adiante no log, ocorre um momento em que a trajetória fica temporariamente
     [ZERADOS] +226 comandos subsequentes travados em 0.00 m/s
 ```
 * **Por que o recálculo continuou atuando mesmo após o `[DEBOUNCE RESET]`?**  
-  Exatamente por causa da trava temporal `if ((now - last_ativation_timestamp) < 1.0)` descrita no Passo 2! Mesmo que `it_count` tenha sido zerado naquele instante, o sistema **mantém a frenagem de emergência ativa por mais $1{,}0\text{ segundo}$** usando a desaceleração salva em `last_global_acc_to_avoid_potential_collision` (`-1.00 m/s^2`), evitando que uma falha momentânea de detecção solte o freio prematuramente diante do obstáculo.
+  Exatamente por causa da trava temporal `if ((now - last_ativation_timestamp) < 1.0)` descrita no Passo 2! Mesmo que `it_count` tenha sido zerado naquele instante, o sistema **mantém a frenagem de emergência ativa por mais `1.0 s`** usando a desaceleração salva em `last_global_acc_to_avoid_potential_collision` (`-1.00 m/s^2`), evitando que uma falha momentânea de detecção solte o freio prematuramente diante do obstáculo.
+
+---
+
+### 4.4 Análise Detalhada: Novo Plano do MPP após Zeramento e Consumo de Comandos
+
+A captura abaixo evidencia perfeitamente a interação entre o zeramento da fila, a chegada de um novo plano do MPP e o consumo temporal entre dois ciclos consecutivos do `obstacle_avoider_timer_handler()`:
+
+![Recálculo sobre novo plano do MPP e consumo de 3 comandos na sequência](img/recalculo_consumo_3_comandos.png)
+
+Observando a sequência da imagem de cima para baixo, extraímos três conclusões diretas:
+
+1. **Plano Anterior Totalmente Zerado (`TODOS OS COMANDOS DE V SAO NULOS`):**
+   * A primeira linha azul comprova que, naquela execução, `velocity_recalculate_with_acceleration()` percorreu o vetor e identificou que **todos os comandos restantes já estavam com velocidade zero** (`v = 0.00 m/s`), encerrando sem precisar recalcular nada.
+
+2. **Chegada de um Novo Plano do MPP Durante o Estado de Emergência (`258 comandos`):**
+   * Se o plano anterior já estava todo zerado, o único motivo para na linha seguinte surgirem **258 comandos** com velocidades positivas (`v_MPP = 0.64 m/s`) é que **o MPP acabou de enviar um plano novo** (disparando imediatamente o handler do MPP).
+   * Como o estado de emergência ainda estava ativo (seja pela persistência da colisão ou dentro da janela de `1.0 s`), o OA interceptou esse novo plano na mesma hora e recalculou as velocidades do `Cmd[00]` até alcançar a parada no `Cmd[29]` (`v_OA = 0.00 m/s`), travando os `+228 comandos` seguintes em zero.
+   * Repare especificamente no resultado calculado pelo OA para o quarto comando dessa fila (`Cmd[03]`):
+     * `Cmd[03]: v_MPP = 0.64 -> v_OA = 0.57 m/s | dt=0.02s`
+
+3. **Consumo de 3 Comandos e Reaproveitamento do Plano Modificado (`258` $\to$ `255 comandos`):**
+   * No bloco seguinte (`[RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 255 comandos`), a colisão continua ativa, então o recálculo é chamado novamente (desta vez disparado pelo handler do `localize` ou do mapa de distâncias, já que o MPP não mandou outro plano).
+   * O tamanho da fila diminuiu de **258 para 255 comandos** porque a função `consume_motion_command_time()` descartou os **3 primeiros comandos** (`Cmd[00]`, `Cmd[01]` e `Cmd[02]`) que já foram executados pelo veículo nesse intervalo de tempo.
+   * Com o descarte dos 3 primeiros (`00`, `01` e `02`), o antigo **`Cmd[03]`** (que o OA havia deixado com **`v_OA = 0.57 m/s`**) passou a ser o novo **`Cmd[00]`** da fila de 255 comandos:
+     * `Cmd[00]: v_MPP = 0.57 -> v_OA = 0.56 m/s | dt=0.00s`
+   * Isso comprova visualmente que, enquanto não chega um plano novo do MPP, **o OA opera diretamente sobre o plano que ele mesmo modificou no ciclo anterior**!
+
