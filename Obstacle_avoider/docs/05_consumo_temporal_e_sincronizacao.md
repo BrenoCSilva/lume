@@ -17,7 +17,7 @@ Em um veículo autônomo, o planejador de trajetória ([MPP - Model Predictive P
 
 > [!IMPORTANT]
 > **Missão da Função:**  
-> `consume_motion_command_time()` garante que o comando na posição zero da fila (`Cmd[0]`) corresponda **exatamente ao instante presente no relógio do veículo**, descartando fatias obsoletas do passado e fatiando o comando ativo no tempo.
+> `consume_motion_command_time()` garante que o comando na posição zero da fila (`Cmd[0]`) corresponda **exatamente ao instante presente no relógio do veículo**, descartando comandos do passado.
 
 ---
 
