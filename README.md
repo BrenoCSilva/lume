@@ -69,66 +69,74 @@ astro_obstacle_avoider_set_trajectory_from_deceleration(
 
 ---
 
-## 3. Fundamentos Físicos e Cinemáticos do Algoritmo
+## 3. Fluxo de Funcionamento da `astro_obstacle_avoider_set_trajectory_from_deceleration()`
 
-O algoritmo executa uma integração numérica discreta no tempo que simula a parada completa do veículo do instante presente ($v = v_0$) até o repouso absoluto ($v = 0{,}0\text{ m/s}$).
+O objetivo central da [`astro_obstacle_avoider_set_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1308-L1401) é **tentar parar o veículo mantendo seu ângulo de esterçamento ($\phi$) fixo** e verificar se essa trajetória até a parada completa é segura.
 
-### 3.1 A Hipótese do Ângulo de Esterçamento Fixo ($\phi$ Fixo)
-Em situações de pânico ou frenagem de emergência repentina, a reação física primordial é o acionamento pleno dos freios de serviço. Durante esse intervalo de parada (frequentemente inferior a $1{,}5\text{ s}$), o volante permanece na posição angular em que estava ($\phi = \text{constante}$).
+Para fazer isso, a função executa um loop iterativo (`while (fabs(current_velocity) > 0.0)`) que projeta o futuro passo a passo:
 
-Portanto, o veículo descreverá uma trajetória em **arco de círculo** (ou reta se $\phi = 0$). O raio desse arco é determinado pelo modelo cinemático de Ackerman da cabine:
-$$R = \frac{L}{\tan(\phi)}$$
-onde $L$ é a distância entre os eixos da cabine.
-
----
-
-### 3.2 O Modelo Cinemático com Articulação de Carretas
-A cada passo $k$ da simulação, a nova pose espacial da cabine e de cada uma das carretas articuladas é recalculada pela biblioteca cinemática do Astro:
+### Passo 1: Previsão da Pose Futura ("Passinho" de $0{,}1\text{ s}$)
+A partir da pose atual vinda do `localize`, a função utiliza a [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1358) para calcular a coordenada espacial onde o veículo (cabine e carretas) estará daqui a **$0{,}1\text{ s}$** (`full_time_interval = 0.1`, integrado com `delta_t = 0.05` e velocidade de referência `0.5 m/s` apenas para gerar o deslocamento geométrico na curva com `odometry_phi` fixo):
 
 ```cpp
 iterative_pose = astro_libcarmodel_recalc_pos_ackerman(
-    &iterative_pose, 
-    vel_sign * 0.5, 
-    odometry_phi, 
-    full_time_interval, 
-    &distance_traveled, 
-    delta_t, 
-    &astro_robot_ackerman_config, 
-    &astro_semi_trailer_config
+    &iterative_pose, vel_sign * 0.5, odometry_phi, 
+    full_time_interval, &distance_traveled, delta_t, 
+    &astro_robot_ackerman_config, &astro_semi_trailer_config
+);
+```
+> *Nota:* O objetivo dessa chamada não é testar a dinâmica de aceleração, mas simplesmente descobrir **o caminho geométrico (próximo ponto no espaço)** que o caminhão percorre ao avançar um "passinho" mantendo o volante travado em `odometry_phi`.
+
+---
+
+### Passo 2: Redução da Velocidade via Equação de Torricelli
+Encontrado esse novo ponto no espaço, mede-se a distância real percorrida nesse passinho ($\Delta s$, dada por `DIST2D(iterative_pose, prev_pose)`) e utiliza-se a **Equação de Torricelli** ([`compute_final_velocity_using_torricelli()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L969)) para identificar qual será a velocidade real do veículo após andar esse deslocamento aplicando a **frenagem máxima**:
+
+$$v^2 = v_0^2 + 2 \cdot a \cdot \Delta s$$
+
+Onde:
+* **$\Delta s$:** Distância percorrida entre a pose anterior e a nova pose calculada.
+* **$a$:** Valor negativo da desaceleração máxima (`-maximum_deceleration_forward`, vindo dos parâmetros).
+* **$v_0$:** Velocidade real do veículo no início daquele passo.
+
+```cpp
+current_velocity = vel_sign * compute_final_velocity_using_torricelli(
+    current_velocity, 
+    -astro_robot_ackerman_config.maximum_deceleration_forward, 
+    DIST2D(iterative_pose, prev_pose)
 );
 ```
 
-> [!NOTE]
-> **Varredura da Cabine e das Carretas:**  
-> Ao projetar o movimento em curva com $\phi \ne 0$, as carretas traseiras **não passam exatamente por onde a cabine passou** (o chamado arraste ou *off-tracking*). O modelo calcula a nova orientação de cada carreta $\theta_{\text{carreta}}[z]$ em cada passo, garantindo que o volume total de carga seja checado contra colisões.
-
 ---
 
-### 3.3 A Desaceleração Numérica via Equação de Torricelli
-Ao percorrer a distância infinitesimal $\Delta s = \text{DIST2D}(\text{pose}_k, \text{pose}_{k-1})$ entre dois passos consecutivos da simulação, a nova velocidade escalar é calculada através da clássica Equação de Torricelli por [`compute_final_velocity_using_torricelli()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L969):
+### Passo 3: Verificação de Colisão e Critério de Parada do Loop
+Obtida a posição futura exata e sua respectiva velocidade reduzida, chama-se [`check_collision_in_trajectory()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1012) para verificar se há colisão naquele ponto contra:
+1. O **mapa de distâncias / mapas especiais** (`obstacle_distance_map` / `maps_obstacle_avoider`).
+2. O **mapa de ocupação** (`occupancy_map`).
+3. Algum **objeto móvel** (`moving_objects`).
 
-$$v_{k+1}^2 = v_k^2 + 2 \cdot a \cdot \Delta s$$
-
-Como estamos desacelerando até a parada, a aceleração aplicada é negativa ($a = -a_{\text{max}}$):
-$$v_{k+1} = \sqrt{\max\left(0\,,\; v_k^2 - 2 \cdot a_{\text{max}} \cdot \Delta s\right)}$$
-
-A simulação progride passo a passo diminuindo a velocidade gradativamente. O loop é interrompido no momento exato em que a velocidade atinge zero ($v = 0{,}00\text{ m/s}$).
-
----
-
-### 3.4 Checagem de Colisão em Três Níveis (`check_collision_in_trajectory`)
-A cada micro-passo da trajetória simulada, a função [`check_collision_in_trajectory()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1012) testa a pose completa do caminhão contra três estruturas de dados:
-
-1. **Mapas Especiais / Distâncias (`maps_obstacle_avoider`):** Checa contra malhas de custo de alta precisão e restrições de infraestrutura.
-2. **Mapa de Ocupação (`occupancy_map`):** Testa os polígonos de colisão da cabine e das carretas respeitando uma margem de segurança configurável (`safe_distance`).
-3. **Objetos Móveis (`moving_objects_array`):** Valida nuvens de pontos de pedestres e veículos rastreados em tempo real.
-
-Se houver colisão em qualquer uma das três camadas:
 ```cpp
-returned_acc = -astro_robot_ackerman_config.maximum_deceleration_forward; // Ex: -1.00 m/s^2
-set_astro_error_for_oa_mediation(ASTRO_ERROR_CODE_204, custom_string, timestamp);
-break; // Interrompe imediatamente a simulação
+while (fabs(current_velocity) > 0.0)
+{
+    // 1. Projeta a pose 0.1s à frente mantendo phi fixo
+    // 2. Reduz a velocidade pelo deslocamento usando Torricelli com frenagem máxima
+    // 3. Verifica se a nova pose colide nos mapas:
+    returned_acc = check_collision_in_trajectory(
+        iterative_pose, astro_robot_ackerman_config, occupancy_map, 
+        astro_robot_ackerman_config.obstacle_avoider_obstacles_safe_distance, 
+        vel_sign, total_distance_traveled, timestamp
+    );
+
+    if ((fabs(returned_acc) > EPSILON_OB) || (total_distance_traveled >= 50.0))
+    {
+        break;
+    }
+    ...
+}
 ```
+
+* **Se houver colisão:** A função `check_collision_in_trajectory()` devolve imediatamente a desaceleração máxima de frenagem (`-maximum_deceleration_forward` em marcha à frente, ou `maximum_deceleration_reverse` em ré). A previsão é **finalizada na hora (`break`)** — sem precisar continuar calculando até a velocidade zerar — e esse valor de frenagem máxima é retornado para a variável de controle `global_acc_to_avoid_potential_collision` no `localize_ackerman_globalpos_message_handler()`.
+* **Se não houver colisão:** O fluxo continua repetindo o processo passo a passo enquanto a velocidade não chegar a zero (`fabs(current_velocity) > 0.0`) ou até atingir o limite de segurança de $50\text{ m}$ projetados (`total_distance_traveled >= 50.0`). Caso pare totalmente sem bater em nada, retorna `0.0` (trajetória de parada livre).
 
 ---
 
