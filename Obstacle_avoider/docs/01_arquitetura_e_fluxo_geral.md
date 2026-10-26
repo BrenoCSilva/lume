@@ -83,24 +83,24 @@ flowchart TD
     end
 
     subgraph Emergencia ["2. Simulação de Emergência (Potential Collision)"]
-        H2 --> PC["Simulação de Frenagem<br/>set_trajectory_from_deceleration()<br/>Volante travado em phi + Torricelli"]
-        PC --> EXT["Extensão de Segurança<br/>set_extension_trajectory()<br/>Projeção de N metros à frente"]
-        EXT --> ACC["Atualiza Aceleração de Emergência<br/>global_acc_to_avoid_potential_collision"]
+        H2 --> PC["Simulação de Frenagem<br/><b style='color:#4fc3f7'>set_trajectory_from_deceleration()</b><br/>Volante travado em phi + Torricelli"]
+        PC --> EXT["Extensão de Segurança<br/><b style='color:#4fc3f7'>set_extension_trajectory()</b><br/>Projeção de N metros à frente"]
+        EXT --> ACC["Atualiza Aceleração de Emergência<br/><b style='color:#ffb74d'>global_acc_to_avoid_potential_collision</b>"]
     end
 
-    H1 -->|"Imediato"| OA_TIMER["Handler Central de Decisão<br/>obstacle_avoider_timer_handler()"]
+    H1 -->|"Imediato"| OA_TIMER["Handler Central de Decisão<br/><b style='color:#4fc3f7'>obstacle_avoider_timer_handler()</b>"]
     ACC -->|"Frequência max ~14 Hz"| OA_TIMER
     H3 -->|"Frequência max ~14 Hz"| OA_TIMER
 
     subgraph PipelineOA ["3. Pipeline do obstacle_avoider_timer_handler()"]
-        OA_TIMER --> CONSUME["Consumo Temporal da Fila<br/>consume_motion_command_time()<br/>Sincroniza o plano com o relógio atual"]
-        CONSUME --> TRAT_PC["Tratamento Potential Collision<br/>potential_collision_treatment()<br/>Filtro 5 ciclos -> Desacelera com Acc"]
-        TRAT_PC --> CENTR["Limite de Aceleração Centrípeta<br/>limit_centripetal_acceleration...<br/>Proteção contra tombamento em curvas"]
-        CENTR --> PHI_LIM["Limite de Velocidade por Phi<br/>limit_current_velocity_to_max_phi()<br/>Envelope seguro esterçamento x vel"]
-        PHI_LIM --> OA_CORE["Validação Preventiva do Plano<br/>obstacle_avoider()<br/>Simula trajetória e atenua velocidades se houver obstáculo"]
+        OA_TIMER --> CONSUME["Consumo Temporal da Fila<br/><b style='color:#4fc3f7'>consume_motion_command_time()</b><br/>Sincroniza o plano com o relógio atual"]
+        CONSUME --> TRAT_PC["Tratamento Potential Collision<br/><b style='color:#ff5252'>potential_collision_treatment()</b><br/>Filtro 5 ciclos -> Desacelera com Acc"]
+        TRAT_PC --> CENTR["Limite de Aceleração Centrípeta<br/><b style='color:#4fc3f7'>limit_centripetal_acceleration...()</b><br/>Proteção contra tombamento em curvas"]
+        CENTR --> PHI_LIM["Limite de Velocidade por Phi<br/><b style='color:#4fc3f7'>limit_current_velocity_to_max_phi()</b><br/>Envelope seguro esterçamento x vel"]
+        PHI_LIM --> OA_CORE["Validação Preventiva do Plano<br/><b style='color:#4fc3f7'>obstacle_avoider()</b><br/>Simula trajetória e atenua velocidades se houver obstáculo"]
     end
 
-    OA_CORE --> PUB["Publicação Final<br/>obstacle_avoider_publish_base_ackerman()<br/>Envia comandos validados para a base"]
+    OA_CORE --> PUB["Publicação Final<br/><b style='color:#69f0ae'>obstacle_avoider_publish_base_ackerman()</b><br/>Envia comandos validados para a base"]
 ```
 
 ### Etapas Principais Executadas no `obstacle_avoider_timer_handler()`:
