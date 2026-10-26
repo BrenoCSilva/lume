@@ -171,7 +171,9 @@ Em um teste prático acompanhado em tempo real, o parâmetro `obstacle_avoider_p
 ### 4.1 Trajetória Livre e Varredura Completa da Margem
 O veículo trafegava, a Etapa 1 (frenagem por Torricelli) aprovava a continuidade do plano atual e liberava a execução da Etapa 2. Enquanto Enquanto não encontrava obstáculo no diâmetro de 10m nada foi sinalizado, porém na imagem abaixo pode ser observado que próximo ao metro 6   foi encontrado um obstáculo:
 
-![Captura do log de colisão na extensão de segurança](img/extensao_alerta_erro_204.png)
+<p align="center">
+  <img src="img/extensao_alerta_erro_204.png" alt="Captura do log de colisão na extensão de segurança"/>
+</p>
 
 ---
 

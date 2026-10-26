@@ -62,7 +62,9 @@ else
 * **Nas iterações 1 a 4 (`it_count < 5`):** O código apenas incrementa `it_count`, sem frear o caminhão ainda. Se o obstáculo sumir antes da 5ª iteração, `it_count` volta a `0` (`[DEBOUNCE RESET]`).
 * **A partir da 5ª iteração consecutiva (`it_count >= 5`):** Confirma-se que o obstáculo é real. Nesse instante, salva-se o horário atual em `last_ativation_timestamp` e congela-se a desaceleração em `last_global_acc_to_avoid_potential_collision`.
 
-![Validação de persistência do Debounce 1/5 até a ativação em 5/5](img/debounce_5_5_confirmado.png)
+<p align="center">
+  <img src="img/debounce_5_5_confirmado.png" alt="Validação de persistência do Debounce 1/5 até a ativação em 5/5"/>
+</p>
 
 ---
 
@@ -235,7 +237,7 @@ Mais adiante no log, ocorre um momento em que a trajetória fica temporariamente
 [DEBOUNCE RESET] Trajetoria desobstruida. Debounce zerado.
 
 
-  [RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 239 comandos: // o plano antes tinha tamanho 211 se aumentou eh pq o mpp enviou
+  [RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 239 comandos:
     Cmd[00]: v_MPP = 0.47 -> v_OA = 0.45 m/s | dt=0.02s
     Cmd[01]: v_MPP = 0.44 -> v_OA = 0.42 m/s | dt=0.03s
     ...
@@ -252,7 +254,9 @@ Mais adiante no log, ocorre um momento em que a trajetória fica temporariamente
 
 A captura abaixo evidencia perfeitamente a interação entre o zeramento da fila, a chegada de um novo plano do MPP e o consumo temporal entre dois ciclos consecutivos do `obstacle_avoider_timer_handler()`:
 
-![Recálculo sobre novo plano do MPP e consumo de 3 comandos na sequência](img/recalculo_consumo_3_comandos.png)
+<p align="center">
+  <img src="img/recalculo_consumo_3_comandos.png" alt="Recálculo sobre novo plano do MPP e consumo de 3 comandos na sequência"/>
+</p>
 
 Observando a sequência da imagem de cima para baixo, extraímos três conclusões diretas:
 
@@ -261,9 +265,8 @@ Observando a sequência da imagem de cima para baixo, extraímos três conclusõ
 
 2. **Chegada de um Novo Plano do MPP Durante o Estado de Emergência (`258 comandos`):**
    * Se o plano anterior já estava todo zerado, o único motivo para na linha seguinte surgirem **258 comandos** com velocidades positivas (`v_MPP = 0.64 m/s`) é que **o MPP acabou de enviar um plano novo** (disparando imediatamente o handler do MPP).
-   * Como o estado de emergência ainda estava ativo (seja pela persistência da colisão ou dentro da janela de `1.0 s`), o OA interceptou esse novo plano na mesma hora e recalculou as velocidades do `Cmd[00]` até alcançar a parada no `Cmd[29]` (`v_OA = 0.00 m/s`), travando os `+228 comandos` seguintes em zero.
-   * Repare especificamente no resultado calculado pelo OA para o quarto comando dessa fila (`Cmd[03]`):
-     * `Cmd[03]: v_MPP = 0.64 -> v_OA = 0.57 m/s | dt=0.02s`
+   * Como não houve `[DEBOUNCE RESET]`, temos certeza de que **a colisão continuava ativa (`it_count >= 5`)**, então o OA interceptou esse novo plano no mesmo momento e recalculou as velocidades do `Cmd[00]` até alcançar a parada no `Cmd[29]` (`v_OA = 0.00 m/s`), travando os `+228 comandos` seguintes em zero.
+
 
 3. **Consumo de 3 Comandos e Reaproveitamento do Plano Modificado (`258` $\to$ `255 comandos`):**
    * No bloco seguinte (`[RECALCULO DETALHADO] Aplicando acc = -1.00 m/s^2 em 255 comandos`), a colisão continua ativa, então o recálculo é chamado novamente (desta vez disparado pelo handler do `localize` ou do mapa de distâncias, já que o MPP não mandou outro plano).
