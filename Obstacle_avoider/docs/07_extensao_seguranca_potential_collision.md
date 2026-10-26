@@ -13,7 +13,7 @@ A função [`set_extension_trajectory_from_deceleration()`](file:///home/lume/as
 
 ## 1. Posição no Fluxo de Execução e Condição de Entrada
 
-Dentro do escopo de [`localize_ackerman_globalpos_message_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1553), a Etapa 2 entra em ação imediatamente após a Etapa 1 aprovar a frenagem por Torricelli:
+Dentro do escopo de [`localize_ackerman_globalpos_message_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1553), a Etapa 2 entra em ação imediatamente após a Etapa 1 emitir a franagem nula (acc == 0):
 
 ```mermaid
 flowchart TD
@@ -90,7 +90,7 @@ O objetivo da [`set_extension_trajectory_from_deceleration()`](file:///home/lume
 Para isso, a função executa um loop espacial (`while (DIST2D(initial_pose, iterative_pose) <= desired_distance_to_obstacle)`):
 
 ### Passo 1: Avanço Geométrico da Pose ("Passinho" de $0{,}1\text{ s}$)
-Partindo da `pose` atual vinda do `localize`, a função utiliza a [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1226) para calcular a coordenada do veículo (cabine e carretas) passados **$0{,}1\text{ s}$** (`full_time_interval = 0.1`, `delta_t = 0.05`) com velocidade virtual fixa de `motion_desired * 0.5` ($+0{,}5\text{ m/s}$ para frente ou $-0{,}5\text{ m/s}$ para ré) mantendo o ângulo `initial_phi` travado:
+Partindo da `pose` atual vinda do `localize`, a função utiliza a [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1226) para calcular a coordenada do veículo (cabine e carretas) passados **$0{,}1\text{ s}$** (`full_time_interval = 0.1`, `delta_t = 0.05`) com velocidade virtual fixa de `motion_desired * 0.5` mantendo o ângulo `initial_phi` travado:
 
 ```cpp
 iterative_pose = astro_libcarmodel_recalc_pos_ackerman(
@@ -159,89 +159,23 @@ sequenceDiagram
     end
     
     Note over EXT,OA_MAIN: Percorreu toda a margem (ex: 3.0m) sem colidir!
-    EXT-->>OA_MAIN: Retorna acc = 0.00 m/s^2 (Extensão 100% livre)
+    EXT-->>OA_MAIN: Retorna acc = 0.00  (Extensão 100% livre)
 ```
 
 ---
 
 ## 4. Exemplo Prático: Comportamento Real na Detecção da Extensão
 
-Em um teste prático acompanhado em tempo real (`tail -f /tmp/oa_etapa2.log`), o parâmetro `obstacle_avoider_potential_collision_extension_length` foi configurado com uma margem de **$10{,}00\text{ m}$** (`Margem Buffer: 10.00m`).
+Em um teste prático acompanhado em tempo real, o parâmetro `obstacle_avoider_potential_collision_extension_length` foi configurado com uma margem de **$10{,}00\text{ m}$** (`Margem Buffer: 10.00m`).
 
 ### 4.1 Trajetória Livre e Varredura Completa da Margem
-Enquanto o caminhão trafegava entre `x = 7486543.98` e `x = 7486554.10`, a Etapa 1 (frenagem por Torricelli) aprovava a parada imediata e liberava a execução da Etapa 2. Como não havia obstáculos dentro do raio de $10{,}00\text{ m}$ à frente, o loop `while` avançava de "passinho em passinho" (~$0{,}05\text{ m}$ cada, imprimindo a cada 4 passos = ~$0{,}20\text{ m}$) até atingir os **200 passos** (`dist_ext = 10.04m`):
-
-```text
-  >>> [POTENTIAL COLLISION - ETAPA 2: EXTENSÃO DE SEGURANÇA] <<<
-  Pose Base: (x=7486554.10, y=-315899.25, theta=-0.05 rad) | Margem Buffer: 10.00m | Sentido: FRENTE
-    Passo 04: dist_ext=0.24m | colidiu=NÃO
-    Passo 08: dist_ext=0.44m | colidiu=NÃO
-    ...
-    Passo 196: dist_ext=9.84m | colidiu=NÃO
-    Passo 200: dist_ext=10.04m | colidiu=NÃO
-  --- [RESULTADO EXTENSÃO: MARGEM DE 10.00m 100% LIVRE] --- Passos: 200
-```
-
----
-
-### 4.2 Aproximação do Obstáculo e Atuação da Extensão (`ERRO 204`)
-À medida que o veículo avançou na pista (`x` crescendo de `7486554.93` até `7486558.19`), um obstáculo entrou dentro da janela de $10{,}00\text{ m}$ da extensão. Observe o comportamento registrado nos logs:
-
-```text
-    Passo 100: dist_ext=5.03m | colidiu=NÃO
-    Passo 104: dist_ext=5.23m | colidiu=NÃO
-    Passo 108: dist_ext=5.43m | colidiu=NÃO
-    Passo 112: dist_ext=5.63m | colidiu=NÃO
-    Passo 116: dist_ext=5.83m | colidiu=NÃO
-    Passo 120: dist_ext=6.03m | colidiu=NÃO
-    Passo 124: dist_ext=6.23m | colidiu=NÃO
-    Passo 128: dist_ext=6.43m | colidiu=NÃO
-    Passo 132: dist_ext=6.63m | colidiu=SIM
-  [EXTENSÃO ALERTA - ERRO 204] COLISÃO DETECTADA no Passo 132 (dist: 6.63m < 10.00m)!
-  Fonte: [Obstacle Distance Map] | Freio acionado: acc = -1.00 m/s^2
-
-  >>> [POTENTIAL COLLISION - ETAPA 2: EXTENSÃO DE SEGURANÇA] <<<
-  Pose Base: (x=7486558.19, y=-315899.47, theta=-0.05 rad) | Margem Buffer: 10.00m | Sentido: FRENTE
-    Passo 04: dist_ext=0.22m | colidiu=NÃO
-    Passo 08: dist_ext=0.42m | colidiu=NÃO
-    Passo 12: dist_ext=0.62m | colidiu=NÃO
-    Passo 16: dist_ext=0.82m | colidiu=NÃO
-    Passo 20: dist_ext=1.02m | colidiu=NÃO
-    Passo 24: dist_ext=1.22m | colidiu=NÃO
-    Passo 28: dist_ext=1.42m | colidiu=NÃO
-    Passo 32: dist_ext=1.62m | colidiu=NÃO
-    Passo 36: dist_ext=1.82m | colidiu=NÃO
-    Passo 40: dist_ext=2.02m | colidiu=NÃO
-    Passo 44: dist_ext=2.22m | colidiu=NÃO
-    Passo 48: dist_ext=2.42m | colidiu=NÃO
-    Passo 52: dist_ext=2.62m | colidiu=NÃO
-    Passo 56: dist_ext=2.82m | colidiu=NÃO
-    Passo 60: dist_ext=3.02m | colidiu=NÃO
-    Passo 64: dist_ext=3.22m | colidiu=NÃO
-    Passo 68: dist_ext=3.42m | colidiu=NÃO
-    Passo 72: dist_ext=3.62m | colidiu=NÃO
-    Passo 76: dist_ext=3.82m | colidiu=NÃO
-    Passo 80: dist_ext=4.02m | colidiu=NÃO
-    Passo 84: dist_ext=4.22m | colidiu=NÃO
-    Passo 88: dist_ext=4.42m | colidiu=NÃO
-    Passo 92: dist_ext=4.62m | colidiu=NÃO
-    Passo 96: dist_ext=4.82m | colidiu=NÃO
-    Passo 100: dist_ext=5.02m | colidiu=NÃO
-    Passo 104: dist_ext=5.22m | colidiu=NÃO
-    Passo 108: dist_ext=5.42m | colidiu=NÃO
-    Passo 112: dist_ext=5.62m | colidiu=NÃO
-    Passo 116: dist_ext=5.82m | colidiu=NÃO
-    Passo 120: dist_ext=6.02m | colidiu=NÃO
-    Passo 121: dist_ext=6.07m | colidiu=SIM
-  [EXTENSÃO ALERTA - ERRO 204] COLISÃO DETECTADA no Passo 121 (dist: 6.07m < 10.00m)!
-  Fonte: [Obstacle Distance Map] | Freio acionado: acc = -1.00 m/s^2
-```
+Enquanto o caminhão trafegava, a Etapa 1 (frenagem por Torricelli) aprovava a parada imediata e liberava a execução da Etapa 2. Enquanto não encontrava obstáculo no diâmetro de 10m nada ocorreu, porém na imagem abaixo pode ser observado que próximo do metro 6 a frente do veículo foi encontrado um obstáculo:
 
 ![Captura do log de colisão na extensão de segurança](img/extensao_alerta_erro_204.png)
 
 ---
 
-### 4.3 Análise Comparativa com a Lógica das Seções Anteriores
+### 4.2 Análise Comparativa com a Lógica das Seções Anteriores
 
 Esse registro comprova na prática cada regra descrita nas seções anteriores:
 
@@ -249,13 +183,7 @@ Esse registro comprova na prática cada regra descrita nas seções anteriores:
    * A Etapa 2 só foi chamada porque na Etapa 1 (`astro_obstacle_avoider_set_trajectory_from_deceleration()`) o veículo conseguia parar por Torricelli antes dos $6\text{ m}$ onde estava o obstáculo.
    * Porém, como o limite parametrizado exigia **$10{,}00\text{ m}$ livres**, a Etapa 2 continuou projetando o veículo à frente e identificou que o obstáculo violava essa margem (`6.63m < 10.00m` e depois `6.07m < 10.00m`).
 
-2. **Avanço Físico do Caminhão vs. Redução da Distância até o Obstáculo:**
-   * Na iteração anterior (`x = 7486557.61`), o impacto na projeção ocorreu no **Passo 132**, a **$6{,}63\text{ m}$** do veículo.
-   * Na iteração seguinte (`x = 7486558.19`), o caminhão havia avançado $\Delta x = 7486558{,}19 - 7486557{,}61 = \mathbf{0{,}58\text{ m}}$ para frente.
-   * Consequentemente, a colisão na extensão foi detectada mais cedo, no **Passo 121**, a **$6{,}07\text{ m}$** ($\Delta d = 6{,}63 - 6{,}07 = \mathbf{0{,}56\text{ m}}$ mais perto!).
-   * Nos ciclos subsequentes do log, conforme o caminhão continuou se aproximando, o ponto de impacto caiu progressivamente: `6.63m` (Passo 132) $\to$ `6.07m` (Passo 121) $\to$ `5.74m` (Passo 115) $\to$ `4.97m` (Passo 99) $\to$ `3.07m` (Passo 61).
-
-3. **Interrupção Imediata (`break`) e Retorno da Frenagem Máxima:**
-   * Repare que durante a varredura normal o log imprime de 4 em 4 passos (`Passo 116`, `Passo 120`...).
-   * Porém, assim que a pose projetada no **Passo 121** (`dist_ext = 6.07m`) tocou um obstáculo no **`[Obstacle Distance Map]`** (`collision_result.has_collision == true`), a condição `flag_check_collision` ativou o print imediato daquele passo ímpar, disparou o **`ASTRO_ERROR_CODE_204`** e **acionou o `break`** — poupando o processador de calcular os passos restantes até $10{,}00\text{ m}$.
-   * Na mesma hora, a função retornou **`acc = -1.00 m/s^2`** (`-maximum_deceleration_forward`) para a variável `global_acc_to_avoid_potential_collision` no `localize_ackerman_globalpos_message_handler()`.
+2. **Interrupção Imediata (`break`) e Retorno da Frenagem Máxima:**
+   * O log da imagem imprime de 4 em 4 passos (`Passo 116`, `Passo 120`...).
+   * Porém, assim que a pose projetada no **Passo 121** (`dist_ext = 6.07m`) tocou um obstáculo no **`[Obstacle Distance Map]`** (`collision_result.has_collision == true`), a condição `flag_check_collision` ativou o print imediato daquele passo ímpar, disparou o **`ASTRO_ERROR_CODE_204`** e **acionou o `break`** evitando o processo de calcular os passos restantes até $10{,}00\text{ m}$.
+   * No mesmo momento foi retornado **`acc = -1.00 m/s^2`** (`-maximum_deceleration_forward`) para a variável `global_acc_to_avoid_potential_collision` no `localize_ackerman_globalpos_message_handler()`.

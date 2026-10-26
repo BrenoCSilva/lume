@@ -142,9 +142,9 @@ Ao finalizar a execução de `astro_obstacle_avoider_set_trajectory_from_deceler
 
 * **`acc == 0.0` (Parada livre de colisão na Etapa 1):**  
   O fluxo avança imediatamente (ainda dentro do handler do `localize`) para a **Etapa 2 — Extensão de Segurança**, que verifica se a margem mínima à frente do veículo (`extension_length`) também está desobstruída:  
-**[`07_extensao_seguranca_potential_collision.md`](07_extensao_seguranca_potential_collision.md)** (`set_extension_trajectory_from_deceleration()`)
+**[`07_extensao_seguranca_potential_collision.md`](07_extensao_seguranca_potential_collision.md)**
 
 * **`acc != 0.0` (Colisão detectada na Etapa 1):**  
   A Etapa 2 é ignorada (já que o perigo imediato foi confirmado) e o valor de frenagem armazenado em `global_acc_to_avoid_potential_collision` segue direto para a **Etapa 3 — atuação do potential_collision()** no `obstacle_avoider_timer_handler()`:  
-  **[`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md)** (`potential_collision_treatment()`)
+  **[`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md)** 
 
