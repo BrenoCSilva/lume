@@ -216,13 +216,12 @@ O que acontece nos ciclos seguintes enquanto o MPP ainda não enviou um novo pla
 > Enquanto o MPP não envia um novo plano, o Obstacle Avoider **trabalha com o plano que ele mesmo modificou e encurtou na iteração passada**.  
 > A cada nova iteração — definida pela chegada de mensagens do GPS/odometria ou mapas, cuja taxa é restringida pelo filtro `can_execute_obstacle_avoider_handler()` a intervalos de pelo menos $0{,}07\text{ s}$ ($70\text{ ms}$) —, a função `consume_motion_command_time()` é chamada exatamente nessa faixa de intervalo ($\approx 75\text{ ms} \dots 90\text{ ms}$) e consome comandos em consequência do tempo real transcorrido.
 
-A telemetria capturada no veículo ilustra com perfeição esse regime permanente operando na janela de $\approx 0{,}075\text{ s} \dots 0{,}090\text{ s}$:
-
 ### 5.1 Ciclo 1: Consumo de 1 Comando ($t = \text{10:43:39.552} \to \text{10:43:39.627}$, $\text{latência} = 0{,}075\text{ s}$)
 
 ```text
-  [CONSUMO TEMPO] [10:43:39.552] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.21 m/s). Novo Cmd[0]: v=0.21 m/s (Restam 306 cmds na fila)
-plano atual (base_time = 10:43:39.552 | current_time = 10:43:39.627 | latencia = 0.075s):
+  [CONSUMO_ANTERIOR)] [time: 10:43:39.552] O tempo passou! Descartou 1 comando(s) executado(s) (v_antiga=0.21 m/s). Novo Cmd[0]: v=0.21 m/s (Restam 306 cmds na fila)
+  [CONSUMO_ATUAL]
+plano atual (time_atual = 10:43:39.552 | current_time = 10:43:39.627 | latencia = 0.075s):
    0 --> v = 0.213312 | dt = 0.015578 | t_fim = 10:43:39.568 [PASSADO - EXPIRADO]
    1 --> v = 0.221555 | dt = 0.060000 | t_fim = 10:43:39.628 [FUTURO - ATIVO]
    2 --> v = 0.229798 | dt = 0.060000 | t_fim = 10:43:39.688 [FUTURO - ATIVO]
