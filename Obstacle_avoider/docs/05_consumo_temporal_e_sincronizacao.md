@@ -21,7 +21,7 @@ Em um veículo autônomo, o planejador de trajetória ([MPP - Model Predictive P
 
 ---
 
-## 2. Anatomia dos Comandos de Movimento
+## 2. Comandos do mpp
 
 Cada elemento do vetor `motion_commands_vector[i]` é da estrutura `astro_robot_and_trailers_motion_command_t`:
 
@@ -41,9 +41,9 @@ typedef struct
 
 ---
 
-## 3. O Algoritmo Passo a Passo e a Lógica Matemática
+## 3. O Algoritmo 
 
-O código de [`consume_motion_command_time()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L387-L465) inicia obtendo o relógio atual do robô e o carimbo de referência:
+O código de [`consume_motion_command_time()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L387-L465) inicia obtendo o relógio atual do veículo:
 
 ```cpp
 static void
@@ -63,7 +63,7 @@ consume_motion_command_time(int motion_command_vetor, FILE *out_act)
 * **`current_time`**: O relógio do sistema no exato instante presente (`astro_get_time()`).
 * **`time_consumed`**: Inicia com `astro_robot_ackerman_motion_command_time_of_last_update`. Essa variável guarda:
   * O timestamp em que o MPP gerou o plano (quando chega um novo plano do MPP); OU
-  * O timestamp do último consumo efetuado (quando o timer periódico está rodando).
+  * O timestamp do último consumo efetuado (**consume_motion_command_time()**).
 
 ---
 
