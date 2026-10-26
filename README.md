@@ -15,21 +15,15 @@ Ao contrário do consumo temporal da fila (que ocorre dentro do ciclo do timer d
 
 ```mermaid
 flowchart TD
-    LOC["Mensagem de Localização (GPS / Odometria)<br/>localize_ackerman_globalpos (50 Hz - 100 Hz)"] --> HANDLER["localize_ackerman_globalpos_message_handler()"]
-    
-    subgraph S1 ["Etapa 1: Avaliação Preventiva Imediata"]
-        HANDLER --> PREV["astro_obstacle_avoider_set_trajectory_from_deceleration()<br/>Simula parada em arco com phi fixo"]
+    subgraph HANDLER ["localize_ackerman_globalpos_message_handler()"]
+        PREV["astro_obstacle_avoider_set_trajectory_from_deceleration()<br/>Simula parada em arco com phi fixo"]
         PREV --> RES{"Houve Colisão na Frenagem?"}
         RES -- "Sim" --> SET_ACC["global_acc_to_avoid_potential_collision = -a_max<br/>Dispara ASTRO_ERROR_CODE_204"]
         RES -- "Não" --> CHECK_EXT["Testa Margem Adicional de Extensão<br/>set_extension_trajectory_from_deceleration()"]
-    end
-
-    subgraph S2 ["Etapa 2: Pipeline de Decisão (Controlado por Taxa)"]
+        
         SET_ACC --> GATE{"can_execute_obstacle_avoider_handler()<br/>(dt &gt; 70 ms?)"}
         CHECK_EXT --> GATE
         GATE -- "Sim" --> TIMER["obstacle_avoider_timer_handler()"]
-        TIMER --> DEBOUNCE["Debounce de 5 Ciclos (it_count_to_activate)"]
-        DEBOUNCE --> REC_VEL["Recalcula Velocidades da Fila<br/>velocity_recalculate_with_acceleration()"]
     end
 ```
 
