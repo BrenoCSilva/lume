@@ -1,8 +1,13 @@
 # Extensão de Segurança da Trajetória (`set_extension_trajectory_from_deceleration`)
 
-A função [`set_extension_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1181-L1305) constitui a **segunda etapa da verificação preventiva** executada dentro do [`localize_ackerman_globalpos_message_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1626-L1656).
+A função [`set_extension_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1181-L1305) é a **segunda etapa de verificação de colisão de emergência**, executada no [`localize_ackerman_globalpos_message_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1626-L1656) imediatamente após ser identificada a nova posição do veículo.
 
-Ela **só é executada caso a Etapa 1 ([`06_desaceleracao_preventiva_phi_fixo.md`](06_desaceleracao_preventiva_phi_fixo.md)) não tenha detectado colisão** (`fabs(global_acc_to_avoid_potential_collision) < EPSILON`). Seu propósito é verificar se essa condição livre de colisão com o ângulo $\phi$ fixo também se mantém ao longo de uma **extensão mínima de segurança** configurada para o veículo (por padrão, $3{,}0\text{ m}$).
+> [!IMPORTANT]
+> **Resumo do Papel da `extension_length`:**
+> * **Condição de execução:** Só ocorre se a **Etapa 1 ([`06_desaceleracao_preventiva_phi_fixo.md`](06_desaceleracao_preventiva_phi_fixo.md)) aprovar a parada** (`global_acc_to_avoid_potential_collision == 0.0`).
+> * **O problema que ela resolve:** Na Etapa 1, o veículo pode conseguir parar fisicamente antes de bater (ex.: em baixa velocidade ele para em $0{,}5\text{ m}$), mas terminar **dentro do limite mínimo de segurança** exigido para o obstáculo.
+> * **Como atua:** A verificação é refeita projetando o veículo desde a `pose` atual até o alcance definido por parâmetro (ou o padrão de **$3{,}0\text{ m}$**).
+> * **Resultado em caso de violação:** Se houver colisão dentro desse limite mínimo, o erro **`ASTRO_ERROR_CODE_204`** é emitido **mesmo que o veículo conseguisse parar antes do impacto**, pois a regra da margem mínima foi violada. Em seguida, a variável de controle de frenagem (`global_acc_to_avoid_potential_collision`) é preenchida com o valor de desaceleração máxima de alarme.
 
 ---
 
@@ -93,7 +98,7 @@ iterative_pose = astro_libcarmodel_recalc_pos_ackerman(
     &distance_traveled, delta_t, &astro_robot_ackerman_config, &astro_semi_trailer_config
 );
 ```
-> *Nota:* Diferente da Etapa 1, aqui **não há redução de velocidade por Torricelli**. O cálculo avança geometricamente em pequenos passos (~$0{,}05\text{ m}$ cada) apenas para varrer o caminho no espaço até atingir a distância limite `desired_distance_to_obstacle`.
+> *Nota:* Diferente da Etapa 1 (que depende da velocidade real `odometry_velocity` e para quando $v = 0$), a Etapa 2 **independe da velocidade atual** e usa a intenção de movimento (`motion_desired`). Assim, mesmo que o caminhão esteja quase parado ou em baixa velocidade (onde a Etapa 1 aprova em poucos centímetros), a Etapa 2 varre obrigatoriamente de $0\text{ m}$ até `desired_distance_to_obstacle` (ex.: $3{,}0\text{ m}$) a partir da `pose` atual.
 
 ---
 
