@@ -6,7 +6,7 @@ A função [`astro_obstacle_avoider_set_trajectory_from_deceleration()`](file://
 > **Resumo do Papel da Desaceleração com `phi` Fixo:**
 > * **Condição de execução:** Roda a cada nova mensagem de localização (`localize_ackerman_globalpos`), desde que o veículo não esteja em controle manual (`manual_override == 0` ou forçado por `manual_override_activate`).
 > * **O problema que ela resolve:** Verifica se, caso o sistema trave ou precise frear agora mantendo o volante no ângulo atual (`odometry_phi` fixo) e partindo da velocidade atual (`odometry_velocity`), o veículo tem espaço livre suficiente para desacelerar até parar ($v = 0$) sem atingir nenhum obstáculo.
-> * **Como atua:** Projeta o veículo em pequenos passos de $0{,}1\text{ s}$ ao longo do arco de giro fixo e reduz a velocidade a cada passo pela **Equação de Torricelli** aplicando a frenagem máxima (`-maximum_deceleration_forward`), testando cada pose nos mapas.
+> * **Como atua:** Projeta o veículo em pequenos passos de $0{,}1\text{ s}$ ao longo do ângulo de giro fixo e reduz a velocidade a cada passo pela **Equação de Torricelli** aplicando a frenagem máxima (`-maximum_deceleration_forward`), testando cada pose nos mapas.
 > * **Resultado:**
 >   * **Se colidir antes de parar:** Interrompe a simulação na hora (`break`), emite o **`ASTRO_ERROR_CODE_204`** e preenche a variável de controle `global_acc_to_avoid_potential_collision` com a desaceleração máxima de alarme (nem precisando executar a Etapa 2 de extensão).
 >   * **Se parar sem colidir ($v = 0$):** Retorna `0.0` (parada física garantida) e libera o fluxo para a Etapa 2 ([`07_extensao_seguranca_potential_collision.md`](07_extensao_seguranca_potential_collision.md)), que verificará se a margem mínima adicional também está livre.
@@ -20,7 +20,7 @@ Ao contrário do consumo temporal da fila (que ocorre dentro do ciclo do timer d
 ```mermaid
 flowchart TD
     subgraph HANDLER ["localize_ackerman_globalpos_message_handler()"]
-        PREV["astro_obstacle_avoider_set_trajectory_from_deceleration()<br/>Simula parada em arco com phi fixo"]
+        PREV["astro_obstacle_avoider_set_trajectory_from_deceleration()<br/>Simula parada com phi fixo"]
         PREV --> RES{"Houve Colisão na Frenagem?"}
         RES -- "Sim" --> SET_ACC["global_acc_to_avoid_potential_collision = -a_max<br/>Dispara ASTRO_ERROR_CODE_204"]
         RES -- "Não" --> CHECK_EXT["Testa Margem Adicional de Extensão<br/>set_extension_trajectory_from_deceleration()"]
@@ -30,10 +30,6 @@ flowchart TD
         GATE -- "Sim" --> TIMER["obstacle_avoider_timer_handler()"]
     end
 ```
-
-### Por que executar no Handler do `localize`?
-1. **Sensibilidade Imediata:** A odometria e o GPS publicam poses a $50\text{ Hz} \dots 100\text{ Hz}$ ($10\text{ ms} \dots 20\text{ ms}$). Se o caminhão acelerar em direção a um obstáculo repentino, a colisão em potencial é detectada na primeira amostra de posição, sem esperar a janela de $70\text{ ms}$ do rate limiter do timer.
-2. **Atualização do Estado de Alerta:** A variável global `global_acc_to_avoid_potential_collision` é mantida sempre atualizada. Quando o `obstacle_avoider_timer_handler()` é liberado para atuar, ele já encontra o diagnóstico de risco pronto para aplicação no debounce.
 
 ---
 
@@ -104,7 +100,7 @@ while (fabs(current_velocity) > 0.0)
 ```
 
 * **Se houver colisão:** A função `check_collision_in_trajectory()` devolve imediatamente a desaceleração máxima de frenagem (`-maximum_deceleration_forward` em marcha à frente, ou `maximum_deceleration_reverse` em ré). A previsão é **finalizada na hora (`break`)** — sem precisar continuar calculando até a velocidade zerar — e esse valor de frenagem máxima é retornado para a variável de controle `global_acc_to_avoid_potential_collision` no `localize_ackerman_globalpos_message_handler()`.
-* **Se não houver colisão:** O fluxo continua repetindo o processo passo a passo enquanto a velocidade não chegar a zero (`fabs(current_velocity) > 0.0`) ou até atingir o limite de segurança de $50\text{ m}$ projetados (`total_distance_traveled >= 50.0`). Caso pare totalmente sem bater em nada, retorna `0.0` (trajetória de parada livre).
+* **Se não houver colisão:** O fluxo continua repetindo o processo passo a passo enquanto a velocidade não chegar a zero (`fabs(current_velocity) > 0.0`) ou até atingir o limite de segurança de $50\text{ m}$ projetados (`total_distance_traveled >= 50.0`).
 
 ---
 
@@ -116,7 +112,7 @@ sequenceDiagram
     participant LOC as localize_ackerman
     participant OA_MAIN as Handler do Localize (Main)
     participant FUNC as set_trajectory_from_deceleration
-    participant TORR as Torricelli & CarModel
+    participant TORR as Pose & Torricelli 
     participant COL as check_collision_in_trajectory
 
     LOC->>OA_MAIN: Publica Pose, v_odometria e phi
@@ -128,12 +124,12 @@ sequenceDiagram
         FUNC->>COL: Checa polígonos da cabine + carretas contra o mapa
         alt Colisão Detectada!
             COL-->>FUNC: Colidiu! Retorna acc = -a_max
-            FUNC->>OA_MAIN: Retorna acc negativa (Dispara ASTRO_ERROR_CODE_204)
+            FUNC->>OA_MAIN: Retorna acc != 0 (Dispara ASTRO_ERROR_CODE_204)
         else Livre
-            COL-->>FUNC: Desobstruído
+            COL-->>FUNC: Desobstruído (continua no loop)
         end
     end
     
     Note over FUNC,OA_MAIN: Se atingiu v = 0.0 sem colidir: PARADA SEGURA GARANTIDA!
-    FUNC-->>OA_MAIN: Retorna acc = 0.00 m/s^2 (Sem perigo imediato)
+    FUNC-->>OA_MAIN: Retorna acc = 0.00  (Sem perigo imediato)
 ```
