@@ -159,7 +159,7 @@ O código grava exatamente $0{,}030\text{ s}$ no `Cmd[0].time`, descartando os c
 
 ---
 
-### Etapa 3: Tratamento de Esgotamento Total (*Failsafe*)
+### Etapa 3: Tratamento de Esgotamento Total 
 
 Se o tempo decorrido for maior do que a soma de **todos** os comandos da fila (por exemplo, se o MPP travar e parar de enviar planos):
 
