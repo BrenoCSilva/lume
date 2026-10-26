@@ -169,7 +169,7 @@ sequenceDiagram
 Em um teste prático acompanhado em tempo real, o parâmetro `obstacle_avoider_potential_collision_extension_length` foi configurado com uma margem de **$10{,}00\text{ m}$** (`Margem Buffer: 10.00m`).
 
 ### 4.1 Trajetória Livre e Varredura Completa da Margem
-Enquanto o caminhão trafegava, a Etapa 1 (frenagem por Torricelli) aprovava a parada imediata e liberava a execução da Etapa 2. Enquanto não encontrava obstáculo no diâmetro de 10m nada ocorreu, porém na imagem abaixo pode ser observado que próximo do metro 6 a frente do veículo foi encontrado um obstáculo:
+O veículo trafegava, a Etapa 1 (frenagem por Torricelli) aprovava a continuidade do plano atual e liberava a execução da Etapa 2. Enquanto Enquanto não encontrava obstáculo no diâmetro de 10m nada foi sinalizado, porém na imagem abaixo pode ser observado que próximo ao metro 6   foi encontrado um obstáculo:
 
 ![Captura do log de colisão na extensão de segurança](img/extensao_alerta_erro_204.png)
 
@@ -185,5 +185,19 @@ Esse registro comprova na prática cada regra descrita nas seções anteriores:
 
 2. **Interrupção Imediata (`break`) e Retorno da Frenagem Máxima:**
    * O log da imagem imprime de 4 em 4 passos (`Passo 116`, `Passo 120`...).
-   * Porém, assim que a pose projetada no **Passo 121** (`dist_ext = 6.07m`) tocou um obstáculo no **`[Obstacle Distance Map]`** (`collision_result.has_collision == true`), a condição `flag_check_collision` ativou o print imediato daquele passo ímpar, disparou o **`ASTRO_ERROR_CODE_204`** e **acionou o `break`** evitando o processo de calcular os passos restantes até $10{,}00\text{ m}$.
+   * Porém, assim que a pose projetada no **Passo 121** (`dist_ext = 6.07m`) tocou um obstáculo no **`[Obstacle Distance Map]`** (`collision_result.has_collision == true`), a condição `flag_check_collision` ativou o print imediato daquele passo , disparou o **`ASTRO_ERROR_CODE_204`** e **acionou o `break`** evitando o processo de calcular os passos restantes até $10{,}00\text{ m}$.
    * No mesmo momento foi retornado **`acc = -1.00 m/s^2`** (`-maximum_deceleration_forward`) para a variável `global_acc_to_avoid_potential_collision` no `localize_ackerman_globalpos_message_handler()`.
+
+---
+
+## 5. Continuação da Simulação de Emergência (*Potential Collision*)
+
+Ao finalizar a execução de `set_extension_trajectory_from_deceleration()`, o valor retornado em `global_acc_to_avoid_potential_collision` encerra a verificação no handler do `localize` e será consumido na **Etapa 3 — Atuação e Recálculo do Plano** dentro do `obstacle_avoider_timer_handler()`:
+
+* **`acc == 0.0` (Margem de extensão 100% livre):**  
+  Nenhuma desaceleração de emergência é solicitada (caso o contador de debounce estivesse ativo, ele é zerado em `potential_collision_treatment()`).
+
+* **`acc != 0.0` (Colisão detectada dentro da margem de extensão):**  
+  O valor de frenagem armazenado em `global_acc_to_avoid_potential_collision` segue para validação de persistência (Debounce 5/5) e recálculo das velocidades da fila:  
+  👉 **[`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md)** (`potential_collision_treatment()`)
+
