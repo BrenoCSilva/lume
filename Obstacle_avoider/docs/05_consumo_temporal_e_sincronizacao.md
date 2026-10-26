@@ -28,8 +28,8 @@ Cada elemento do vetor `motion_commands_vector[i]` é da estrutura `astro_robot_
 ```cpp
 typedef struct
 {
-    double v;       // Velocidade linear longitudinal desejada (m/s)
-    double phi;     // Ângulo de esterçamento do rodado dianteiro (radianos)
+    double v;       // Velocidade  desejada (m/s)
+    double phi;     // Ângulo de esterçamento (radianos)
     double time;    // Duração deste degrau de comando (dt em segundos!)
 } astro_robot_and_trailers_motion_command_t;
 ```
