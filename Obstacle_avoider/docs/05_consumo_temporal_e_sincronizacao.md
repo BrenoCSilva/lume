@@ -280,7 +280,7 @@ plano atual (base_time = 10:43:39.790 | current_time = 10:43:39.871 | latencia =
 
 #### Por que ocorre a alternância entre descartar 1 e 2 comandos?
 * Cada comando planejado tem duração nominal de **$60\text{ ms}$** ($0{,}060\text{ s}$).
-* A janela de liberação do rate limiter varia entre **$75\text{ ms}$ e $90\text{ ms}$** ($> 60\text{ ms}$).
+* A janela de liberação varia entre **$75\text{ ms}$ e $90\text{ ms}$** ($> 60\text{ ms}$).
 * Como a janela de avaliação ($75\text{ ms} \dots 90\text{ ms}$) é maior do que a duração de um único comando ($60\text{ ms}$):
   * **Quando o `Cmd[0]` herda um tempo residual médio ($\approx 35\text{ ms}$):** os $78\text{ ms}$ decorridos consomem esses $35\text{ ms}$ e penetram no comando seguinte $\to$ **descarta 1 comando**.
   * **No ciclo seguinte:** o novo `Cmd[0]` começa com um tempo residual minúsculo ($\approx 0{,}5\text{ ms} \dots 18\text{ ms}$). Como a janela decorrida é de $81\text{ ms} \dots 85\text{ ms}$, ela consome esse resíduo e ainda engole integralmente o `Cmd[1]` de $60\text{ ms}$ ($18 + 60 = 78\text{ ms} \le 81\text{ ms}$) $\to$ **descarta 2 comandos**!
