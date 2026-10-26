@@ -6,9 +6,9 @@ A função [`potential_collision_treatment()`](file:///home/lume/astro/src/obsta
 > **Resumo do Papel da `potential_collision_treatment()`:**
 > * **Condição de entrada:** Lê a variável global de controle `global_acc_to_avoid_potential_collision`, que foi previamente preenchida no handler do `localize` pela **Etapa 1 ([`06_desaceleracao_preventiva_phi_fixo.md`](06_desaceleracao_preventiva_phi_fixo.md))** ou pela **Etapa 2 ([`07_extensao_seguranca_potential_collision.md`](07_extensao_seguranca_potential_collision.md))**.
 > * **O problema que ela resolve:** Impede que um ruído isolado de sensor (um falso positivo de 1 único ciclo) cause uma freada brusca desnecessária, exigindo que o perigo se confirme por **5 iterações consecutivas (Debounce 5/5)** antes de intervir no plano.
-> * **Como atua:** Uma vez atingido o Debounce 5/5, trava o estado de emergência ativo por **$1{,}0\text{ segundo}$** (`(now - last_ativation_timestamp) < 1.0`) e:
+> * **Como atua:** Uma vez atingido o Debounce 5/5, a função ativa o estado de emergência (que permanece atuando continuamente enquanto o perigo persistir e por mais `1.0 s` após a última detecção) e:
 >   * Se `use_potential_collision == 0` (**Modo Auditoria**): Apenas grava o erro em log e envia para a auditoria, sem alterar as velocidades do plano.
->   * Se `use_potential_collision == 1` (**Modo Ativo**): Chama [`velocity_recalculate_with_acceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1060) para aplicar a desaceleração de alarme diretamente nos comandos do plano atual até zerar a velocidade do veículo, além de publicar o `ASTRO_ERROR_CODE_204`.
+>   * Se `use_potential_collision == 1` (**Modo Ativo**): Chama [`velocity_recalculate_with_acceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1060) para aplicar a desaceleração diretamente nos comandos do plano atual até zerar a velocidade do veículo, além de publicar o `ASTRO_ERROR_CODE_204`.
 
 ---
 
@@ -44,7 +44,7 @@ A lógica interna da função divide-se em três mecanismos sequenciais:
 Toda vez que `potential_collision_treatment()` é chamada, ela inspeciona se `global_acc_to_avoid_potential_collision` contém uma desaceleração de alarme (`fabs(global_acc_to_avoid_potential_collision) > EPSILON`):
 
 ```cpp
-if (fabs(global_acc_to_avoid_potential_collision) > EPSILON)
+if (fabs(global_acc_to_avoid_potential_collision) != 0.0)
 {
     it_count++;
     ...
@@ -59,13 +59,13 @@ else
     it_count = 0;
 }
 ```
-* **Nas iterações 1 a 4 (`it_count < 5`):** O código apenas incrementa `it_count` e imprime `[DEBOUNCE x/5] Obstaculo detectado... Validando persistencia...`, sem frear o caminhão ainda. Se o obstáculo sumir antes da 5ª iteração, `it_count` volta a `0` (`[DEBOUNCE RESET]`).
-* **A partir da 5ª iteração consecutiva (`it_count >= 5`):** Confirma-se que o obstáculo é real (`>>> [DEBOUNCE 5/5 CONFIRMADO -> FREIO DE EMERGENCIA ATIVADO!] <<<`). Nesse instante, salva-se o horário atual em `last_ativation_timestamp` e congela-se a desaceleração em `last_global_acc_to_avoid_potential_collision`.
+* **Nas iterações 1 a 4 (`it_count < 5`):** O código apenas incrementa `it_count`, sem frear o caminhão ainda. Se o obstáculo sumir antes da 5ª iteração, `it_count` volta a `0` (`[DEBOUNCE RESET]`).
+* **A partir da 5ª iteração consecutiva (`it_count >= 5`):** Confirma-se que o obstáculo é real. Nesse instante, salva-se o horário atual em `last_ativation_timestamp` e congela-se a desaceleração em `last_global_acc_to_avoid_potential_collision`.
 
 ---
 
-### Passo 2: Janela de Retenção de $1{,}0\text{ s}$ e Modo Auditoria
-Confirmado o debounce, o bloco de atuação permanece ativo por **$1{,}0\text{ segundo}$** a partir da última confirmação (`if ((now - last_ativation_timestamp) < 1.0)`), garantindo que a frenagem não oscile caso o sensor pisque por uma fração de segundo:
+### Passo 2: Manutenção do Freio (`< 1.0 s` após a última detecção) e Modo Auditoria
+Enquanto o obstáculo continuar sendo detectado (`it_count >= 5`), `last_ativation_timestamp` é atualizado a cada ciclo com o tempo atual, mantendo a frenagem ativa continuamente. Além disso, a condição `if ((now - last_ativation_timestamp) < 1.0)` garante que, **mesmo após o obstáculo sumir (ou caso o sensor falhe por um instante), o freio continue atuando por mais 1 segundo após a última confirmação**:
 
 ```cpp
 if ((now - last_ativation_timestamp) < 1.0)

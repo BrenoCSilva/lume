@@ -199,5 +199,5 @@ Ao finalizar a execução de `set_extension_trajectory_from_deceleration()`, o v
 
 * **`acc != 0.0` (Colisão detectada dentro da margem de extensão):**  
   O valor de frenagem armazenado em `global_acc_to_avoid_potential_collision` segue para validação de persistência (Debounce 5/5) e recálculo das velocidades da fila:  
-  👉 **[`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md)** (`potential_collision_treatment()`)
+  **[`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md)** (`potential_collision_treatment()`)
 
