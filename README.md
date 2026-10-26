@@ -1,124 +1,141 @@
-# Restrições de Dinâmica Veicular e Estabilidade Lateral
+# Desaceleração Preventiva com Ângulo de Esterçamento Fixo (`phi` Fixo)
 
-Este documento descreve os mecanismos implementados no [`obstacle_avoider`](file:///home/lume/astro/src/obstacle_avoider/) para garantir a **estabilidade dinâmica lateral** do caminhão e dos semirreboques.
+A função [`astro_obstacle_avoider_set_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1308-L1401) constitui a **primeira linha de defesa preventiva** do Obstacle Avoider contra colisões catastróficas. 
+
+Antes mesmo que o módulo avalie o plano de trajetória do planejador ou verifique a fila de comandos de movimento, esta função simula continuamente uma pergunta física crucial:
+> *"Se o veículo acionar a frenagem máxima neste exato milissegundo, mantendo a direção atual do volante, ele conseguirá parar completamente antes de atingir qualquer obstáculo?"*
+
+Se a resposta for **NÃO** (ou seja, se a trajetória de frenagem cruzar qualquer obstáculo no mapa), o módulo calcula imediatamente a aceleração de emergência necessária (`global_acc_to_avoid_potential_collision`) para mitigar ou evitar o impacto.
 
 ---
 
-## 1. Por que essas restrições estão no Obstacle Avoider?
+## 1. Posição no Fluxo de Execução
 
-Embora o planejador de trajetória ([MPP](file:///home/lume/astro/src/mpp/)) gere planos suaves, o `obstacle_avoider` atua como a **última barreira de segurança física** antes do envio dos comandos para a base.
-
-Em veículos comerciais pesados (especialmente cavalos mecânicos atrelados a semirreboques):
-* O centro de gravidade (CG) é elevado quando carregado;
-* Curvas fechadas executadas em velocidades inadequadas geram risco iminente de **tombamento (*rollover*)** ou **efeito canivete (*jackknifing*)**;
-* O esterçamento rápido em alta velocidade pode causar instabilidade no reboque por amplificação traseira (*rearward amplification*).
-
-Por isso, dentro da função [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1211), **antes** de testar qualquer obstáculo no mapa, o plano é submetido a dois filtros de dinâmica:
+Ao contrário do consumo temporal da fila (que ocorre dentro do ciclo do timer de decisão), a desaceleração preventiva é disparada no handler de alta frequência da localização:
 
 ```mermaid
 flowchart TD
-    IN["Plano de Comandos do MPP<br/>(v, phi, delta_t)"] --> CENTR["1. limit_centripetal_acceleration...<br/>Limitação por Aceleração Centrípeta<br/>(Física: ac <= 1.05 * ac_max)"]
-    CENTR --> PHI_LIM["2. limit_current_velocity_to_max_phi()<br/>Envelope Seguro de Esterçamento x Vel<br/>(Tabela Spline de Calibração)"]
-    PHI_LIM --> OA_CORE["3. obstacle_avoider()<br/>Validação Preventiva de Obstáculos"]
+    LOC["Mensagem de Localização (GPS / Odometria)<br/>localize_ackerman_globalpos (50 Hz - 100 Hz)"] --> HANDLER["localize_ackerman_globalpos_message_handler()"]
+    
+    subgraph S1 ["Etapa 1: Avaliação Preventiva Imediata"]
+        HANDLER --> PREV["astro_obstacle_avoider_set_trajectory_from_deceleration()<br/>Simula parada em arco com phi fixo"]
+        PREV --> RES{"Houve Colisão na Frenagem?"}
+        RES -- "Sim" --> SET_ACC["global_acc_to_avoid_potential_collision = -a_max<br/>Dispara ASTRO_ERROR_CODE_204"]
+        RES -- "Não" --> CHECK_EXT["Testa Margem Adicional de Extensão<br/>set_extension_trajectory_from_deceleration()"]
+    end
+
+    subgraph S2 ["Etapa 2: Pipeline de Decisão (Controlado por Taxa)"]
+        SET_ACC --> GATE{"can_execute_obstacle_avoider_handler()<br/>(dt &gt; 70 ms?)"}
+        CHECK_EXT --> GATE
+        GATE -- "Sim" --> TIMER["obstacle_avoider_timer_handler()"]
+        TIMER --> DEBOUNCE["Debounce de 5 Ciclos (it_count_to_activate)"]
+        DEBOUNCE --> REC_VEL["Recalcula Velocidades da Fila<br/>velocity_recalculate_with_acceleration()"]
+    end
+```
+
+### Por que executar no Handler do `localize`?
+1. **Sensibilidade Imediata:** A odometria e o GPS publicam poses a $50\text{ Hz} \dots 100\text{ Hz}$ ($10\text{ ms} \dots 20\text{ ms}$). Se o caminhão acelerar em direção a um obstáculo repentino, a colisão em potencial é detectada na primeira amostra de posição, sem esperar a janela de $70\text{ ms}$ do rate limiter do timer.
+2. **Atualização do Estado de Alerta:** A variável global `global_acc_to_avoid_potential_collision` é mantida sempre atualizada. Quando o `obstacle_avoider_timer_handler()` é liberado para atuar, ele já encontra o diagnóstico de risco pronto para aplicação no debounce.
+
+---
+
+## 2. Fluxo de Funcionamento da `astro_obstacle_avoider_set_trajectory_from_deceleration()`
+
+O objetivo central da [`astro_obstacle_avoider_set_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1308-L1401) é **tentar parar o veículo mantendo seu ângulo de esterçamento ($\phi$) fixo** e verificar se essa trajetória até a parada completa é segura.
+
+Para fazer isso, a função executa um loop iterativo (`while (fabs(current_velocity) > 0.0)`) que projeta o futuro passo a passo:
+
+### Passo 1: Previsão da Pose Futura ("Passinho" de $0{,}1\text{ s}$)
+A partir da pose atual vinda do `localize`, a função utiliza a [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1358) para calcular a coordenada espacial onde o veículo (cabine e carretas) estará daqui a **$0{,}1\text{ s}$** (`full_time_interval = 0.1`, integrado com `delta_t = 0.05` e velocidade de referência `0.5 m/s` apenas para gerar o deslocamento geométrico na curva com `odometry_phi` fixo):
+
+```cpp
+iterative_pose = astro_libcarmodel_recalc_pos_ackerman(
+    &iterative_pose, vel_sign * 0.5, odometry_phi, 
+    full_time_interval, &distance_traveled, delta_t, 
+    &astro_robot_ackerman_config, &astro_semi_trailer_config
+);
+```
+> *Nota:* O objetivo dessa chamada não é testar a dinâmica de aceleração, mas simplesmente descobrir **o caminho geométrico (próximo ponto no espaço)** que o caminhão percorre ao avançar um "passinho" mantendo o volante travado em `odometry_phi`.
+
+---
+
+### Passo 2: Redução da Velocidade via Equação de Torricelli
+Encontrado esse novo ponto no espaço, mede-se a distância real percorrida nesse passinho ($\Delta s$, dada por `DIST2D(iterative_pose, prev_pose)`) e utiliza-se a **Equação de Torricelli** ([`compute_final_velocity_using_torricelli()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L969)) para identificar qual será a velocidade real do veículo após andar esse deslocamento aplicando a **frenagem máxima**:
+
+$$v^2 = v_0^2 + 2 \cdot a \cdot \Delta s$$
+
+Onde:
+* **$\Delta s$:** Distância percorrida entre a pose anterior e a nova pose calculada.
+* **$a$:** Valor negativo da desaceleração máxima (`-maximum_deceleration_forward`, vindo dos parâmetros).
+* **$v_0$:** Velocidade real do veículo no início daquele passo.
+
+```cpp
+current_velocity = vel_sign * compute_final_velocity_using_torricelli(
+    current_velocity, 
+    -astro_robot_ackerman_config.maximum_deceleration_forward, 
+    DIST2D(iterative_pose, prev_pose)
+);
 ```
 
 ---
 
-## 2. Limitação de Aceleração Centrípeta
+### Passo 3: Verificação de Colisão e Critério de Parada do Loop
+Obtida a posição futura exata e sua respectiva velocidade reduzida, chama-se [`check_collision_in_trajectory()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1012) para verificar se há colisão naquele ponto contra:
+1. O **mapa de distâncias / mapas especiais** (`obstacle_distance_map` / `maps_obstacle_avoider`).
+2. O **mapa de ocupação** (`occupancy_map`).
+3. Algum **objeto móvel** (`moving_objects`).
 
-A função [`limit_centripetal_acceleration_reducing_velocity()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L286-L314) calcula a aceleração lateral teórica gerada por cada comando de esterçamento do plano:
-
-```c
-// Em obstacle_avoider.cpp (L290-L311):
-if (fabs(motion_commands_vector[i].phi) > 0.001)
+```cpp
+while (fabs(current_velocity) > 0.0)
 {
-    double radius_of_curvature = distance_between_front_and_rear_axles / fabs(tan(motion_commands_vector[i].phi));
-    double centripetal_acceleration = (current_velocity * current_velocity) / radius_of_curvature;
+    // 1. Projeta a pose 0.1s à frente mantendo phi fixo
+    // 2. Reduz a velocidade pelo deslocamento usando Torricelli com frenagem máxima
+    // 3. Verifica se a nova pose colide nos mapas:
+    returned_acc = check_collision_in_trajectory(
+        iterative_pose, astro_robot_ackerman_config, occupancy_map, 
+        astro_robot_ackerman_config.obstacle_avoider_obstacles_safe_distance, 
+        vel_sign, total_distance_traveled, timestamp
+    );
 
-    if (centripetal_acceleration > (1.05 * robot_max_centripetal_acceleration))
+    if ((fabs(returned_acc) > EPSILON_OB) || (total_distance_traveled >= 50.0))
     {
-        double v_for_centripetal = sqrt(robot_max_centripetal_acceleration * radius_of_curvature);
-
-        if (motion_commands_vector[i].v < 0.0)
-            v_for_centripetal = -v_for_centripetal;
-
-        motion_commands_vector[i].time *= (1 - (v_for_centripetal / motion_commands_vector[i].v)) + 1;
-        motion_commands_vector[i].v = v_for_centripetal;
-        set_new_motion_command_needs_to_be_published(1);
+        break;
     }
+    ...
 }
 ```
 
-### 2.1. Formulação Matemática
-1. **Raio de Curvatura ($R$):**
-   Utilizando o modelo cinemático de bicicleta com distância entre eixos $L$ (`distance_between_front_and_rear_axles`):
-   $$R = \frac{L}{|\tan(\phi_i)|}$$
-
-2. **Aceleração Centrípeta Estimada ($a_c$):**
-   $$a_c = \frac{v_{\text{atual}}^2}{R}$$
-
-3. **Critério de Corte (Margem de 5%):**
-   Se $a_c > 1{,}05 \cdot a_{c,\max}$ (onde $a_{c,\max}$ é o parâmetro do robô `robot_max_centripetal_acceleration`):
-   * O módulo calcula a velocidade limite exata que satisfaz a aceleração máxima:
-     $$v_{\text{lim}} = \sqrt{a_{c,\max} \cdot R}$$
-   * Preserva o sinal de avanço ou marcha ré ($v < 0$);
-   * Ajusta o tempo do comando proporcionalmente para manter a coerência espacial:
-     $$\Delta t \leftarrow \Delta t \cdot \left(1 - \frac{v_{\text{lim}}}{v_{\text{orig}}} + 1\right)$$
-   * Atribui $v_i \leftarrow v_{\text{lim}}$ e sinaliza para publicação imediata.
+* **Se houver colisão:** A função `check_collision_in_trajectory()` devolve imediatamente a desaceleração máxima de frenagem (`-maximum_deceleration_forward` em marcha à frente, ou `maximum_deceleration_reverse` em ré). A previsão é **finalizada na hora (`break`)** — sem precisar continuar calculando até a velocidade zerar — e esse valor de frenagem máxima é retornado para a variável de controle `global_acc_to_avoid_potential_collision` no `localize_ackerman_globalpos_message_handler()`.
+* **Se não houver colisão:** O fluxo continua repetindo o processo passo a passo enquanto a velocidade não chegar a zero (`fabs(current_velocity) > 0.0`) ou até atingir o limite de segurança de $50\text{ m}$ projetados (`total_distance_traveled >= 50.0`). Caso pare totalmente sem bater em nada, retorna `0.0` (trajetória de parada livre).
 
 ---
 
-## 3. Envelope de Velocidade por Ângulo $\phi$ (*Spline de Calibração*)
-
-Além da física teórica centrípeta, cada tipo de veículo (especialmente implementos de mineração ou caminhões articulados pesados) possui faixas práticas de esterçamento seguro determinadas por calibração de fábrica.
-
-A função [`limit_current_velocity_according_to_max_phi()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L416-L483) impõe uma **tabela/spline de limites empíricos**:
+## 3. Diagrama de Sequência e Fluxo Interno
 
 ```mermaid
-flowchart LR
-    PARAM["Parâmetro String<br/>v_and_max_phi_reference_points"] --> PARSE["get_v_and_max_phi_points()<br/>Extrai pares (v, phi_max)"]
-    PARSE --> INTERP["Interpolação Linear<br/>get_max_phi_from_velocity()<br/>get_max_velocity_from_phi()"]
-    INTERP --> CHECK{"phi do comando > phi_max?"}
-    CHECK -- Sim --> LIMIT["Limita velocidade linear<br/>v = min(v_atual, v_max_phi)"]
-    CHECK -- Não --> OK["Mantém velocidade original"]
+sequenceDiagram
+    autonumber
+    participant LOC as localize_ackerman
+    participant OA_MAIN as Handler do Localize (Main)
+    participant FUNC as set_trajectory_from_deceleration
+    participant TORR as Torricelli & CarModel
+    participant COL as check_collision_in_trajectory
+
+    LOC->>OA_MAIN: Publica Pose, v_odometria e phi
+    OA_MAIN->>FUNC: Inicia simulação preventiva
+    
+    loop Enquanto v &gt; 0.0 m/s (Até Parar)
+        FUNC->>TORR: Avança pose em arco (phi fixo) e reduz v via Torricelli
+        TORR-->>FUNC: Nova pose e velocidade decrescente
+        FUNC->>COL: Checa polígonos da cabine + carretas contra o mapa
+        alt Colisão Detectada!
+            COL-->>FUNC: Colidiu! Retorna acc = -a_max
+            FUNC->>OA_MAIN: Retorna acc negativa (Dispara ASTRO_ERROR_CODE_204)
+        else Livre
+            COL-->>FUNC: Desobstruído
+        end
+    end
+    
+    Note over FUNC,OA_MAIN: Se atingiu v = 0.0 sem colidir: PARADA SEGURA GARANTIDA!
+    FUNC-->>OA_MAIN: Retorna acc = 0.00 m/s^2 (Sem perigo imediato)
 ```
-
-### 3.1. Formato do Parâmetro de Calibração
-Configurado via `.ini` através de `obstacle_avoider_v_and_max_phi_reference_points`:
-```text
-obstacle_avoider_v_and_max_phi_reference_points 3 1.5 100% 2.0 50% 3.5 0.2
-```
-A string segue a sintaxe:
-$$\text{N} \quad v_1 \quad \phi_1 \quad v_2 \quad \phi_2 \quad \dots \quad v_N \quad \phi_N$$
-* **$N$:** Quantidade de pontos de calibração;
-* **$\phi$:** Pode ser expresso em radianos diretos (ex.: `0.2`) ou como porcentagem do ângulo máximo do caminhão (ex.: `100%`, `50%` de `robot_max_steering_angle`).
-
-**Exemplo Prático de Interpretação:**
-* Até $1{,}5\,\text{m/s}$ ($\approx 5{,}4\,\text{km/h}$): esterçamento total permitido ($100\%$ de $\phi_{\max}$);
-* A $2{,}0\,\text{m/s}$ ($\approx 7{,}2\,\text{km/h}$): esterçamento limitado a $50\%$;
-* A $3{,}5\,\text{m/s}$ ($\approx 12{,}6\,\text{km/h}$): esterçamento estritamente limitado a $0{,}2\,\text{rad}$ ($\approx 11{,}5^\circ$).
-
-### 3.2. Interpolação e Modulação
-Dada a velocidade linear de cada comando do plano, o algoritmo interpola linearmente entre os dois nós adjacentes da tabela:
-* Se $|\phi_i| > \phi_{\max}(v_i)$, a velocidade permitida é reduzida para $v_{\text{novo}} = \min(v_i, v_{\max}(\phi_i))$;
-* O tempo $\Delta t$ é ajustado proporcionalmente para conservar a distância percorrida;
-* A primeira alteração é armazenada para fins de diagnóstico e telemetria.
-
----
-
-## 4. Modos de Operação: Intervenção Ativa vs. Auditoria
-
-O comportamento do sistema mediante violação do envelope de esterçamento é governado pelo parâmetro:
-
-```text
-obstacle_avoider_use_hold_velocity_to_reference_phi [on|off]
-```
-
-| Configuração | Ação no Plano de Movimento | Diagnóstico e Alarme |
-| :---: | :--- | :--- |
-| **`on` (Ativo)** | **Modifica o plano:** reduz efetivamente a velocidade enviada para a `base_ackerman`. | Publica **`ASTRO_ERROR_CODE_205`** no barramento com cooldown de 0,5 s: *"Ângulo de articulação (phi) excedeu o limite seguro para a velocidade atual..."* |
-| **`off` (Passivo / Auditoria)** | **Não altera o plano:** o veículo prossegue na velocidade planejada pelo MPP. | Registra a ocorrência na telemetria de auditoria via [`send_hold_velocity_to_reference_phi_info_to_audit()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L406-L413). |
-
-> [!TIP]
-> O modo passivo (`off`) é frequentemente utilizado durante etapas de validação em campo para coletar métricas de manobra sem interferir na dirigibilidade do planejador.
-
