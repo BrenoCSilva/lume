@@ -1,27 +1,18 @@
 # Arquitetura e Fluxo Geral do Obstacle Avoider
 
-Este documento detalha a arquitetura de software, o ciclo de vida e o modelo de execução orientado a eventos do módulo [`obstacle_avoider`](file:///home/lume/astro/src/obstacle_avoider/).
-
----
-
-## 1. Modelo de Execução: Orientado a Eventos vs. Loop Periódico
-
-Historicamente, o `obstacle_avoider` operava através de um timer periódico do IPC (`astro_ipc_addPeriodicTimer`) executando em frequência fixa (ex.: 20 Hz). No entanto, esse formato causava latência desnecessária entre a emissão de um novo plano pelo planejador e sua validação pelo freio de segurança.
-
-Na arquitetura atual, o módulo adota um **modelo estritamente orientado a eventos** (definido no bloco `#else` da função [`main()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L2133-L2151)):
+No [`main()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L2285-L2322) do `obstacle_avoider`, existe a possibilidade de o módulo atuar em uma frequência fixa chamando periodicamente a função principal [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1359) via timer do IPC. Porém, como essa funcionalidade está comentada no código, **o módulo funciona exclusivamente através dos seus handlers de mensagens**:
 
 ```c
-// Em obstacle_avoider_main.cpp (L2144-L2147):
-// astro_ipc_addPeriodicTimer(1.0 / freq, obstacle_avoider_timer_handler, NULL); // Comentado
+// Em obstacle_avoider_main.cpp:
+// astro_ipc_addPeriodicTimer(1.0 / astro_obstacle_avoider_collision_avoidance_frequency, (TIMER_HANDLER_TYPE) obstacle_avoider_timer_handler, NULL);
+// astro_ipc_addPeriodicTimer(1.0 / astro_obstacle_avoider_collision_avoidance_frequency, (TIMER_HANDLER_TYPE) check_message_absence_timeout_timer_handler, NULL);
+
 astro_ipc_loop(shutdown_obstacle_avoider);
 ```
 
-> [!NOTE]
-> O timer periódico do IPC fica desativado por padrão. A função central [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1211) é chamada diretamente pelos handlers de eventos sempre que novas informações críticas chegam ao módulo.
-
 ---
 
-## 2. Os Três Gatilhos de Entrada (Handlers)
+## 1. Os Três Gatilhos de Entrada (Handlers)
 
 A validação de colisão e a emissão de comandos para a base são disparadas por **3 eventos principais**:
 
@@ -32,7 +23,7 @@ flowchart TD
     M3["Mensagem Mapa de Distâncias<br/>(astro_obstacle_distance_mapper_map)"] --> H3["astro_obstacle_distance_mapper<br/>_on_distance_map_message_handler()"]
 
     H1 -->|"Imediato (Sem atraso)"| CORE["obstacle_avoider_timer_handler()"]
-    H2 --> LIM{"can_execute_obstacle<br/>_avoider_handler()?<br/>(Intervalo > 70 ms)"}
+    H2 --> LIM{"can_execute_obstacle<br/>_avoider_handler()?<br/>(Intervalo &gt; 70 ms)"}
     H3 --> LIM
 
     LIM -- Sim --> CORE
@@ -49,7 +40,7 @@ flowchart TD
 
 ---
 
-## 3. Mecanismo de Controle de Taxa (*Rate Limiter*)
+## 2. Mecanismo de Controle de Taxa (*Rate Limiter*)
 
 Como o `localize` (GPS + Odometria) e o mapa de distâncias publicam mensagens em frequências elevadas (frequentemente 50 Hz ou mais), reavaliar o plano em cada mensagem recebida sobrecarregaria o processador sem ganho perceptível se o plano de trajetória não mudou.
 
@@ -79,73 +70,57 @@ int can_execute_obstacle_avoider_handler()
 
 ---
 
-## 4. Pipeline do `obstacle_avoider_timer_handler()`
+## 3. Diagrama Macro Integrado de Fluxo
 
-Apesar do nome histórico (*timer handler*), esta função atua como o **orquestrador sequencial** de todas as regras de segurança do OA:
+O sistema opera de forma orientada a eventos. O fluxo geral de avaliação e os blocos principais que alteram o plano seguem o pipeline abaixo:
 
 ```mermaid
 flowchart TD
-    START["obstacle_avoider_timer_handler()<br/>Início da Execução"] --> VERIF{"necessary_maps_available?<br/>(Mapas carregados?)"}
-    VERIF -- Não --> RET["Retorna sem processar"]
-    VERIF -- Sim --> CONSUME["consume_motion_command_time()<br/>Consome tempo dos comandos decorridos"]
+    subgraph Gatilhos ["1. Gatilhos de Entrada (Event-Driven)"]
+        T1["Novo Plano MPP"] --> H1["Handler MPP<br/>(robot_ackerman_motion_command)"]
+        T2["Novo Globalpos GPS"] --> H2["Handler Localize<br/>(localize_ackerman_globalpos)"]
+        T3["Novo Mapa Distâncias"] --> H3["Handler Mapa Distâncias<br/>(obstacle_distance_mapper)"]
+    end
 
-    CONSUME --> PC["potential_collision_treatment()<br/>Aplica frenagem de emergência se ativada"]
-    PC --> CENTR["limit_centripetal_acceleration_reducing_velocity()<br/>Atenua velocidade por limite de aceleração centrípeta"]
-    CENTR --> PHI_LIM["limit_current_velocity_according_to_max_phi()<br/>Aplica envelope de velocidade por ângulo phi"]
-    PHI_LIM --> OA_CORE["obstacle_avoider()<br/>Executa loop preventivo central (do-while)"]
+    subgraph Emergencia ["2. Simulação de Emergência (Potential Collision)"]
+        H2 --> PC["Simulação de Frenagem<br/>set_trajectory_from_deceleration()<br/>Volante travado em phi + Torricelli"]
+        PC --> EXT["Extensão de Segurança<br/>set_extension_trajectory()<br/>Projeção de N metros à frente"]
+        EXT --> ACC["Atualiza Aceleração de Emergência<br/>global_acc_to_avoid_potential_collision"]
+    end
 
-    OA_CORE --> CHK_PUB{"Novo comando precisa<br/>ser publicado?"}
-    CHK_PUB -- Sim --> PUB["obstacle_avoider_publish_base_ackerman()<br/>Envia plano validado para a base"]
-    CHK_PUB -- Não --> END["Finaliza ciclo sem envio"]
-    PUB --> END
+    H1 -->|"Imediato"| OA_TIMER["Handler Central de Decisão<br/>obstacle_avoider_timer_handler()"]
+    ACC -->|"Frequência max ~14 Hz"| OA_TIMER
+    H3 -->|"Frequência max ~14 Hz"| OA_TIMER
+
+    subgraph PipelineOA ["3. Pipeline do obstacle_avoider_timer_handler()"]
+        OA_TIMER --> CONSUME["Consumo Temporal da Fila<br/>consume_motion_command_time()<br/>Sincroniza o plano com o relógio atual"]
+        CONSUME --> TRAT_PC["Tratamento Potential Collision<br/>potential_collision_treatment()<br/>Filtro 5 ciclos -> Desacelera com Acc"]
+        TRAT_PC --> CENTR["Limite de Aceleração Centrípeta<br/>limit_centripetal_acceleration...<br/>Proteção contra tombamento em curvas"]
+        CENTR --> PHI_LIM["Limite de Velocidade por Phi<br/>limit_current_velocity_to_max_phi()<br/>Envelope seguro esterçamento x vel"]
+        PHI_LIM --> OA_CORE["Validação Preventiva do Plano<br/>obstacle_avoider()<br/>Simula trajetória e atenua velocidades se houver obstáculo"]
+    end
+
+    OA_CORE --> PUB["Publicação Final<br/>obstacle_avoider_publish_base_ackerman()<br/>Envia comandos validados para a base"]
 ```
 
-### Etapas Executadas em Ordem:
+### Etapas Principais Executadas no `obstacle_avoider_timer_handler()`:
 
-1. **[`consume_motion_command_time()`](05_consumo_temporal_e_sincronizacao.md)**: Subtrai o tempo já transcorrido desde o início da execução do comando atual, mantendo a sincronia temporal da trajetória e compensando a latência do MPP. Detalhes em [`05_consumo_temporal_e_sincronizacao.md`](05_consumo_temporal_e_sincronizacao.md).
-2. **`potential_collision_treatment()`**: Verifica se a simulação de emergência (calculada no handler do GPS) detectou colisão iminente com volante travado.
-3. **`limit_centripetal_acceleration_reducing_velocity()`**: Modula a velocidade em trechos de curva acentuada para garantir que a aceleração centrípeta não exceda $1{,}05 \cdot a_{c,\max}$.
-4. **`limit_current_velocity_according_to_max_phi()`**: Verifica a tabela spline de calibração para restringir a velocidade se o esterçamento $\phi$ for incompatível.
-5. **`obstacle_avoider()`**: Executa a simulação física futura e atenua velocidades caso haja obstáculos no caminho do plano planejado.
-6. **Publicação para `base_ackerman`**: Publica o plano apenas se houve intervenção (`needs_to_be_published == 1`) ou se o timestamp do plano do MPP mudou, evitando inundar o barramento com mensagens repetidas.
+1. **[`consume_motion_command_time()`](05_consumo_temporal_e_sincronizacao.md)**: Subtrai o tempo já transcorrido desde a última atualização, mantendo a sincronia temporal da trajetória e compensando a latência do MPP.
+2. **[`potential_collision_treatment()`](08_atuacao_potential_collision_treatment.md)**: Verifica se a simulação de emergência (calculada no handler do `localize`) confirmou colisão iminente por 5 ciclos e desacelera o plano.
+3. **[`limit_centripetal_acceleration_reducing_velocity()`](04_restricoes_dinamica_veiculo.md)**: Modula a velocidade em trechos de curva acentuada para garantir que a aceleração centrípeta não exceda $1{,}05 \cdot a_{c,\max}$.
+4. **[`limit_current_velocity_according_to_max_phi()`](04_restricoes_dinamica_veiculo.md)**: Restringe a velocidade caso o ângulo de esterçamento $\phi$ exija velocidade menor.
+5. **[`obstacle_avoider()`](02_planejamento_preventivo.md)**: Executa a simulação física futura do plano do MPP e atenua as velocidades caso haja obstáculos no caminho.
+6. **Publicação para `base_ackerman`**: Envia o plano validado/modificado para o controle de baixo nível.
 
 ---
 
-## 5. Watchdog de Ausência de Mensagens (*Fail-Safe*)
+## 5. Códigos de Erro Emitidos
 
-Para garantir que o veículo não continue se movendo caso algum nó do pipeline trave ou perca comunicação, existe a função [`check_message_absence_timeout_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1307-L1326):
+O módulo publica os seguintes erros no barramento do sistema (`ASTRO_ERROR_CODE`):
 
-```c
-void check_message_absence_timeout_timer_handler(void)
-{
-    if (log_mode) return;
-
-    // 1. Timeout de Odometria / Sensores
-    if ((astro_robot_ackerman_sensor_time_of_last_update >= 0.0) &&
-        ((astro_get_time() - astro_robot_ackerman_sensor_time_of_last_update) > robot_sensor_timeout))
-    {
-        publish_base_ackerman_motion_command_message_to_stop_robot();
-    }
-
-    // 2. Timeout de Comandos do MPP
-    if ((astro_robot_ackerman_motion_command_time_of_last_update >= 0.0) &&
-        (((astro_get_time() - astro_robot_ackerman_motion_command_time_of_last_update) - last_motion_command_total_time) > command_timeout))
-    {
-        publish_base_ackerman_motion_command_message_to_stop_robot();
-    }
-}
-```
-
-* **Perda de Odometria (`robot_sensor_timeout`):** Se a pose global parar de atualizar, o veículo não sabe onde está e é freado imediatamente.
-* **Perda do Planejador (`command_timeout`):** Se o MPP parar de enviar planos por mais tempo do que a duração do último plano somada à tolerância de timeout, o OA assume falha e envia comando de parada total.
+* **`ASTRO_ERROR_CODE_201`**: Colisão identificada na pose atual enquanto o veículo estava em movimento (estado crítico de colisão real).
+* **`ASTRO_ERROR_CODE_203`**: Colisão futura identificada no plano do MPP ou espaço insuficiente para frenagem até o destino.
+* **`ASTRO_ERROR_CODE_204`**: Colisão detectada na simulação de emergência (*potential collision* ou extensão).
+* **`ASTRO_ERROR_CODE_205`**: Ângulo de esterçamento $\phi$ excedeu o envelope seguro para a velocidade atual.
 
 ---
-
-## 6. Compensação de Latência de Atuadores
-
-Na saída para o `base_ackerman`, a função [`obstacle_avoider_publish_base_ackerman_motion_command()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L860-L900) oferece suporte à compensação de latência (`new_latency_control`).
-
-Como atuadores hidráulicos de direção e sistemas de freio possuem tempos de resposta física não desprezíveis:
-* A função [`apply_robot_delays()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L876) desloca temporalmente os pontos do perfil de velocidade e esterçamento;
-* Garante que o comando enviado para a base antecipe o atraso intrínseco do caminhão físico, sincronizando a trajetória real com o tempo simulado pelo OA.
-
