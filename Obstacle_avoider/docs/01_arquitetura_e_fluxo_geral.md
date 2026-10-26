@@ -32,19 +32,20 @@ flowchart TD
 
 ### Detalhamento dos Handlers:
 
-| Handler | Mensagem de Entrada | Papel no Módulo | Política de Disparo |
+| Handler | Mensagem de Entrada | Papel no Módulo | Condição de Disparo |
 | :--- | :--- | :--- | :--- |
-| [`robot_ackerman_motion_command_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1330) | `astro_robot_ackerman_motion_command_message` | Recebe o vetor de comandos $(v, \phi, \Delta t)$ gerado pelo MPP / Frenet. Armazena no buffer circular de trajetórias. | **Imediato:** O plano precisa ser validado no menor tempo possível para não atrasar a resposta da base. |
-| [`localize_ackerman_globalpos_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1553) | `astro_localize_ackerman_globalpos_message` | Atualiza a posição atual do caminhão e dos semirreboques. Executa a desaceleração preventiva com $\phi$ fixo ([`06_desaceleracao_preventiva_phi_fixo.md`](06_desaceleracao_preventiva_phi_fixo.md)). | **Condicional:** Controlado por limitador de taxa (~14 Hz). |
-| [`astro_obstacle_distance_mapper_on_distance_map_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1588) | `astro_obstacle_distance_mapper_map_message` | Atualiza a matriz de distâncias aos obstáculos via memória compartilhada (*shared memory*). | **Condicional:** Controlado por limitador de taxa (~14 Hz). |
+| [`robot_ackerman_motion_command_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1330) | `astro_robot_ackerman_motion_command_message` | Recebe o vetor de comandos $(v, \phi, \Delta t)$ gerado pelo MPP. Armazena no buffer circular de trajetórias. | **Imediato:**  |
+| [`localize_ackerman_globalpos_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1553) | `astro_localize_ackerman_globalpos_message` |Atualiza a localização (GPS/pose da cabine e semirreboques) e a odometria atual (velocidade 
+v e ângulos das rodas ϕ ). | **Condicional:** Controlado por limitador de taxa (~14 Hz). |
+| [`astro_obstacle_distance_mapper_on_distance_map_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1588) | `astro_obstacle_distance_mapper_map_message` | Atualiza a matriz de distâncias aos obstáculos. | **Condicional:** Controlado por limitador de taxa (~14 Hz). |
 
 ---
 
-## 2. Mecanismo de Controle de Taxa (*Rate Limiter*)
+## 2. Mecanismo de Controle de Taxa 
 
-Como o `localize` (GPS + Odometria) e o mapa de distâncias publicam mensagens em frequências elevadas (frequentemente 50 Hz ou mais), reavaliar o plano em cada mensagem recebida sobrecarregaria o processador sem ganho perceptível se o plano de trajetória não mudou.
+Como o `localize` (GPS + Odometria) e o mapa de distâncias publicam mensagens em frequências elevadas um filtro de suas mensagens é realizado para evitar sobrecarga de processamento.
 
-Para solucionar isso, a função [`can_execute_obstacle_avoider_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1004-L1027) atua como um estrangulador de taxa:
+Para solucionar isso, a função [`can_execute_obstacle_avoider_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1004-L1027) atua como um filtro das mensagens:
 
 ```c
 int can_execute_obstacle_avoider_handler()
@@ -54,8 +55,7 @@ int can_execute_obstacle_avoider_handler()
 
     double current_time = astro_get_time();
 
-    // Permite que múltiplos handlers chamem o core, mas limita a taxa
-    if ((current_time - executed_obstacle_avoider_handler_last_timestamp) > 0.07)
+    if ((current_time - executed_obstacle_avoider_handler_last_timestamp) > 0.07) // 70 milissegundos (~14,3 Hz)
     {
         executed_obstacle_avoider_handler_last_timestamp = current_time;
         return (1);
@@ -64,8 +64,7 @@ int can_execute_obstacle_avoider_handler()
 }
 ```
 
-* **Janela temporal:** 70 milissegundos (~14,3 Hz).
-* **Comportamento inteligente:** Quando o MPP envia um novo plano, ele **não consulta** essa função e dispara o `obstacle_avoider_timer_handler()` na hora. A janela de 70 ms serve apenas para controlar rechecagens baseadas em odometria e mapas.
+* **Comportamento para o handler do mpp:** Quando o MPP envia um novo plano, ele **não consulta** essa função e dispara o `obstacle_avoider_timer_handler()` na hora. A janela de 70 ms serve apenas para controlar rechecagens baseadas em odometria e mapas.
 * **Flag `-only_mpp on`:** Se ativada, bloqueia todas as chamadas vindas do GPS e do mapa, limitando o OA a agir apenas mediante novos planos.
 
 ---
@@ -76,7 +75,7 @@ O sistema opera de forma orientada a eventos. O fluxo geral de avaliação e os 
 
 ```mermaid
 flowchart TD
-    subgraph Gatilhos ["1. Gatilhos de Entrada (Event-Driven)"]
+    subgraph Gatilhos ["1. Gatilhos de Entrada "]
         T1["Novo Plano MPP"] --> H1["Handler MPP<br/>(robot_ackerman_motion_command)"]
         T2["Novo Globalpos GPS"] --> H2["Handler Localize<br/>(localize_ackerman_globalpos)"]
         T3["Novo Mapa Distâncias"] --> H3["Handler Mapa Distâncias<br/>(obstacle_distance_mapper)"]
@@ -92,7 +91,7 @@ flowchart TD
     ACC -->|"Frequência max ~14 Hz"| OA_TIMER
     H3 -->|"Frequência max ~14 Hz"| OA_TIMER
 
-    subgraph PipelineOA ["3. Pipeline do obstacle_avoider_timer_handler()"]
+    subgraph PipelineOA ["3. Obstacle_avoider_timer_handler()"]
         OA_TIMER --> CONSUME["Consumo Temporal da Fila<br/><b style='color:#4fc3f7'>consume_motion_command_time()</b><br/>Sincroniza o plano com o relógio atual"]
         CONSUME --> TRAT_PC["Tratamento Potential Collision<br/><b style='color:#ff5252'>potential_collision_treatment()</b><br/>Filtro 5 ciclos -> Desacelera com Acc"]
         TRAT_PC --> CENTR["Limite de Aceleração Centrípeta<br/><b style='color:#4fc3f7'>limit_centripetal_acceleration...()</b><br/>Proteção contra tombamento em curvas"]
@@ -102,17 +101,21 @@ flowchart TD
 
     OA_CORE --> PUB["Publicação Final<br/><b style='color:#69f0ae'>obstacle_avoider_publish_base_ackerman()</b><br/>Envia comandos validados para a base"]
 ```
+---
 
-### Etapas Principais Executadas no `obstacle_avoider_timer_handler()`:
+### Etapas Principais do Fluxo:
 
-1. **[`consume_motion_command_time()`](05_consumo_temporal_e_sincronizacao.md)**: Subtrai o tempo já transcorrido desde a última atualização, mantendo a sincronia temporal da trajetória e compensando a latência do MPP.
-2. **[`potential_collision_treatment()`](08_atuacao_potential_collision_treatment.md)**: Verifica se a simulação de emergência (calculada no handler do `localize`) confirmou colisão iminente por 5 ciclos e desacelera o plano.
-3. **[`limit_centripetal_acceleration_reducing_velocity()`](04_restricoes_dinamica_veiculo.md)**: Modula a velocidade em trechos de curva acentuada para garantir que a aceleração centrípeta não exceda $1{,}05 \cdot a_{c,\max}$.
-4. **[`limit_current_velocity_according_to_max_phi()`](04_restricoes_dinamica_veiculo.md)**: Restringe a velocidade caso o ângulo de esterçamento $\phi$ exija velocidade menor.
-5. **[`obstacle_avoider()`](02_planejamento_preventivo.md)**: Executa a simulação física futura do plano do MPP e atenua as velocidades caso haja obstáculos no caminho.
-6. **Publicação para `base_ackerman`**: Envia o plano validado/modificado para o controle de baixo nível.
+1. **[`astro_obstacle_avoider_set_trajectory_from_deceleration()`](06_desaceleracao_preventiva_phi_fixo.md)**: Etapa 1 da simulação de emergência (executada no handler do `localize`). Projeta a frenagem máxima por Torricelli mantendo o ângulo $\phi$ fixo para verificar se o veículo consegue parar sem colidir.
+2. **[`set_extension_trajectory_from_deceleration()`](07_extensao_seguranca_potential_collision.md)**: Etapa 2 da simulação de emergência (executada no handler do `localize` apenas se a Etapa 1 não colidir). Avança o veículo até o limite da extensão de segurança (`extension_length`, padrão $3{,}0\text{ m}$) para garantir a margem mínima livre à frente.
+3. **[`consume_motion_command_time()`](05_consumo_temporal_e_sincronizacao.md)**: Primeira etapa do `obstacle_avoider_timer_handler()`. Subtrai o tempo já transcorrido desde a última atualização, mantendo a sincronia temporal da fila de comandos e compensando a latência do MPP.
+4. **[`potential_collision_treatment()`](08_atuacao_potential_collision_treatment.md)**: Etapa 3 da simulação de emergência (no `obstacle_avoider_timer_handler()`). Verifica se o alarme vindo da Etapa 1 ou 2 persistiu por 5 ciclos consecutivos (Debounce 5/5) e desacelera os comandos do plano até zerar a velocidade.
+5. **[`limit_centripetal_acceleration_reducing_velocity()`](04_restricoes_dinamica_veiculo.md)**: Modula a velocidade em trechos de curva acentuada para garantir que a aceleração centrípeta não exceda $1{,}05 \cdot a_{c,\max}$.
+6. **[`limit_current_velocity_according_to_max_phi()`](04_restricoes_dinamica_veiculo.md)**: Restringe a velocidade caso o ângulo de esterçamento $\phi$ exija velocidade menor.
+7. **[`obstacle_avoider()`](02_planejamento_preventivo.md)**: Executa a simulação física futura do plano do MPP e atenua as velocidades caso haja obstáculos no caminho.
+8. **Publicação para `base_ackerman`**: Envia o plano validado/modificado para o controle de baixo nível.
 
 ---
+
 
 ## 5. Códigos de Erro Emitidos
 
