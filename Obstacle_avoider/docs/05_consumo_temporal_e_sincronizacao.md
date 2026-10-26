@@ -235,7 +235,7 @@ plano atual (time_atual = 10:43:39.552 | current_time = 10:43:39.627 | latencia 
   * O relógio avançou de `39.552` para `39.627` ($\Delta t = 0{,}075\text{ s} = 75\text{ ms}$).
   * O `Cmd[0]` da iteração passada tinha tempo residual de $0{,}015578\text{ s}$ ($15{,}5\text{ ms}$) e terminava em `10:43:39.568`. Como $39{,}568 \le 39{,}627$, ele expirou.
   * O `Cmd[1]` terminava em `10:43:39.628` ($> 39{,}627$), provocando o `break` no $i = 1$.
-  * **Ação:** Descartou 1 comando. O antigo `Cmd[1]` assumiu a posição `0`, restando míseros $39{,}628 - 39{,}627459 = \mathbf{0{,}000541\text{ s}}$ ($0{,}5\text{ ms}$) de tempo residual.
+  * **Ação:** Descartou 1 comando. O antigo `Cmd[1]` assumiu a posição `0`, restando $39{,}628 - 39{,}627459 = \mathbf{0{,}000541\text{ s}}$ ($0{,}5\text{ ms}$) de tempo residual.
 
 ---
 
