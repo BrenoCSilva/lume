@@ -91,7 +91,7 @@ while (fabs(current_velocity) > 0.0)
         vel_sign, total_distance_traveled, timestamp
     );
 
-    if ((fabs(returned_acc) > EPSILON_OB) || (total_distance_traveled >= 50.0))
+    if ((returned_acc != 0.0) || (total_distance_traveled >= 50.0))
     {
         break;
     }
@@ -133,3 +133,18 @@ sequenceDiagram
     Note over FUNC,OA_MAIN: Se atingiu v = 0.0 sem colidir: PARADA SEGURA GARANTIDA!
     FUNC-->>OA_MAIN: Retorna acc = 0.00  (Sem perigo imediato)
 ```
+
+---
+
+## 4. Continuação da Simulação de Emergência (*Potential Collision*)
+
+Ao finalizar a execução de `astro_obstacle_avoider_set_trajectory_from_deceleration()`, o valor retornado em `global_acc_to_avoid_potential_collision` define qual será o próximo passo do módulo:
+
+* **`acc == 0.0` (Parada livre de colisão na Etapa 1):**  
+  O fluxo avança imediatamente (ainda dentro do handler do `localize`) para a **Etapa 2 — Extensão de Segurança**, que verifica se a margem mínima à frente do veículo (`extension_length`) também está desobstruída:  
+**[`07_extensao_seguranca_potential_collision.md`](07_extensao_seguranca_potential_collision.md)** (`set_extension_trajectory_from_deceleration()`)
+
+* **`acc != 0.0` (Colisão detectada na Etapa 1):**  
+  A Etapa 2 é ignorada (já que o perigo imediato foi confirmado) e o valor de frenagem armazenado em `global_acc_to_avoid_potential_collision` segue direto para a **Etapa 3 — atuação do potential_collision()** no `obstacle_avoider_timer_handler()`:  
+  **[`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md)** (`potential_collision_treatment()`)
+
