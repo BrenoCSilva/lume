@@ -120,9 +120,9 @@ flowchart TD
 
 O módulo publica os seguintes erros no barramento do sistema (`ASTRO_ERROR_CODE`):
 
-* **`ASTRO_ERROR_CODE_201`**: Colisão identificada na pose atual enquanto o veículo estava em movimento (estado crítico de colisão real).
-* **`ASTRO_ERROR_CODE_203`**: Colisão futura identificada no plano do MPP ou espaço insuficiente para frenagem até o destino.
+* **`ASTRO_ERROR_CODE_201`**: 
+* **`ASTRO_ERROR_CODE_203`**: 
 * **`ASTRO_ERROR_CODE_204`**: Colisão detectada na simulação de emergência (*potential collision* ou extensão).
-* **`ASTRO_ERROR_CODE_205`**: Ângulo de esterçamento $\phi$ excedeu o envelope seguro para a velocidade atual.
+* **`ASTRO_ERROR_CODE_205`**: 
 
 ---
