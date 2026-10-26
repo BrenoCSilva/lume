@@ -108,7 +108,7 @@ Imagine o seguinte cenário de condução real:
      $$t_{\text{atual}} = \mathbf{10:20:30.120}$$
 
 3. **O que acontece dentro do loop:**
-   * `time_consumed` inicia em `10:20:30.000`.
+   * `time_consumed` inicia em `10:20:30.000`. Porque quando o plano do mpp chega no handler_OA : astro_robot_ackerman_motion_command_time_of_last_update = motion_command_message->timestamp;
    * **$i = 0$:** `time_consumed += 0.050` $\to \mathbf{10:20:30.050}$.  
      *Termina em 30.050s, mas já são 30.120s!* $\to$ **Já passou! (Passado)**
    * **$i = 1$:** `time_consumed += 0.050` $\to \mathbf{10:20:30.100}$.  
