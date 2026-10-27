@@ -102,6 +102,29 @@ flowchart TD
 ```
 ---
 
+### Diagnóstico Hipotético (Etapas 1 e 2) vs. Atuação Real no Plano (Etapa 3)
+
+No ciclo de colisão de emergência (*Potential Collision*), há uma divisão estrita de responsabilidades:
+
+* **[`astro_obstacle_avoider_set_trajectory_from_deceleration()`](06_desaceleracao_preventiva_phi_fixo.md) (Etapa 1):**  
+  Gera e avalia uma **trajetória puramente hipotética/virtual** (simulação interna de frenagem com $\phi$ fixo). Ela **não altera o plano real vindo do MPP**. Seu papel é unicamente diagnosticar se o veículo colidiria caso freasse com a direção travada, atualizando a variável global `global_acc_to_avoid_potential_collision`.
+
+* **[`set_extension_trajectory_from_deceleration()`](07_extensao_seguranca_potential_collision.md) (Etapa 2):**  
+  Também opera sobre uma **projeção hipotética**, avançando poses virtuais à frente para verificar se a margem de segurança mínima (`extension_length`, padrão $3{,}0\text{ m}$) está livre. **Também não altera o plano do MPP**.
+
+* **[`potential_collision_treatment()`](08_atuacao_potential_collision_treatment.md) (Etapa 3):**  
+  É a **única etapa do trio que de fato modifica o plano principal**. Ela **não faz nenhuma checagem de mapas nem verificação de colisão**; é um bloco de atuação puramente reativo que lê o gatilho de `global_acc_to_avoid_potential_collision` e, caso o alarme persista (Debounce 5/5), freia os comandos do plano ativo via `velocity_recalculate_with_acceleration()`.
+
+---
+
+
+> [!NOTE]
+> **Divisão de Responsabilidades no *Potential Collision*:**  
+> As Etapas 1 (`set_trajectory_from_deceleration`) e 2 (`set_extension_trajectory`) geram **projeções puramente hipotéticas** para diagnosticar colisões com direção fixa e margem mínima, **sem alterar o plano real do MPP**. Já a Etapa 3 (`potential_collision_treatment`) é **a única que modifica o plano de comandos**, sendo puramente reativa ao gatilho de `global_acc_to_avoid_potential_collision` sem fazer checagem geométrica em mapas.
+
+---
+
+
 ### Etapas Principais do Fluxo:
 
 1. **[`astro_obstacle_avoider_set_trajectory_from_deceleration()`](06_desaceleracao_preventiva_phi_fixo.md)**: Etapa 1 da simulação de emergência (executada no handler do `localize`). Projeta a frenagem máxima por Torricelli mantendo o ângulo $\phi$ fixo para verificar se o veículo consegue parar sem colidir.

@@ -7,6 +7,7 @@ A função [`set_extension_trajectory_from_deceleration()`](file:///home/lume/as
 > * **Condição de execução:** Só ocorre se a **Etapa 1 ([`06_desaceleracao_preventiva_phi_fixo.md`](06_desaceleracao_preventiva_phi_fixo.md)) aprovar a parada** (`global_acc_to_avoid_potential_collision == 0.0`).
 > * **O problema que ela resolve:** Na Etapa 1, o veículo pode conseguir parar fisicamente antes de bater (ex.: em baixa velocidade ele para em $0{,}5\text{ m}$), mas terminar **dentro do limite mínimo de segurança** exigido para o obstáculo.
 > * **Como atua:** A verificação é refeita projetando o veículo desde a `pose` atual até o alcance definido por parâmetro (ou o padrão de **$3{,}0\text{ m}$**).
+> * **Validação Virtual (Não altera o plano real):** Assim como na Etapa 1, esta função projeta poses virtuais hipotéticas à frente e **não altera o vetor de comandos real do MPP**. Seu papel é estritamente geométrico: verificar se a margem de segurança mínima está desobstruída e, caso não esteja, preenche `global_acc_to_avoid_potential_collision` com a desaceleração de alarme.
 > * **Resultado em caso de violação:** Se houver colisão dentro desse limite mínimo, o erro **`ASTRO_ERROR_CODE_204`** é emitido **mesmo que o veículo conseguisse parar antes do impacto**, pois a regra da margem mínima foi violada. Em seguida, a variável de controle de frenagem (`global_acc_to_avoid_potential_collision`) é preenchida com o valor de desaceleração máxima de alarme.
 
 ---
