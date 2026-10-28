@@ -1,316 +1,161 @@
-# Desaceleração Preventiva com Ângulo de Esterçamento Fixo (`phi` Fixo)
+# Fusão e Intersecção: Distance Map vs. Moving Objects (DATMO)
 
-A função [`astro_obstacle_avoider_set_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1308-L1401) constitui a **primeira linha de defesa preventiva** do Obstacle Avoider contra colisões catastróficas. 
+O subsistema de percepção e prevenção de colisões do **`obstacle_avoider`** combina diferentes representações do ambiente para garantir que o caminhão nunca colida com obstáculos estáticos ou dinâmicos.
 
-Antes mesmo que o módulo avalie o plano de trajetória do planejador ou verifique a fila de comandos de movimento, esta função simula continuamente uma pergunta física crucial:
-> *"Se o veículo acionar a frenagem máxima neste exato milissegundo, mantendo a direção atual do volante, ele conseguirá parar completamente antes de atingir qualquer obstáculo?"*
-
-Se a resposta for **NÃO** (ou seja, se a trajetória de frenagem cruzar qualquer obstáculo no mapa), o módulo calcula imediatamente a aceleração de emergência necessária (`global_acc_to_avoid_potential_collision`) para mitigar ou evitar o impacto.
+> [!IMPORTANT]
+> **Conceitos Fundamentais de Arquitetura:**
+> * **O `distance_map` agrega o Offline + Online:** O mapa de distâncias ([`obstacle_distance_map`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L20)) contém tanto a infraestrutura pré-mapeada ([`offline_map`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L129) com paredes, guias e prédios) quanto os feixes de laser do LiDAR refletidos por obstáculos novos em tempo real.
+> * **Ter Velocidade $\neq$ Ser Objeto Móvel:** Nem todo obstáculo na pista está em movimento. Caixas caídas, cones, paletes ou um caminhão estacionado/desligado têm velocidade $v = 0$, mas são capturados em tempo real pelo LiDAR e projetados na grade do `distance_map`.
+> * **O papel do DATMO (*Detection And Tracking of Moving Objects*):** O DATMO é o módulo responsável por rastrear entidades dinâmicas (outros veículos, pedestres, empilhadeiras). Ele utiliza o `offline_map` para subtrair e ignorar o meio-fio e estruturas fixas, isolando o que é tráfego e emitindo a mensagem [`astro_moving_objects_point_clouds_message`](file:///home/lume/astro/include/astro/moving_objects_messages.h#L52).
+> * **Intersecção e Redundância:** Quando um objeto móvel (ou simulado) está na pista, ele é atingido pelos feixes do LiDAR. Portanto, ele existe **simultaneamente** na grade do `distance_map` e na nuvem de entidades do `DATMO`. Essa sobreposição garante que, mesmo que o rastreamento do DATMO falhe ou atrase, a presença física do objeto no mapa de distâncias ainda acionará a frenagem de emergência.
 
 ---
 
-## 1. Posição no Fluxo de Execução
+## 1. Arquitetura de Percepção e Fluxo de Dados
 
-Ao contrário do consumo temporal da fila (que ocorre dentro do ciclo do timer de decisão), a desaceleração preventiva é disparada no handler de alta frequência da localização:
+A figura abaixo ilustra como os feixes de LiDAR e o mapa offline fluem através do sistema até chegarem aos handlers do [`obstacle_avoider`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp):
 
 ```mermaid
 flowchart TD
-    LOC["Mensagem de Localização (GPS / Odometria)<br/>localize_ackerman_globalpos (50 Hz - 100 Hz)"] --> HANDLER["localize_ackerman_globalpos_message_handler()"]
-    
-    subgraph S1 ["Etapa 1: Avaliação Preventiva Imediata"]
-        HANDLER --> PREV["astro_obstacle_avoider_set_trajectory_from_deceleration()<br/>Simula parada em arco com phi fixo"]
-        PREV --> RES{"Houve Colisão na Frenagem?"}
-        RES -- "Sim" --> SET_ACC["global_acc_to_avoid_potential_collision = -a_max<br/>Dispara ASTRO_ERROR_CODE_204"]
-        RES -- "Não" --> CHECK_EXT["Testa Margem Adicional de Extensão<br/>set_extension_trajectory_from_deceleration()"]
+    LIDAR["LiDARs 3D<br/>(Velodyne / VLP-16)"]
+    OFFLINE["Mapa Offline<br/>(Infraestrutura pré-mapeada)"]
+    ROAD["Rede de Vias<br/>(Road Network / Lanes)"]
+
+    subgraph ODM ["Processo: obstacle_distance_mapper"]
+        GRID_OCC["Occupancy Grid<br/>Projeção 2D dos pontos"]
+        FUSION["Fusão de Obstáculos<br/>Offline + Pontos LiDAR"]
+        EDF["Cálculo do Campo Euclidiano<br/>(complete_x_offset, complete_y_offset)"]
+        
+        GRID_OCC --> FUSION
+        OFFLINE --> FUSION
+        FUSION --> EDF
     end
 
-    subgraph S2 ["Etapa 2: Pipeline de Decisão (Controlado por Taxa)"]
-        SET_ACC --> GATE{"can_execute_obstacle_avoider_handler()<br/>(dt &gt; 70 ms?)"}
-        CHECK_EXT --> GATE
-        GATE -- "Sim" --> TIMER["obstacle_avoider_timer_handler()"]
-        TIMER --> DEBOUNCE["Debounce de 5 Ciclos (it_count_to_activate)"]
-        DEBOUNCE --> REC_VEL["Recalcula Velocidades da Fila<br/>velocity_recalculate_with_acceleration()"]
+    subgraph DATMO_MOD ["Módulo: DATMO (Detection and Tracking of Moving Objects)"]
+        SUB_STATIC["Subtração de Fundo<br/>Remove meio-fio e paredes fixas"]
+        CLUSTERING["Clusterização &amp; Associação<br/>Filtro de Kalman / Histórico temporal"]
+        TRACKING["Rastreamento Cinemático<br/>Estima pose, v_long, v_lat, dimensões"]
+        
+        GRID_OCC --> SUB_STATIC
+        OFFLINE --> SUB_STATIC
+        ROAD --> SUB_STATIC
+        SUB_STATIC --> CLUSTERING
+        CLUSTERING --> TRACKING
+    end
+
+    LIDAR --> GRID_OCC
+
+    EDF -->|"Memória Compartilhada (SHM)<br/>+ Notificação IPC"| H_DIST["Handler Mapa Distâncias<br/><b>astro_obstacle_distance_mapper_on_distance_map...()</b>"]
+    TRACKING -->|"Mensagem IPC<br/>point_clouds, v, dims"| H_MO["Handler Objetos Móveis<br/><b>astro_moving_objects_point_clouds_message_handler()</b>"]
+
+    subgraph OA ["Processo: obstacle_avoider"]
+        H_DIST --> MAP_PTR["maps_obstacle_avoider.distance_map"]
+        H_MO --> MO_ARRAY["moving_objects_array[0]"]
+        
+        MAP_PTR --> CHECK_COL["Checagem de Colisão<br/>(Torricelli Phi Fixo &amp; Extensão de Segurança)"]
+        MO_ARRAY --> CHECK_COL
     end
 ```
 
-### Por que executar no Handler do `localize`?
-1. **Sensibilidade Imediata:** A odometria e o GPS publicam poses a $50\text{ Hz} \dots 100\text{ Hz}$ ($10\text{ ms} \dots 20\text{ ms}$). Se o caminhão acelerar em direção a um obstáculo repentino, a colisão em potencial é detectada na primeira amostra de posição, sem esperar a janela de $70\text{ ms}$ do rate limiter do timer.
-2. **Atualização do Estado de Alerta:** A variável global `global_acc_to_avoid_potential_collision` é mantida sempre atualizada. Quando o `obstacle_avoider_timer_handler()` é liberado para atuar, ele já encontra o diagnóstico de risco pronto para aplicação no debounce.
+---
+
+## 2. A Composição do `Obstacle Distance Map`
+
+O mapa de distâncias gerenciado por [`obstacle_avoider_update_map()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L114) recebe uma estrutura [`astro_obstacle_distance_mapper_map_t`](file:///home/lume/astro/include/astro/obstacle_distance_mapper_messages.h#L40-L46).
+
+Diferente de um mapa de ocupação binário (onde cada célula é apenas `0` ou `1`), o `distance_map` é um **Campo de Distâncias Euclidiano (*Euclidean Distance Field*)**:
+* Possui dimensões típicas de $200 \times 200$ ou $400 \times 400$ células.
+* Para cada célula da grade, ele armazena dois deslocamentos vetoriais pré-calculados:
+  * `complete_x_offset[index]`
+  * `complete_y_offset[index]`
+* Ao consultar qualquer ponto $(X, Y)$ no mundo via [`astro_obstacle_avoider_distance_from_global_point_to_obstacle()`](file:///home/lume/astro/src/obstacle_avoider/collision_detection.cpp#L734), o algoritmo obtém a distância euclidiana exata até o obstáculo mais próximo em $O(1)$:
+  $$\text{dist} = \sqrt{dx^2 + dy^2} \times \text{resolução}$$
+* Células que contêm obstáculos diretos possuem offset nulo ($dx \approx 0, dy \approx 0 \implies \text{dist} = 0{,}0\text{ m}$).
+
+### De onde vêm esses obstáculos?
+1. **Infraestrutura Estática (Offline):** Paredes, mourões, colunas de galpões e muretas pré-carregadas.
+2. **Novos Obstáculos Físicos:** Qualquer ponto refletido pelo laser que não pertence ao chão (piso) é inserido na grade como célula ocupada, gerando um campo de repulsão de distâncias ao redor dele.
 
 ---
 
-## 2. Anatomia da Função
+## 3. O Funcionamento do DATMO (*Detection And Tracking of Moving Objects*)
 
-A função é declarada em [`src/obstacle_avoider/obstacle_avoider.h`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.h) e implementada em [`src/obstacle_avoider/obstacle_avoider.cpp`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1308):
+O módulo DATMO opera sob o princípio de que **não basta saber que há um obstáculo; é preciso saber se ele é uma entidade em movimento ou com potencial cinemático**.
 
-```cpp
-double
-astro_obstacle_avoider_set_trajectory_from_deceleration(
-    astro_robot_and_trailers_traj_point_t pose, 
-    astro_robot_ackerman_config_t astro_robot_ackerman_config,
-    astro_semi_trailers_config_t astro_semi_trailer_config, 
-    astro_map_t *occupancy_map, 
-    int manual_override, 
-    double odometry_velocity, 
-    double odometry_phi, 
-    double timestamp
-);
-```
-
-### Parâmetros de Entrada:
-* **`pose`:** Posição inicial real do veículo no mapa global no instante $t$ ($x$, $y$, $\theta$, e ângulos das carretas `trailer_theta[z]`).
-* **`astro_robot_ackerman_config`:** Configurações físicas da **cabine** (unidade tratora): distância entre eixos ($L$), largura, raio mínimo de giro, e a desaceleração máxima permitida (`maximum_deceleration_forward`).
-* **`astro_semi_trailer_config`:** Geometria e engates dos **semirreboques (carretas)**: quantidade de reboques atrelados, distância dos pinos de engate e limitações angulares de articulação.
-* **`occupancy_map`:** Mapa de grade de ocupação bidimensional (*grid map*) consolidado com obstáculos estáticos e dinâmicos detectados por LiDARs e radares.
-* **`manual_override`:** Flag indicando se um operador humano assumiu o controle do volante/pedais. Se ativo e habilitado, a função encerra retornando `0.0`, sem interferir no controle manual.
-* **`odometry_velocity` ($v_0$):** Velocidade escalar instantânea medida pelos sensores de roda e transmissão.
-* **`odometry_phi` ($\phi$):** Ângulo de esterçamento atual das rodas dianteiras da cabine.
-* **`timestamp`:** Horário exato da leitura dos sensores.
+### Pipeline de Processamento do DATMO:
+1. **Entrada do Grid de Ocupação:** Recebe a grade de pontos brutos gerada pelo LiDAR.
+2. **Subtração do Mapa Offline:** Cruza os pontos com o [`offline_map`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L129). Se um ponto coincide com uma parede ou guia pré-existente, ele é descartado da análise de tráfego.
+3. **Agrupamento em Clusters e Faixas:** Os pontos restantes são projetados nas faixas de tráfego ([`road_network`](file:///home/lume/astro/src/obstacle_distance_mapper/README.md#L25)) e agrupados em objetos (caixas delimitadoras 3D).
+4. **Filtro de Rastreamento (Tracking Temporal):** Associa os clusters ao longo do tempo (usando Filtro de Kalman ou Monte Carlo), estimando:
+   * Posição global $(X, Y, Z)$.
+   * Vetor de velocidade ($\vec{v}_{\text{longitudinal}}, \vec{v}_{\text{lateral}}$).
+   * Dimensões médias (comprimento, largura, altura).
+   * Nuvem de pontos 3D que compõe a carcaça do objeto.
+5. **Publicação IPC:** Emite a mensagem [`astro_moving_objects_point_clouds_message`](file:///home/lume/astro/include/astro/moving_objects_messages.h#L52), recebida no `obstacle_avoider` através de [`astro_moving_objects_point_clouds_message_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1876).
 
 ---
 
-## 3. Fluxo de Funcionamento da `astro_obstacle_avoider_set_trajectory_from_deceleration()`
+## 4. Distinção Conceitual: Classes de Obstáculos
 
-O objetivo central da [`astro_obstacle_avoider_set_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1308-L1401) é **tentar parar o veículo mantendo seu ângulo de esterçamento ($\phi$) fixo** e verificar se essa trajetória até a parada completa é segura.
-
-Para fazer isso, a função executa um loop iterativo (`while (fabs(current_velocity) > 0.0)`) que projeta o futuro passo a passo:
-
-### Passo 1: Previsão da Pose Futura ("Passinho" de $0{,}1\text{ s}$)
-A partir da pose atual vinda do `localize`, a função utiliza a [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1358) para calcular a coordenada espacial onde o veículo (cabine e carretas) estará daqui a **$0{,}1\text{ s}$** (`full_time_interval = 0.1`, integrado com `delta_t = 0.05` e velocidade de referência `0.5 m/s` apenas para gerar o deslocamento geométrico na curva com `odometry_phi` fixo):
-
-```cpp
-iterative_pose = astro_libcarmodel_recalc_pos_ackerman(
-    &iterative_pose, vel_sign * 0.5, odometry_phi, 
-    full_time_interval, &distance_traveled, delta_t, 
-    &astro_robot_ackerman_config, &astro_semi_trailer_config
-);
-```
-> *Nota:* O objetivo dessa chamada não é testar a dinâmica de aceleração, mas simplesmente descobrir **o caminho geométrico (próximo ponto no espaço)** que o caminhão percorre ao avançar um "passinho" mantendo o volante travado em `odometry_phi`.
+| Categoria | Exemplo | Presença no `offline_map` | Tem Velocidade? | Como o `distance_map` trata? | Como o `DATMO` trata? |
+| :--- | :--- | :---: | :---: | :--- | :--- |
+| **Estático de Infraestrutura** | Parede, pilar, meio-fio | **Sim** | Não ($v = 0$) | Presente permanentemente no campo de distâncias. | **Subtraído/Filtrado** (não gera objeto móvel). |
+| **Estático Novo / Temporário** | Caixa caída, cone, veículo parado/estacionado | **Não** | Não ($v = 0$) | **Captado pelos feixes do LiDAR** e inserido na grade em tempo real. | Pode ser ignorado após confirmar velocidade nula persistente ou mantido como obstáculo estático de pista. |
+| **Dinâmico / Móvel** | Pedestre, empilhadeira, caminhão em tráfego | **Não** | **Sim** ($v > 0$) | **Captado pelo laser** (gera células ocupadas no instante $t$). | **Rastreado ativamente** com vetor de velocidade, histórico e predição de trajetória. |
 
 ---
 
-### Passo 2: Redução da Velocidade via Equação de Torricelli
-Encontrado esse novo ponto no espaço, mede-se a distância real percorrida nesse passinho ($\Delta s$, dada por `DIST2D(iterative_pose, prev_pose)`) e utiliza-se a **Equação de Torricelli** ([`compute_final_velocity_using_torricelli()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L969)) para identificar qual será a velocidade real do veículo após andar esse deslocamento aplicando a **frenagem máxima**:
+## 5. A Intersecção de Atuação e a Ordem de Prioridade
 
-$$v^2 = v_0^2 + 2 \cdot a \cdot \Delta s$$
+Como tanto o `obstacle_distance_mapper` quanto o `DATMO` consom as mesmas nuvens de pontos dos LiDARs, **qualquer obstáculo colocado na pista produz dados em ambas as fontes**.
 
-Onde:
-* **$\Delta s$:** Distância percorrida entre a pose anterior e a nova pose calculada.
-* **$a$:** Valor negativo da desaceleração máxima (`-maximum_deceleration_forward`, vindo dos parâmetros).
-* **$v_0$:** Velocidade real do veículo no início daquele passo.
+### Por que a ordem dos testes importa?
+Na verificação de colisão do *Potential Collision* (Etapa 1 em [`check_collision_in_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1019) e Etapa 2 em [`set_extension_trajectory_from_deceleration`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1238)):
 
+#### Ordem Original (Prioridade do Mapa de Distâncias):
 ```cpp
-current_velocity = vel_sign * compute_final_velocity_using_torricelli(
-    current_velocity, 
-    -astro_robot_ackerman_config.maximum_deceleration_forward, 
-    DIST2D(iterative_pose, prev_pose)
-);
-```
-
----
-
-### Passo 3: Verificação de Colisão e Critério de Parada do Loop
-Obtida a posição futura exata e sua respectiva velocidade reduzida, chama-se [`check_collision_in_trajectory()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1012) para verificar se há colisão naquele ponto contra:
-1. O **mapa de distâncias / mapas especiais** (`obstacle_distance_map` / `maps_obstacle_avoider`).
-2. O **mapa de ocupação** (`occupancy_map`).
-3. Algum **objeto móvel** (`moving_objects`).
-
-```cpp
-while (fabs(current_velocity) > 0.0)
+// 1º: Testa os mapas
+if (collision_result.has_collision)
 {
-    // 1. Projeta a pose 0.1s à frente mantendo phi fixo
-    // 2. Reduz a velocidade pelo deslocamento usando Torricelli com frenagem máxima
-    // 3. Verifica se a nova pose colide nos mapas:
-    returned_acc = check_collision_in_trajectory(
-        iterative_pose, astro_robot_ackerman_config, occupancy_map, 
-        astro_robot_ackerman_config.obstacle_avoider_obstacles_safe_distance, 
-        vel_sign, total_distance_traveled, timestamp
-    );
-
-    if ((fabs(returned_acc) > EPSILON_OB) || (total_distance_traveled >= 50.0))
-    {
-        break;
-    }
-    ...
+    collision_map_name = collision_result.map_name; // -> "Obstacle Distance Map"
+}
+// 2º: Só testava Moving Objects se os mapas NÃO acusassem colisão
+else if (pose_collides_with_moving_objects(...))
+{
+    collision_map_name = "Moving Objects";
 }
 ```
+* **Comportamento observado:** Como o obstáculo físico refletia feixes de laser que entravam no grid do `distance_map`, o primeiro `if` era satisfeito na marca dos $8\text{ m}$. Por avaliação de curto-circuito do C++, o `else if (pose_collides_with_moving_objects)` era ignorado e o alarme sempre saía rotulado como `[Obstacle Distance Map]`.
 
-* **Se houver colisão:** A função `check_collision_in_trajectory()` devolve imediatamente a desaceleração máxima de frenagem (`-maximum_deceleration_forward` em marcha à frente, ou `maximum_deceleration_reverse` em ré). A previsão é **finalizada na hora (`break`)** — sem precisar continuar calculando até a velocidade zerar — e esse valor de frenagem máxima é retornado para a variável de controle `global_acc_to_avoid_potential_collision` no `localize_ackerman_globalpos_message_handler()`.
-* **Se não houver colisão:** O fluxo continua repetindo o processo passo a passo enquanto a velocidade não chegar a zero (`fabs(current_velocity) > 0.0`) ou até atingir o limite de segurança de $50\text{ m}$ projetados (`total_distance_traveled >= 50.0`). Caso pare totalmente sem bater em nada, retorna `0.0` (trajetória de parada livre).
-
----
-
-## 4. Diagrama de Sequência e Fluxo Interno
-
-```mermaid
-sequenceDiagram
-    autonumber
-    participant LOC as localize_ackerman
-    participant OA_MAIN as Handler do Localize (Main)
-    participant FUNC as set_trajectory_from_deceleration
-    participant TORR as Torricelli & CarModel
-    participant COL as check_collision_in_trajectory
-
-    LOC->>OA_MAIN: Publica Pose, v_odometria e phi
-    OA_MAIN->>FUNC: Inicia simulação preventiva
-    
-    loop Enquanto v &gt; 0.0 m/s (Até Parar)
-        FUNC->>TORR: Avança pose em arco (phi fixo) e reduz v via Torricelli
-        TORR-->>FUNC: Nova pose e velocidade decrescente
-        FUNC->>COL: Checa polígonos da cabine + carretas contra o mapa
-        alt Colisão Detectada!
-            COL-->>FUNC: Colidiu! Retorna acc = -a_max
-            FUNC->>OA_MAIN: Retorna acc negativa (Dispara ASTRO_ERROR_CODE_204)
-        else Livre
-            COL-->>FUNC: Desobstruído
-        end
-    end
-    
-    Note over FUNC,OA_MAIN: Se atingiu v = 0.0 sem colidir: PARADA SEGURA GARANTIDA!
-    FUNC-->>OA_MAIN: Retorna acc = 0.00 m/s^2 (Sem perigo imediato)
-```
-
----
-
-## 5. Estudo de Caso Real: Análise dos Dados de Telemetria
-
-Os dados reais capturados no teste de pista em [`desaceleracao_phi_fixo.txt`](file:///dados/obstacle_avoider/astro_error_205/desaceleracao_phi_fixo.txt) revelam exatamente a mecânica discreta da simulação operando sob diversas velocidades e curvaturas:
-
-### 5.1 Cenário A: Velocidade de Manobra Baixa ($v_0 = 1{,}30\text{ m/s}$ / $4{,}7\text{ km/h}$)
-
-Neste ciclo, o caminhão trafegava a $1{,}30\text{ m/s}$ com esterçamento suave para a esquerda ($\phi = -0{,}050\text{ rad} \approx -2{,}9^\circ$):
-
-```text
---- [POTENTIAL COLLISION: DESACELERANDO COM PHI FIXO] ---
-Pose Inicial: (x=7486480.20, y=-315924.98, theta=-2.99 rad)
-Odometria: v_inicial = 1.30 m/s (4.7 km/h) | phi = -0.050 rad (-2.9 deg)
-Decel Max = 1.00 m/s^2 | Sentido = FRENTE
-  Passo 00: dist_acum=0.09m | v_torricelli=1.22m/s | colidiu=NÃO
-  Passo 01: dist_acum=0.18m | v_torricelli=1.15m/s | colidiu=NÃO
-  Passo 02: dist_acum=0.26m | v_torricelli=1.08m/s | colidiu=NÃO
-  Passo 03: dist_acum=0.34m | v_torricelli=1.00m/s | colidiu=NÃO
-  Passo 04: dist_acum=0.41m | v_torricelli=0.92m/s | colidiu=NÃO
-  Passo 05: dist_acum=0.48m | v_torricelli=0.84m/s | colidiu=NÃO
-  Passo 06: dist_acum=0.55m | v_torricelli=0.76m/s | colidiu=NÃO
-  Passo 07: dist_acum=0.61m | v_torricelli=0.67m/s | colidiu=NÃO
-  Passo 08: dist_acum=0.67m | v_torricelli=0.58m/s | colidiu=NÃO
-  Passo 09: dist_acum=0.73m | v_torricelli=0.48m/s | colidiu=NÃO
-  Passo 10: dist_acum=0.78m | v_torricelli=0.36m/s | colidiu=NÃO
-  Passo 11: dist_acum=0.82m | v_torricelli=0.21m/s | colidiu=NÃO
-  Passo 12: dist_acum=0.85m | v_torricelli=0.00m/s | colidiu=NÃO
---- [RESULTADO: PARADA SEGURA GARANTIDA (LIVRE)] --- Passos: 13 | Dist Total de Parada: 0.85m
-```
-
-#### Fechamento Matemático:
-* **Distância Teórica Contínua:**
-  $$d_{\text{teorica}} = \frac{v_0^2}{2 \cdot a_{\text{max}}} = \frac{1{,}30^2}{2 \cdot 1{,}00} = \frac{1{,}69}{2} = \mathbf{0{,}845\text{ m}}$$
-* **Distância Integrada no Robô:** **$0{,}85\text{ m}$** (em 13 passos discretos de $\approx 6{,}5\text{ cm}$).
-* **Conclusão:** Bate com precisão de milímetros com a física analítica. Como em todos os 13 passos `colidiu = NÃO`, o robô tem garantia absoluta de que não há perigo no arco de $0{,}85\text{ m}$ à sua frente.
-
----
-
-### 5.2 Cenário B: Velocidade Média ($v_0 = 1{,}65\text{ m/s}$ / $5{,}9\text{ km/h}$)
-
-Poucos metros adiante, a velocidade subiu para $1{,}65\text{ m/s}$ e o volante começou a alinhar ($\phi = -0{,}024\text{ rad} \approx -1{,}4^\circ$):
-
-```text
---- [POTENTIAL COLLISION: DESACELERANDO COM PHI FIXO] ---
-Pose Inicial: (x=7486478.80, y=-315925.15, theta=-3.01 rad)
-Odometria: v_inicial = 1.65 m/s (5.9 km/h) | phi = -0.024 rad (-1.4 deg)
-Decel Max = 1.00 m/s^2 | Sentido = FRENTE
-  Passo 00: dist_acum=0.11m | v_torricelli=1.58m/s | colidiu=NÃO
-  Passo 01: dist_acum=0.21m | v_torricelli=1.51m/s | colidiu=NÃO
-  [...]
-  Passo 15: dist_acum=1.28m | v_torricelli=0.37m/s | colidiu=NÃO
-  Passo 16: dist_acum=1.33m | v_torricelli=0.23m/s | colidiu=NÃO
-  Passo 17: dist_acum=1.36m | v_torricelli=0.00m/s | colidiu=NÃO
---- [RESULTADO: PARADA SEGURA GARANTIDA (LIVRE)] --- Passos: 18 | Dist Total de Parada: 1.36m
-```
-
-#### Fechamento Matemático:
-* **Distância Teórica Contínua:**
-  $$d_{\text{teorica}} = \frac{1{,}65^2}{2 \cdot 1{,}00} = \frac{2{,}7225}{2} = \mathbf{1{,}361\text{ m}}$$
-* **Distância Integrada no Robô:** **$1{,}36\text{ m}$** (em 18 passos).
-
----
-
-### 5.3 Cenário C: Velocidade de Cruzeiro ($v_0 \approx 2{,}70\text{ m/s}$ / $9{,}7\text{ km/h}$)
-
-Na velocidade máxima registrada no trecho, a projeção preventiva precisou estender a simulação por mais de $3{,}6\text{ metros}$:
-
-```text
---- [POTENTIAL COLLISION: DESACELERANDO COM PHI FIXO] ---
-Odometria: v_inicial = 2.72 m/s (9.8 km/h) | phi = 0.002 rad (0.1 deg)
-Decel Max = 1.00 m/s^2 | Sentido = FRENTE
-  Passo 00: dist_acum=0.15m | v_torricelli=2.66m/s | colidiu=NÃO
-  [...]
-  Passo 34: dist_acum=3.69m | v_torricelli=0.00m/s | colidiu=NÃO
---- [RESULTADO: PARADA SEGURA GARANTIDA (LIVRE)] --- Passos: 35 | Dist Total de Parada: 3.69m
-```
-
-#### Fechamento Matemático:
-* **Distância Teórica Contínua:**
-  $$d_{\text{teorica}} = \frac{2{,}72^2}{2 \cdot 1{,}00} = \frac{7{,}3984}{2} = \mathbf{3{,}699\text{ m}}$$
-* **Distância Integrada no Robô:** **$3{,}69\text{ m}$** (em 35 passos).
-
----
-
-### 5.4 Tabela Comparativa de Parada Preventiva
-
-| Velocidade Inicial ($v_0$) | Ângulo do Volante ($\phi$) | Desaceleração Máxima ($a_{\text{max}}$) | Distância Teórica ($d_{\text{teorica}}$) | Distância Simulada | Passos de Simulação | Resultado |
-| :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| $0{,}22\text{ m/s}$ ($0{,}8\text{ km/h}$) | $-2{,}9^\circ$ | $1{,}00\text{ m/s}^2$ | $0{,}024\text{ m}$ | **$0{,}04\text{ m}$** | 1 | LIVRE |
-| $1{,}30\text{ m/s}$ ($4{,}7\text{ km/h}$) | $-2{,}9^\circ$ | $1{,}00\text{ m/s}^2$ | $0{,}845\text{ m}$ | **$0{,}85\text{ m}$** | 13 | LIVRE |
-| $1{,}65\text{ m/s}$ ($5{,}9\text{ km/h}$) | $-1{,}4^\circ$ | $1{,}00\text{ m/s}^2$ | $1{,}361\text{ m}$ | **$1{,}36\text{ m}$** | 18 | LIVRE |
-| $2{,}14\text{ m/s}$ ($7{,}7\text{ km/h}$) | $-0{,}5^\circ$ | $1{,}00\text{ m/s}^2$ | $2{,}290\text{ m}$ | **$2{,}14\text{ m}$** | 25 | LIVRE |
-| $2{,}72\text{ m/s}$ ($9{,}8\text{ km/h}$) | $+0{,}1^\circ$ | $1{,}00\text{ m/s}^2$ | $3{,}699\text{ m}$ | **$3{,}69\text{ m}$** | 35 | LIVRE |
-
-> [!TIP]
-> **Propriedade Quadrática da Distância:**  
-> Observe como a distância necessária para garantir a parada cresce com o quadrado da velocidade ($d \propto v^2$). Quando a velocidade dobrou de $1{,}30\text{ m/s}$ para $2{,}72\text{ m/s}$, a distância de segurança simulada quadruplicou (de $0{,}85\text{ m}$ para $3{,}69\text{ m}$). A simulação preventiva acompanha essa expansão instantaneamente a cada leitura do GPS.
-
----
-
-## 6. O Papel do Debounce e a Atuação no Pipeline
-
-O retorno da função `astro_obstacle_avoider_set_trajectory_from_deceleration()` é armazenado na variável global:
+#### Ordem Invertida (Prioridade de Entidades Dinâmicas):
 ```cpp
-global_acc_to_avoid_potential_collision = returned_acc;
-```
-
-Quando um obstáculo invade a rota de parada, o valor retornado torna-se negativo (ex: $-1{,}00\text{ m/s}^2$). Porém, na robótica real, ruídos momentâneos de LiDAR (como poeira, folhas ou desníveis transitórios de pista) poderiam induzir freadas falsas.
-
-Para evitar isso, dentro do [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1219-L1260), opera um filtro de persistência temporal (**Debounce**):
-
-```cpp
-if (fabs(global_acc_to_avoid_potential_collision) > EPSILON)
+// 1º: Testa primeiro se o obstáculo é uma entidade rastreada pelo DATMO
+if (pose_collides_with_moving_objects(iterative_pose, safe_distance, &distance_to_mo))
 {
-    it_count++;
-
-    if (it_count < it_count_to_activate) // it_count_to_activate = 5
-    {
-        fprintf(out_act, "[DEBOUNCE %d/5] Obstaculo detectado (acc=%.2f m/s^2). Validando persistencia...\n",
-                it_count, global_acc_to_avoid_potential_collision);
-    }
-    else if (it_count == it_count_to_activate)
-    {
-        fprintf(out_act, ">>> [DEBOUNCE 5/5 CONFIRMADO -> FREIO DE EMERGENCIA ATIVADO!] <<< acc = %.2f m/s^2\n",
-                global_acc_to_avoid_potential_collision);
-    }
-
-    if (it_count >= it_count_to_activate)
-    {
-        last_ativation_timestamp = astro_get_time();
-        last_global_acc_to_avoid_potential_collision = global_acc_to_avoid_potential_collision;
-    }
+    collision_map_name = "Moving Objects";
+    flag_check_collision = true;
+    ASTRO_ERROR_METADATA("ASTRO_ERROR_CODE_204", "Houve colisão na extensão da trajetória do potential collision. (Moving Objects)");
 }
-else
+// 2º: Se não for entidade rastreada, testa o grid do mapa de distâncias / especiais
+else if (collision_result.has_collision)
 {
-    it_count = 0; // Se o obstáculo sumiu antes de 5 ciclos, o alarme é resetado
+    collision_map_name = collision_result.map_name;
+    flag_check_collision = true;
 }
 ```
+* **Comportamento observado:** Agora, ao projetar as poses à frente, a verificação consulta a lista de nuvens de pontos de objetos móveis em [`moving_objects_array[0]`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1883). Como o objeto à frente está sendo rastreado pelo DATMO, o primeiro `if` é acionado e o log acusa com precisão:
+  ```text
+  [EXTENSÃO ALERTA - ERRO 204] COLISÃO DETECTADA no Passo 162 (dist: 8.04m < 10.00m)!
+  Fonte: [Moving Objects] | Freio acionado: acc = -1.00 m/s^2
+  ```
 
-### O Recálculo de Velocidade da Fila:
-Uma vez que o obstáculo persiste por 5 ciclos consecutivos, a função [`velocity_recalculate_with_acceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1292) entra em ação:
-* Ela percorre todos os comandos da fila de movimento ativa e aplica o perfil de desaceleração forçada com $a = -1{,}00\text{ m/s}^2$.
-* Isso reduz progressivamente os comandos de velocidade até zero, forçando a parada segura do caminhão antes do ponto de colisão identificado.
+---
+
+## 6. O Princípio da Defesa em Profundidade (Redundância de Segurança)
+
+Essa sobreposição intencional entre o `distance_map` e o `Moving Objects` é a base da segurança funcional do veículo:
+
+1. **Se o DATMO falhar ou atrasar:** Se o algoritmo de tracking perder a associação de um pedestre ou se o objeto tiver uma geometria atípica que o clusterizador não reconheça, os feixes do LiDAR ainda atingem a grade do `distance_map`, forçando a parada de emergência.
+2. **Se o Mapa de Distâncias atrasar ou falhar no decay:** Se o veículo estiver em alta velocidade ou manobrando rápido e a projeção de células da grade sofrer latência, as coordenadas do cluster 3D do DATMO garantem que a colisão seja interceptada imediatamente nas coordenadas globais.
+3. **Múltiplos Sensores:** Fontes que não desenham no mapa 2D (como radares automotivos ou detecção de pedestres por redes neurais em câmeras) injetam dados diretamente em `moving_objects_array[1..5]`, garantindo proteção 360° em qualquer cenário operacional.
+
