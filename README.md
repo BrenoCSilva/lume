@@ -1,161 +1,306 @@
-# Fusão e Intersecção: Distance Map vs. Moving Objects (DATMO)
+# 02 - Planejamento Preventivo e Validação de Trajetória (`obstacle_avoider`)
 
-O subsistema de percepção e prevenção de colisões do **`obstacle_avoider`** combina diferentes representações do ambiente para garantir que o caminhão nunca colida com obstáculos estáticos ou dinâmicos.
+O módulo **Obstacle Avoider (OA)** atua como uma camada crítica de supervisão e segurança ativa entre o planejador de trajetória de alto nível (**MPP - Model Predictive Planner**) e a camada de controle e atuação do veículo (**Base Ackerman**).
 
-> [!IMPORTANT]
-> **Conceitos Fundamentais de Arquitetura:**
-> * **O `distance_map` agrega o Offline + Online:** O mapa de distâncias ([`obstacle_distance_map`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L20)) contém tanto a infraestrutura pré-mapeada ([`offline_map`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L129) com paredes, guias e prédios) quanto os feixes de laser do LiDAR refletidos por obstáculos novos em tempo real.
-> * **Ter Velocidade $\neq$ Ser Objeto Móvel:** Nem todo obstáculo na pista está em movimento. Caixas caídas, cones, paletes ou um caminhão estacionado/desligado têm velocidade $v = 0$, mas são capturados em tempo real pelo LiDAR e projetados na grade do `distance_map`.
-> * **O papel do DATMO (*Detection And Tracking of Moving Objects*):** O DATMO é o módulo responsável por rastrear entidades dinâmicas (outros veículos, pedestres, empilhadeiras). Ele utiliza o `offline_map` para subtrair e ignorar o meio-fio e estruturas fixas, isolando o que é tráfego e emitindo a mensagem [`astro_moving_objects_point_clouds_message`](file:///home/lume/astro/include/astro/moving_objects_messages.h#L52).
-> * **Intersecção e Redundância:** Quando um objeto móvel (ou simulado) está na pista, ele é atingido pelos feixes do LiDAR. Portanto, ele existe **simultaneamente** na grade do `distance_map` e na nuvem de entidades do `DATMO`. Essa sobreposição garante que, mesmo que o rastreamento do DATMO falhe ou atrase, a presença física do objeto no mapa de distâncias ainda acionará a frenagem de emergência.
+Enquanto o mecanismo de emergência (*Potential Collision*) realiza simulações hipotéticas com esterçamento fixo para contingências extremas, a função [`obstacle_avoider()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1510) é responsável pelo **Planejamento Preventivo**: ela projeta no espaço cartesiano global a trajetória real planejada pelo MPP, valida ponto a ponto a ausência de colisões contra o mapa de distâncias e objetos móveis, monitora a margem física de parada do veículo pela equação de Torricelli e remodela ativamente as velocidades do plano quando necessário.
 
 ---
 
-## 1. Arquitetura de Percepção e Fluxo de Dados
+## 1. Visão Geral e Papel no Pipeline
 
-A figura abaixo ilustra como os feixes de LiDAR e o mapa offline fluem através do sistema até chegarem aos handlers do [`obstacle_avoider`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp):
+O MPP calcula trajetórias otimizadas e envia periodicamente vetores de comandos de movimento compostos apenas por grandezas de controle local:
+- Velocidade linear ($v$) em $\text{m/s}$.
+- Ângulo de esterçamento das rodas dianteiras ($\phi$) em radianos.
+- Tempo de execução de cada comando ($dt$) em segundos.
+
+> [!IMPORTANT]
+> **O MPP não envia as coordenadas cartesianas globais $(X, Y, \theta)$ do plano**.  
+> O plano do MPP é relativo ao tempo de execução. Cabe ao [`obstacle_avoider()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1510) ancorar esses comandos na pose estimada atual do veículo (fornecida pelo `localize`) e integrar o modelo cinemático para frente, obtendo a posição exata de cada parte do veículo (cabine e semi-reboques) em cada instante futuro.
 
 ```mermaid
 flowchart TD
-    LIDAR["LiDARs 3D<br/>(Velodyne / VLP-16)"]
-    OFFLINE["Mapa Offline<br/>(Infraestrutura pré-mapeada)"]
-    ROAD["Rede de Vias<br/>(Road Network / Lanes)"]
-
-    subgraph ODM ["Processo: obstacle_distance_mapper"]
-        GRID_OCC["Occupancy Grid<br/>Projeção 2D dos pontos"]
-        FUSION["Fusão de Obstáculos<br/>Offline + Pontos LiDAR"]
-        EDF["Cálculo do Campo Euclidiano<br/>(complete_x_offset, complete_y_offset)"]
-        
-        GRID_OCC --> FUSION
-        OFFLINE --> FUSION
-        FUSION --> EDF
+    MPP["MPP (Model Predictive Planner)<br/>Publica vetor de comandos (v, phi, dt)"] --> OA_MSG["Handler do OA<br/>robot_ackerman_motion_command_message_handler()"]
+    OA_MSG --> BUF["Buffer Circular de Comandos<br/>motion_commands_vector"]
+    
+    subgraph OA_CORE ["Ciclo Preventivo: obstacle_avoider()"]
+        ANCHOR["Ancoragem na Pose Atual<br/>pose_vector[current_pose] (do Localize)"]
+        PROJ["Projeção Cinemática Ackerman + Semi-Reboques<br/>build_predicted_trajectory()"]
+        COL_CHECK["Checagem Ponto a Ponto nos Mapas<br/>Distance Map + Moving Objects (DATMO)"]
+        TORR_CHECK["Verificação de Margem de Parada Segura<br/>Equação de Torricelli vs. Distância Restante"]
+        RECALC["Atenuação Progressiva de Velocidade<br/>velocity_recalculate() (-5% por comando)"]
     end
-
-    subgraph DATMO_MOD ["Módulo: DATMO (Detection and Tracking of Moving Objects)"]
-        SUB_STATIC["Subtração de Fundo<br/>Remove meio-fio e paredes fixas"]
-        CLUSTERING["Clusterização &amp; Associação<br/>Filtro de Kalman / Histórico temporal"]
-        TRACKING["Rastreamento Cinemático<br/>Estima pose, v_long, v_lat, dimensões"]
-        
-        GRID_OCC --> SUB_STATIC
-        OFFLINE --> SUB_STATIC
-        ROAD --> SUB_STATIC
-        SUB_STATIC --> CLUSTERING
-        CLUSTERING --> TRACKING
-    end
-
-    LIDAR --> GRID_OCC
-
-    EDF -->|"Memória Compartilhada (SHM)<br/>+ Notificação IPC"| H_DIST["Handler Mapa Distâncias<br/><b>astro_obstacle_distance_mapper_on_distance_map...()</b>"]
-    TRACKING -->|"Mensagem IPC<br/>point_clouds, v, dims"| H_MO["Handler Objetos Móveis<br/><b>astro_moving_objects_point_clouds_message_handler()</b>"]
-
-    subgraph OA ["Processo: obstacle_avoider"]
-        H_DIST --> MAP_PTR["maps_obstacle_avoider.distance_map"]
-        H_MO --> MO_ARRAY["moving_objects_array[0]"]
-        
-        MAP_PTR --> CHECK_COL["Checagem de Colisão<br/>(Torricelli Phi Fixo &amp; Extensão de Segurança)"]
-        MO_ARRAY --> CHECK_COL
-    end
+    
+    BUF --> ANCHOR
+    ANCHOR --> PROJ
+    PROJ --> COL_CHECK
+    COL_CHECK -->|Colisão detectada| RECALC
+    COL_CHECK -->|Livre de colisão| TORR_CHECK
+    TORR_CHECK -->|d_plano < d_parada| RECALC
+    TORR_CHECK -->|d_plano >= d_parada| PUB["Publicação para Base Ackerman<br/>obstacle_avoider_publish_base_ackerman()"]
+    RECALC --> PUB
 ```
 
 ---
 
-## 2. A Composição do `Obstacle Distance Map`
+## 2. Projeção Cinemática da Trajetória (`build_predicted_trajectory`)
 
-O mapa de distâncias gerenciado por [`obstacle_avoider_update_map()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L114) recebe uma estrutura [`astro_obstacle_distance_mapper_map_t`](file:///home/lume/astro/include/astro/obstacle_distance_mapper_messages.h#L40-L46).
+Antes de verificar se o veículo irá colidir, o OA precisa conhecer a envoltória geométrica completa ocupada pelo caminhão ao longo de todo o plano. Essa conversão é realizada pela função [`build_predicted_trajectory()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1471):
 
-Diferente de um mapa de ocupação binário (onde cada célula é apenas `0` ou `1`), o `distance_map` é um **Campo de Distâncias Euclidiano (*Euclidean Distance Field*)**:
-* Possui dimensões típicas de $200 \times 200$ ou $400 \times 400$ células.
-* Para cada célula da grade, ele armazena dois deslocamentos vetoriais pré-calculados:
-  * `complete_x_offset[index]`
-  * `complete_y_offset[index]`
-* Ao consultar qualquer ponto $(X, Y)$ no mundo via [`astro_obstacle_avoider_distance_from_global_point_to_obstacle()`](file:///home/lume/astro/src/obstacle_avoider/collision_detection.cpp#L734), o algoritmo obtém a distância euclidiana exata até o obstáculo mais próximo em $O(1)$:
-  $$\text{dist} = \sqrt{dx^2 + dy^2} \times \text{resolução}$$
-* Células que contêm obstáculos diretos possuem offset nulo ($dx \approx 0, dy \approx 0 \implies \text{dist} = 0{,}0\text{ m}$).
-
-### De onde vêm esses obstáculos?
-1. **Infraestrutura Estática (Offline):** Paredes, mourões, colunas de galpões e muretas pré-carregadas.
-2. **Novos Obstáculos Físicos:** Qualquer ponto refletido pelo laser que não pertence ao chão (piso) é inserido na grade como célula ocupada, gerando um campo de repulsão de distâncias ao redor dele.
-
----
-
-## 3. O Funcionamento do DATMO (*Detection And Tracking of Moving Objects*)
-
-O módulo DATMO opera sob o princípio de que **não basta saber que há um obstáculo; é preciso saber se ele é uma entidade em movimento ou com potencial cinemático**.
-
-### Pipeline de Processamento do DATMO:
-1. **Entrada do Grid de Ocupação:** Recebe a grade de pontos brutos gerada pelo LiDAR.
-2. **Subtração do Mapa Offline:** Cruza os pontos com o [`offline_map`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L129). Se um ponto coincide com uma parede ou guia pré-existente, ele é descartado da análise de tráfego.
-3. **Agrupamento em Clusters e Faixas:** Os pontos restantes são projetados nas faixas de tráfego ([`road_network`](file:///home/lume/astro/src/obstacle_distance_mapper/README.md#L25)) e agrupados em objetos (caixas delimitadoras 3D).
-4. **Filtro de Rastreamento (Tracking Temporal):** Associa os clusters ao longo do tempo (usando Filtro de Kalman ou Monte Carlo), estimando:
-   * Posição global $(X, Y, Z)$.
-   * Vetor de velocidade ($\vec{v}_{\text{longitudinal}}, \vec{v}_{\text{lateral}}$).
-   * Dimensões médias (comprimento, largura, altura).
-   * Nuvem de pontos 3D que compõe a carcaça do objeto.
-5. **Publicação IPC:** Emite a mensagem [`astro_moving_objects_point_clouds_message`](file:///home/lume/astro/include/astro/moving_objects_messages.h#L52), recebida no `obstacle_avoider` através de [`astro_moving_objects_point_clouds_message_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1876).
-
----
-
-## 4. Distinção Conceitual: Classes de Obstáculos
-
-| Categoria | Exemplo | Presença no `offline_map` | Tem Velocidade? | Como o `distance_map` trata? | Como o `DATMO` trata? |
-| :--- | :--- | :---: | :---: | :--- | :--- |
-| **Estático de Infraestrutura** | Parede, pilar, meio-fio | **Sim** | Não ($v = 0$) | Presente permanentemente no campo de distâncias. | **Subtraído/Filtrado** (não gera objeto móvel). |
-| **Estático Novo / Temporário** | Caixa caída, cone, veículo parado/estacionado | **Não** | Não ($v = 0$) | **Captado pelos feixes do LiDAR** e inserido na grade em tempo real. | Pode ser ignorado após confirmar velocidade nula persistente ou mantido como obstáculo estático de pista. |
-| **Dinâmico / Móvel** | Pedestre, empilhadeira, caminhão em tráfego | **Não** | **Sim** ($v > 0$) | **Captado pelo laser** (gera células ocupadas no instante $t$). | **Rastreado ativamente** com vetor de velocidade, histórico e predição de trajetória. |
-
----
-
-## 5. A Intersecção de Atuação e a Ordem de Prioridade
-
-Como tanto o `obstacle_distance_mapper` quanto o `DATMO` consom as mesmas nuvens de pontos dos LiDARs, **qualquer obstáculo colocado na pista produz dados em ambas as fontes**.
-
-### Por que a ordem dos testes importa?
-Na verificação de colisão do *Potential Collision* (Etapa 1 em [`check_collision_in_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1019) e Etapa 2 em [`set_extension_trajectory_from_deceleration`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1238)):
-
-#### Ordem Original (Prioridade do Mapa de Distâncias):
 ```cpp
-// 1º: Testa os mapas
-if (collision_result.has_collision)
-{
-    collision_map_name = collision_result.map_name; // -> "Obstacle Distance Map"
-}
-// 2º: Só testava Moving Objects se os mapas NÃO acusassem colisão
-else if (pose_collides_with_moving_objects(...))
-{
-    collision_map_name = "Moving Objects";
-}
+static int
+build_predicted_trajectory(astro_robot_and_trailers_motion_command_t *motion_commands_vector, 
+                           int *num_motion_commands,
+                           astro_robot_and_trailers_traj_point_t initial_pose, 
+                           astro_robot_ackerman_config_t *astro_robot_ackerman_config, 
+                           astro_semi_trailers_config_t *astro_semi_trailer_config)
 ```
-* **Comportamento observado:** Como o obstáculo físico refletia feixes de laser que entravam no grid do `distance_map`, o primeiro `if` era satisfeito na marca dos $8\text{ m}$. Por avaliação de curto-circuito do C++, o `else if (pose_collides_with_moving_objects)` era ignorado e o alarme sempre saía rotulado como `[Obstacle Distance Map]`.
 
-#### Ordem Invertida (Prioridade de Entidades Dinâmicas):
-```cpp
-// 1º: Testa primeiro se o obstáculo é uma entidade rastreada pelo DATMO
-if (pose_collides_with_moving_objects(iterative_pose, safe_distance, &distance_to_mo))
-{
-    collision_map_name = "Moving Objects";
-    flag_check_collision = true;
-    ASTRO_ERROR_METADATA("ASTRO_ERROR_CODE_204", "Houve colisão na extensão da trajetória do potential collision. (Moving Objects)");
-}
-// 2º: Se não for entidade rastreada, testa o grid do mapa de distâncias / especiais
-else if (collision_result.has_collision)
-{
-    collision_map_name = collision_result.map_name;
-    flag_check_collision = true;
-}
-```
-* **Comportamento observado:** Agora, ao projetar as poses à frente, a verificação consulta a lista de nuvens de pontos de objetos móveis em [`moving_objects_array[0]`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1883). Como o objeto à frente está sendo rastreado pelo DATMO, o primeiro `if` é acionado e o log acusa com precisão:
-  ```text
-  [EXTENSÃO ALERTA - ERRO 204] COLISÃO DETECTADA no Passo 162 (dist: 8.04m < 10.00m)!
-  Fonte: [Moving Objects] | Freio acionado: acc = -1.00 m/s^2
-  ```
+### Funcionamento Matemático da Integração:
+1. **Pose Inicial ($P_0$):** O ponto de partida é a pose estimada do veículo no instante atual:
+   $$\mathbf{P}_0 = \begin{bmatrix} X_{\text{odom}} & Y_{\text{odom}} & \theta_{\text{cabine}} & \theta_{\text{trailer}}[0 \dots N] \end{bmatrix}^T$$
+2. **Integração Passo a Passo:** Para cada comando $i \in [0, N-1]$ contendo $(v_i, \phi_i, dt_i)$:
+   A função [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/sharedlib/libcarmodel/ackerman_model.c) calcula o deslocamento infinitesimal considerando:
+   - A distância entre eixos da cabine ($L$).
+   - O comprimento dos engates e a cinemática de arraste angular de cada semi-reboque acoplado.
+   $$\mathbf{P}_{i+1} = f_{\text{Ackerman}}(\mathbf{P}_i, v_i, \phi_i, dt_i)$$
+3. **Preenchimento Global:** Os campos globais `x`, `y`, `theta` e `trailer_theta[z]` do vetor `motion_commands_vector[i]` e da matriz `trajectory_vector_of_points` são atualizados com as coordenadas calculadas.
+
+> [!NOTE]
+> Essa projeção permite ao sistema saber onde **cada círculo de colisão (marker)** da cabine e de cada semi-reboque estará no mundo $1\text{ s}$, $2\text{ s}$ ou $5\text{ s}$ no futuro.
 
 ---
 
-## 6. O Princípio da Defesa em Profundidade (Redundância de Segurança)
+## 3. Checagem de Colisão no Plano Projetado
 
-Essa sobreposição intencional entre o `distance_map` e o `Moving Objects` é a base da segurança funcional do veículo:
+Com todos os pontos cartesianos do plano previstos, o algoritmo varre ponto a ponto a trajetória futura contra duas fontes independentes de percepção:
 
-1. **Se o DATMO falhar ou atrasar:** Se o algoritmo de tracking perder a associação de um pedestre ou se o objeto tiver uma geometria atípica que o clusterizador não reconheça, os feixes do LiDAR ainda atingem a grade do `distance_map`, forçando a parada de emergência.
-2. **Se o Mapa de Distâncias atrasar ou falhar no decay:** Se o veículo estiver em alta velocidade ou manobrando rápido e a projeção de células da grade sofrer latência, as coordenadas do cluster 3D do DATMO garantem que a colisão seja interceptada imediatamente nas coordenadas globais.
-3. **Múltiplos Sensores:** Fontes que não desenham no mapa 2D (como radares automotivos ou detecção de pedestres por redes neurais em câmeras) injetam dados diretamente em `moving_objects_array[1..5]`, garantindo proteção 360° em qualquer cenário operacional.
+```cpp
+for (int i = 0; i < *num_motion_commands; i++)
+{
+    astro_collision_detection_collision_result result = 
+        astro_collision_detection_compute_maps_collision(maps_obstacle_avoider, trajectory_vector_of_points[i]);
+
+    if (result.has_collision)
+    {
+        velocity_recalculate(motion_commands_vector, *num_motion_commands);
+        hit_obstacle = 1;
+        set_new_motion_command_needs_to_be_published(1);
+        ...
+        EXEC_COOLDOWN(astro_global_publish_astro_error_message_custom_string(ASTRO_ERROR_CODE_203, custom_string), 0.5);
+        break;
+    }
+}
+```
+
+1. **Obstacle Distance Map (Grade Estática):**  
+   Verifica a distância euclidiana mínima dos markers do caminhão até as células de obstáculo estático registradas no mapa de grade (`distance_map`). Se a distância for menor que a distância segura (`obstacle_avoider_obstacles_safe_distance`), acusa colisão.
+2. **Moving Objects (DATMO - Objetos Dinâmicos):**  
+   Verifica a nuvem de pontos de pedestres, veículos e outros alvos rastreados via LiDAR e sensores secundários (radares ARS-408 e câmeras neurais).
+
+Se for detectada uma colisão no ponto $i$ da trajetória:
+- O loop de varredura é imediatamente interrompido (`break`).
+- A rotina de atenuação [`velocity_recalculate()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1435) é acionada sobre os comandos do plano.
+- É emitido o erro **`ASTRO_ERROR_CODE_203`** (com texto indicando se a colisão foi em *Occupancy Map* ou *Moving Objects*).
+
+---
+
+## 4. Garantia Física de Parada e Ausência do MPP (Torricelli)
+
+Um dos pilares de segurança mais elegantes do `obstacle_avoider` é a **garantia física de parada**, que protege o veículo mesmo na ausência de obstáculos estáticos caso o planejador do MPP pare de enviar planos.
+
+### 4.1. Dedução da Distância de Parada Necessária ($d_{\text{parada}}$)
+Pela equação de Torricelli para desaceleração linear máxima constante $a_{\text{max}}$:
+$$v_f^2 = v_0^2 - 2 \cdot a_{\max} \cdot \Delta S$$
+
+Para a condição de repouso ($v_f = 0$):
+$$\Delta S_{\text{parada}} = \frac{v_0^2}{2 \cdot a_{\max}}$$
+
+No código:
+```cpp
+double distance_necessary_to_stop = pow(current_odometry_velocity, 2) / 
+                                   (2.0 * astro_robot_ackerman_config->maximum_deceleration_forward);
+```
+Onde $a_{\max}$ (`maximum_deceleration_forward`) é um parâmetro de configuração do robô lido diretamente do arquivo `.ini` do veículo.
+
+### 4.2. Distância Restante no Plano Atual ($D_{\text{plano}}$)
+O OA calcula o comprimento geométrico 2D restante acumulado ao longo da sequência de pontos autorizados pelo MPP:
+$$D_{\text{plano}} = \sum_{i=0}^{N-2} \sqrt{(X_{i+1} - X_i)^2 + (Y_{i+1} - Y_i)^2}$$
+
+```cpp
+distance_remaining_in_current_plan += DIST2D(trajectory_vector_of_points[i], trajectory_vector_of_points[i + 1]);
+```
+
+### 4.3. O Ponto Crítico e o Tratamento da Morte do MPP
+Em regime nominal, o MPP publica novos planos a cada $\approx 100\text{ ms}$ com horizonte de $\approx 18\text{ m}$ a $25\text{ m}$, mantendo $D_{\text{plano}} \gg \Delta S_{\text{parada}}$.
+
+Porém, se o processo do MPP falhar, travar ou for morto no `proccontrol`:
+1. **Nenhum plano novo chega**: O OA retém o último plano no buffer.
+2. **Consumo contínuo do plano**: O timer handler do OA (a cada $\approx 25\text{ ms}$) executa [`consume_motion_command_time()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L421), descartando do início do buffer os comandos que já foram executados no tempo.
+3. **Encolhimento do buffer**: O número de comandos e a distância restante do plano encolhem progressivamente:
+   $$140 \to 116 \to 98 \to 60 \to 25\text{ comandos}$$
+4. **Disparo da Frenagem Forçada**: No instante em que a distância física de frenagem supera o comprimento restante do plano:
+   $$D_{\text{plano}} < \Delta S_{\text{parada}}$$
+   O bloco de segurança em [`obstacle_avoider.cpp`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1706-L1724) atua imediatamente:
+
+```cpp
+if (recalculate_velocity_when_braking_distance_exceeds_plan == 1)
+{
+    if (distance_remaining_in_current_plan < distance_necessary_to_stop)
+    {
+        velocity_recalculate(motion_commands_vector, *num_motion_commands);
+        hit_obstacle = 1;
+
+        if (get_new_motion_command_needs_to_be_published() == 0)
+        {
+            set_new_motion_command_needs_to_be_published(1);
+        }
+
+        static char custom_string[1000] = "";
+        sprintf(custom_string, "Stop dist %.2fm > plano %.2fm; vel %.2fm/s; dec: %.2fm/s^2", 
+                distance_necessary_to_stop, distance_remaining_in_current_plan,
+                current_odometry_velocity, astro_robot_ackerman_config->maximum_deceleration_forward);
+        EXEC_COOLDOWN(astro_global_publish_astro_error_message_custom_string(ASTRO_ERROR_CODE_203, custom_string), 0.5);
+        ASTRO_ERROR_METADATA("ASTRO_ERROR_CODE_203", "Espaço restante no plano atual é insuficiente para a frenagem segura do veículo até a posição do goal. Executado recálculo de velocidade e comando de desaceleração");
+    }
+}
+```
+
+> [!WARNING]
+> **Garantia de Não Ultrapassagem:**  
+> Sem esse mecanismo de segurança, o caminhão continuaria andando em velocidade nominal e "cairia de um penhasco" ou invadiria áreas não autorizadas ao final do último comando. Com o Torricelli preventivo, o OA garante que a desaceleração comece com folga milimétrica suficiente para que a velocidade seja exatamente **$0\text{ km/h}$** antes do fim da trajetória conhecida.
+
+---
+
+## 5. Algoritmo de Atenuação de Velocidade (`velocity_recalculate`)
+
+Quando o OA decide que o plano precisa ser freado (seja por detecção de obstáculo ou por esgotamento de margem de frenagem), a função [`velocity_recalculate()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1435) é executada:
+
+```cpp
+void
+velocity_recalculate(astro_robot_and_trailers_motion_command_t *motion_commands_vector, int num_motion_commands)
+{
+	int i;
+	double reduction_factor = 0.95;
+
+	for (i = 0; i < num_motion_commands; i++)
+	{
+		if (i != 0)
+		{
+			reduction_factor *= 0.95;
+		}
+
+		motion_commands_vector[i].v *= reduction_factor;
+		motion_commands_vector[i].time *= 1.0 / reduction_factor;
+
+		if (fabs(motion_commands_vector[i].v) < 0.05)
+		{
+			motion_commands_vector[i].time = 1.0;
+			motion_commands_vector[i].v = 0.0;
+			break;
+		}
+	}
+
+	for (; i < num_motion_commands; i++)
+	{
+		motion_commands_vector[i].time = 1.0;
+		motion_commands_vector[i].v = 0.0;
+	}
+}
+```
+
+### Propriedades do Algoritmo:
+
+1. **Decaimento Exponencial de 5% por Comando:**  
+   Para cada comando $i$, a velocidade é multiplicada pelo fator:
+   $$f_i = (0{,}95)^{i+1}$$
+   - $v_0 = v_0^{\text{orig}} \cdot 0{,}95$
+   - $v_1 = v_1^{\text{orig}} \cdot (0{,}95)^2$
+   - $v_2 = v_2^{\text{orig}} \cdot (0{,}95)^3$
+   Isso produz uma rampa de desaceleração suave e contínua, sem degraus bruscos que possam induzir efeito canivete (*jackknifing*) na cabine e nos semi-reboques.
+
+2. **Invariância Geométrica da Trajetória ($\Delta S = \text{constante}$):**  
+   Ao mesmo tempo em que a velocidade é multiplicada por $f$, a duração $dt$ é multiplicada por $\frac{1}{f}$:
+   $$\Delta S_i = v_i \cdot dt_i = \left(v_{\text{orig}} \cdot f\right) \cdot \left(dt_{\text{orig}} \cdot \frac{1}{f}\right) = v_{\text{orig}} \cdot dt_{\text{orig}}$$
+   **A distância física percorrida por cada segmento permanece rigorosamente idêntica**. O caminhão executará exatamente o mesmo traçado de pista planejado pelo MPP, apenas trafegando mais devagar.
+
+3. **Corte e Parada Completa ($0\text{ m/s}$):**  
+   Quando $v < 0{,}05\text{ m/s}$ ($5\text{ cm/s}$ ou $0{,}18\text{ km/h}$), o comando atual e **todos os comandos subsequentes até o fim do buffer** são forçados a $v = 0{,}0\text{ m/s}$ e $dt = 1{,}0\text{ s}$.
+
+---
+
+## 6. Loop de Convergência Iterativa (`do ... while(hit_obstacle)`)
+
+O processo de validação em [`obstacle_avoider()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1510) é encapsulado por um loop de convergência:
+
+```cpp
+int iter = 0;
+do
+{
+    hit_obstacle = 0;
+    *num_motion_commands = build_predicted_trajectory(...);
+    ...
+    // Checagem de colisões e Torricelli
+    ...
+    iter++;
+} while (hit_obstacle && (fabs(motion_commands_vector[0].v) > 0.001) && (iter < 500));
+```
+
+### Mecânica de Convergência:
+1. Se uma colisão for detectada no ponto $k$, o `velocity_recalculate()` reduz as velocidades do plano em 5% composto.
+2. Na próxima iteração do loop, o `build_predicted_trajectory()` recalcula as poses projetadas com as novas velocidades.
+3. Esse ciclo se repete até que:
+   - A redução de velocidade encurte os alcances temporais e o plano deixe de colidir com o obstáculo (`hit_obstacle == 0`); OU
+   - A velocidade caia para zero ($v_0 \le 0{,}001\text{ m/s}$), significando uma parada total de emergência antes do obstáculo.
+4. Ao sair do loop com plano modificado, a flag `set_new_motion_command_needs_to_be_published(1)` é ativada para garantir que a mensagem de controle seja transmitida de imediato à base ackerman.
+
+---
+
+## 7. Evidências Experimentais e Logs de Telemetria
+
+Os arquivos `/tmp/oa_braking_distance.log` e `/tmp/oa_predicted_plan.log` permitem auditar a atuação do módulo em tempo real.
+
+### 7.1. Log de Consumo e Frenagem (`/tmp/oa_braking_distance.log`)
+Abaixo, o registro real do teste de perda do MPP (processo `./mpp` finalizado):
+
+```text
+>>> NOVO PLANO DO MPP ENVIADO!!! 140 comandos <<<
+[OA Frenagem - 140 comandos] Vel: 2.77 m/s (10.0 km/h) | Parada Nec.: 3.82 m | Restante Plano: 19.20 m | Margem: +15.38 m -> [OK - SEGURO]
+[OA Frenagem - 118 comandos] Vel: 2.77 m/s (10.0 km/h) | Parada Nec.: 3.82 m | Restante Plano: 17.24 m | Margem: +13.41 m -> [OK - SEGURO]
+[OA Frenagem -  87 comandos] Vel: 2.77 m/s (10.0 km/h) | Parada Nec.: 3.82 m | Restante Plano: 13.82 m | Margem:  +9.99 m -> [OK - SEGURO]
+[OA Frenagem -  48 comandos] Vel: 2.77 m/s (10.0 km/h) | Parada Nec.: 3.82 m | Restante Plano:  7.85 m | Margem:  +4.03 m -> [OK - SEGURO]
+[OA Frenagem -  27 comandos] Vel: 2.78 m/s (10.0 km/h) | Parada Nec.: 3.85 m | Restante Plano:  4.28 m | Margem:  +0.43 m -> [OK - SEGURO]
+[OA Frenagem -  22 comandos] Vel: 2.75 m/s ( 9.9 km/h) | Parada Nec.: 3.78 m | Restante Plano:  3.68 m | Margem:  -0.10 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel: 2.53 m/s ( 9.1 km/h) | Parada Nec.: 3.20 m | Restante Plano:  1.91 m | Margem:  -1.29 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel: 1.84 m/s ( 6.6 km/h) | Parada Nec.: 1.69 m | Restante Plano:  0.78 m | Margem:  -0.91 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel: 0.89 m/s ( 3.2 km/h) | Parada Nec.: 0.40 m | Restante Plano:  0.02 m | Margem:  -0.38 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel: 0.26 m/s ( 0.9 km/h) | Parada Nec.: 0.03 m | Restante Plano:  0.04 m | Margem:  +0.00 m -> [OK - SEGURO]
+[OA Frenagem -  21 comandos] Vel: -0.00 m/s (-0.0 km/h) | Parada Nec.: 0.00 m | Restante Plano:  0.08 m | Margem:  +0.08 m -> [OK - SEGURO]
+```
+
+### 7.2. Log do Momento da Detecção no SO (`/tmp/oa_predicted_plan.log`)
+No instante em que a checagem nativa no `/proc` identifica a finalização do `./mpp`:
+
+```text
+===================================================================================
+[SO: MPP MORREU! Processo ./mpp finalizado no Linux]
+Capturando plano inicial restante no momento da morte (87 comandos) | Vel: 2.77 m/s (10.0 km/h)
+Pose Inicial: (X=7486503.53, Y=-315921.41, theta=-172.3 deg)
+  Cmd[00]: Global(X=7486503.48, Y=-315921.41, theta=-172.3 deg) | v=2.77 m/s | phi=0.000 rad | dt=0.03s
+  Cmd[01]: Global(X=7486503.40, Y=-315921.42, theta=-172.3 deg) | v=2.77 m/s | phi=0.000 rad | dt=0.03s
+  ...
+  Cmd[86]: Global(X=7486490.12, Y=-315923.05, theta=-172.0 deg) | v=2.77 m/s | phi=0.001 rad | dt=0.03s
+===================================================================================
+```
+
+---
+
+## 8. Resumo das Regras de Negócio e Tratativas
+
+| Condição Operacional | Ação do `obstacle_avoider()` | Código de Erro / Alerta |
+| :--- | :--- | :--- |
+| **Plano livre e $D_{\text{plano}} \ge \Delta S_{\text{parada}}$** | Repassa os comandos de velocidade e esterçamento intactos para a base ackerman. | *Nenhum erro (Operação Nominal)* |
+| **Colisão prevista no caminho** | Executa `velocity_recalculate()`, reduzindo as velocidades em 5% por comando até cessar o risco ou zerar. | **`ASTRO_ERROR_CODE_203`** (Severidade 4) |
+| **Ausência/Queda do MPP ($D_{\text{plano}} < \Delta S_{\text{parada}}$)** | Intercepta o buffer restante e força a frenagem programada via `velocity_recalculate()` antes de esgotar o trajeto. | **`ASTRO_ERROR_CODE_203`** (Severidade 4) |
+| **Colisão física do veículo em movimento** | Detecta intersecção da pose atual do caminhão com obstáculo enquanto $v > 0{,}001\text{ m/s}$. | **`ASTRO_ERROR_CODE_201`** (Severidade 0 - Erro Fatal) |
+| **Timeout de comunicação do sensor/comando** | Esgotamento do tempo limite configurado (`command_timeout`). | Comanda parada de emergência via `publish_base_ackerman_motion_command_message_to_stop_robot()`. |
 
