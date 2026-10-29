@@ -1,59 +1,59 @@
 # 02 - Planejamento Preventivo e Validação de Trajetória (`obstacle_avoider`)
 
-O trabalho principal do [`obstacle_avoider()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1510) é pegar os comandos de movimento que o MPP enviou, desenhar por onde o caminhão vai passar no mapa e verificar com antecedência se ele vai bater em alguma coisa.
+A principal função do [`obstacle_avoider()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1510) é projetar no espaço cartesiano o plano de movimento enviado pelo MPP e avaliar preventivamente o risco de colisão dessa projeção futura.
 
 ---
 
 ## 1. O que o MPP envia vs. O que o OA calcula
 
-O MPP **não** diz as coordenadas no mapa $(X, Y)$ de onde o caminhão vai estar. Ele só manda uma receita de volante e acelerador: *"ande a tantos m/s, vire as rodas tantos graus e faça isso por tanto tempo"*:
+O MPP **não** envia as coordenadas cartesianas globais $(X, Y, \theta)$ do plano:
 
-```c
-typedef struct {
-    double x;                               // ~~Não vem do MPP~~ -> Calculado pelo OA
-    double y;                               // ~~Não vem do MPP~~ -> Calculado pelo OA
-    double theta;                           // ~~Não vem do MPP~~ -> Calculado pelo OA
-    int num_trailers;                       // ~~Não vem do MPP~~ -> Preenchido pelo OA
-    double trailer_theta[MAX_NUM_TRAILERS]; // ~~Não vem do MPP~~ -> Calculado pelo OA
-    double v;                               // Preenchido pelo MPP (velocidade linear)
-    double phi;                             // Preenchido pelo MPP (ângulo das rodas dianteiras)
-    double time;                            // Preenchido pelo MPP (tempo de duração do comando)
-} astro_robot_and_trailers_motion_command_t;
-```
+<pre><code class="language-c">typedef struct {
+    <u>double x;</u>
+    <u>double y;</u>
+    <u>double theta;</u>
+    <u>int num_trailers;</u>
+    <u>double trailer_theta[MAX_NUM_TRAILERS];</u>
+    double v;
+    double phi;
+    double time;
+} astro_robot_and_trailers_motion_command_t;</code></pre>
+
+*(As variáveis sublinhadas não são preenchidas pelo MPP, cabendo ao `obstacle_avoider()` calculá-las)*.
 
 > [!NOTE]
-> **Uma diferença importante entre as duas checagens do OA:**  
-> - **Potential Collision (Emergência):** Faz uma simulação de pânico supondo que o caminhão vai frear com o volante travado reto na direção atual.  
-> - **obstacle_avoider() (Preventivo):** Simula o caminho real, considerando que o caminhão vai de fato esterçar as rodas e fazer as curvas que o MPP planejou.
+> **Diferença de escopo entre as checagens do OA:**  
+> - **Potential Collision (Emergência):** Simula uma frenagem de emergência supondo que o veículo freará mantendo o ângulo $\phi$ fixo (rodas mantidas na direção atual).  
+> - **obstacle_avoider() (Preventivo):** O objetivo é fazer a simulação supondo que o veículo execute os movimentos planejados pelo MPP.
 
 ---
 
-## 2. Como o `obstacle_avoider()` funciona por dentro
+## 2. Núcleo de Operação do `obstacle_avoider()`
 
-A rotina roda em 5 passos práticos dentro de um ciclo de repetição:
+O fluxo de operação se baseia em 5 passos principais:
 
-1. **Projetar o caminho passo a passo ([`build_predicted_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1471)):**  
-   A projeção começa na posição atual onde o caminhão está agora (vinda do `localize`). Aplicando o primeiro comando `motion[0]` do MPP, o modelo do veículo calcula onde a cabine e os semi-reboques vão parar e grava essas coordenadas no próprio `motion[0]`. Em seguida, essa nova posição é usada como ponto de partida para calcular a posição seguinte `motion[1]`, e assim por diante até desenhar todo o caminho no mapa.
+1. **Predição espacial do caminho ([`build_predicted_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1471)):**  
+   A predição espacial do veículo é realizada a partir da `pose_atual` vinda do `localize`. Aplicando o movimento `motion[0]` do MPP, uma nova pose é gerada e atribuída à própria `pose[0]` do plano, e de forma sequencial essa nova pose é usada como origem para a pose seguinte, calculando as coordenadas da cabine e dos semi-reboques ao longo de todo o plano.
 
-2. **Checar se já está batendo agora:**  
-   Verifica se a posição atual do caminhão já está colidindo com algo. Se estiver colidindo e o caminhão estiver em movimento ($v > 0{,}001\text{ m/s}$), ele zera a velocidade de todos os comandos na hora e avisa o sistema emitindo o **`ASTRO_ERROR_CODE_201`**.
+2. **Avaliar colisão na `pose_atual`:**  
+   Verifica se o veículo já se encontra em colisão na posição presente. Caso haja colisão e o veículo esteja em movimento ($v > 0{,}001\text{ m/s}$), as velocidades de todos os comandos do plano são setadas para zero e o sistema emite o **`ASTRO_ERROR_CODE_201`**.
 
-3. **Checar os pontos futuros do caminho:**  
-   Varre os pontos calculados lá na frente contra o mapa de obstáculos e os objetos em movimento (DATMO). Se encontrar alguma colisão à frente:  
-   $\rightarrow$ Reduz a velocidade do plano em 5% a cada comando ([`velocity_recalculate`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1435)).  
-   $\rightarrow$ Emite o aviso **`ASTRO_ERROR_CODE_203`**.
+3. **Avaliar colisão nas poses futuras:**  
+   Varre os pontos calculados à frente contra o mapa de obstáculos e os objetos em movimento (DATMO). Caso haja colisão prevista:  
+   $\rightarrow$ As velocidades do plano são reduzidas em 5% exponencialmente ([`velocity_recalculate`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1435)).  
+   $\rightarrow$ Emite o erro **`ASTRO_ERROR_CODE_203`**.
 
-4. **Verificar se dá tempo de frear com segurança (Torricelli):**  
-   Calcula quantos metros o caminhão precisa para frear até parar com a velocidade atual ($\Delta S = \frac{v^2}{2a}$). Se o caminho restante que sobrou no plano for menor do que essa distância (por exemplo, se o MPP travar ou parar de mandar novos planos):  
-   $\rightarrow$ Também reduz as velocidades em 5% para forçar a parada antes de acabar a pista.  
-   $\rightarrow$ Emite o aviso **`ASTRO_ERROR_CODE_203`**.
+4. **Verificar se o tamanho do plano tem distância suficiente para parar:**  
+   Calcula a distância necessária para o veículo parar com a velocidade atual pela equação de Torricelli ($\Delta S = \frac{v^2}{2a}$). Caso o plano restante seja menor que essa distância (por exemplo, quando o MPP para de enviar novos planos):  
+   $\rightarrow$ As velocidades do plano também são reduzidas em 5% exponencialmente para forçar a parada antes do término da trajetória autorizada.  
+   $\rightarrow$ Emite o erro **`ASTRO_ERROR_CODE_203`**.
 
-5. **Repetir o ajuste até o caminho ficar livre:**  
-   Se houve colisão no passo 3 ou faltou espaço de frenagem no passo 4, o OA volta para o passo 1 e recalcula todas as posições com essas velocidades mais baixas. A lógica é simples: se antes o caminhão batia lá na frente (por exemplo, na pose `[37]`), com o plano mais lento ele vai percorrer menos espaço no tempo e parar antes do obstáculo. Esse ciclo se repete até o plano ficar 100% livre de colisão ou o caminhão parar de vez.
+5. **Ajuste em ciclo até o caminho ficar seguro:**  
+   Ocorrendo colisão no passo 3 ou margem insuficiente no passo 4, o passo 1 é chamado novamente com as velocidades atenuadas. A expectativa é que, se a colisão ocorreu na pose `[37]`, com as reduções espera-se chegar a um plano em que o veículo pare antes de colidir. Esse ciclo se repete até o plano ficar livre de colisão ou o veículo parar de vez.
 
 > [!IMPORTANT]
-> **Avisando a base para frear:**  
-> Sempre que o OA precisa intervir no plano (seja reduzindo a velocidade ou parando o veículo), ele ativa a flag `global_new_motion_command_need_to_be_published = 1`. Isso garante que o plano corrigido seja enviado imediatamente para a base ackerman executar a frenagem.
+> **Publicação do plano modificado:**  
+> Sempre que o OA age sobre o plano por emergência (reduzindo a velocidade ou forçando a parada), ele verifica se a global `global_new_motion_command_need_to_be_published` não foi setada e a aciona para que seu plano recalculado seja publicado imediatamente para a base ackerman.
 
 ---
 
