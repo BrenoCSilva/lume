@@ -34,23 +34,24 @@ O fluxo de operação se baseia em 5 passos principais:
 
 1. **Projeção espacial da trajetória ([`build_predicted_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1471)):**  
    A predição espacial do veículo é realizada a partir da `pose_atual` vinda do `localize`. Aplicando o movimento `motion[0]` do MPP, uma nova pose é gerada e atribuída à própria `pose[0]` do plano, e de forma sequencial essa nova pose é usada como origem para a pose seguinte, calculando as coordenadas da cabine e dos reboques ao longo de todo o plano.
-   $$\mathbf{P}_{\text{nova}} = f_{\text{Ackerman}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
+
+    $$\mathbf{P}_{\text{nova}} = f_{\text{Ackerman}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
 
 
-2. **Avaliar colisão na `pose_atual`:**  
+3. **Avaliar colisão na `pose_atual`:**  
    Verifica se o veículo já se encontra em colisão na posição presente. Caso haja colisão e o veículo esteja em movimento ($v > 0{,}001\text{ m/s}$), as velocidades de todos os comandos do plano são setadas para zero e o sistema emite o **`ASTRO_ERROR_CODE_201`**.
 
-3. **Avaliar colisão nas poses futuras:**  
+4. **Avaliar colisão nas poses futuras:**  
    Varre os pontos calculados à frente contra o mapa de obstáculos e os objetos em movimento (DATMO). Caso haja colisão prevista:  
    $\rightarrow$ As velocidades do plano são reduzidas em 5% exponencialmente ([`velocity_recalculate`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1435)).  
    $\rightarrow$ Emite o erro **`ASTRO_ERROR_CODE_203`**.
 
-4. **Verificar se o tamanho do plano tem distância suficiente para parar:**  
+5. **Verificar se o tamanho do plano tem distância suficiente para parar:**  
    Calcula a distância necessária para o veículo parar com a velocidade atual pela equação de Torricelli ($\Delta S = \frac{v^2}{2a}$). Caso o plano restante seja menor que essa distância (por exemplo, quando o MPP para de enviar novos planos):  
    $\rightarrow$ As velocidades do plano também são reduzidas em 5% exponencialmente para forçar a parada antes do término da trajetória autorizada.  
    $\rightarrow$ Emite o erro **`ASTRO_ERROR_CODE_203`**.
 
-5. **Ajuste em ciclo até o caminho ficar seguro:**  
+6. **Ajuste em ciclo até o caminho ficar seguro:**  
    Ocorrendo colisão no passo 3 ou margem insuficiente no passo 4, o passo 1 é chamado novamente com as velocidades atenuadas. A expectativa é que, se a colisão ocorreu na pose `[37]`, com as reduções espera-se chegar a um plano em que o veículo pare antes de colidir. Esse ciclo se repete até o plano ficar livre de colisão ou o veículo parar de vez.
 
 > [!IMPORTANT]
