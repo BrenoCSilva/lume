@@ -1,14 +1,41 @@
 # Arquitetura e Fluxo Geral do Obstacle Avoider
 
-No [`main()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L2285-L2322) do `obstacle_avoider`, existe a possibilidade de o módulo atuar em uma frequência fixa chamando periodicamente a função principal [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1359) via timer do IPC. Porém, como essa funcionalidade está comentada no código, **o módulo funciona exclusivamente através dos seus handlers de mensagens**:
+No [`main()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L2327-L2364) do `obstacle_avoider`, existem duas abordagens arquiteturais estruturadas no código através da diretiva `#ifdef USE_MAIN_LOOP_TO_PUBLISH`:
 
 ```c
-// Em obstacle_avoider_main.cpp:
-// astro_ipc_addPeriodicTimer(1.0 / astro_obstacle_avoider_collision_avoidance_frequency, (TIMER_HANDLER_TYPE) obstacle_avoider_timer_handler, NULL);
-// astro_ipc_addPeriodicTimer(1.0 / astro_obstacle_avoider_collision_avoidance_frequency, (TIMER_HANDLER_TYPE) check_message_absence_timeout_timer_handler, NULL);
+#ifdef USE_MAIN_LOOP_TO_PUBLISH
+    double astro_obstacle_avoider_collision_avoidance_frequency;
+    astro_obstacle_avoider_collision_avoidance_frequency = astro_obstacle_avoider_initialize(argc, argv);
 
-astro_ipc_loop(shutdown_obstacle_avoider);
+    while (1)
+    {
+        obstacle_avoider_timer_handler();
+        check_message_absence_timeout_timer_handler();
+        astro_ipc_sleep(1.0 / astro_obstacle_avoider_collision_avoidance_frequency);
+    }
+#else
+    astro_obstacle_avoider_initialize(argc, argv);
+
+    // Timers periódicos comentados:
+    // astro_ipc_addPeriodicTimer(1.0 / freq, (TIMER_HANDLER_TYPE) obstacle_avoider_timer_handler, NULL);
+    // astro_ipc_addPeriodicTimer(1.0 / freq, (TIMER_HANDLER_TYPE) check_message_absence_timeout_timer_handler, NULL);
+
+    astro_ipc_loop(shutdown_obstacle_avoider);
+#endif
 ```
+
+### Modos de Operação: Síncrono vs Orientado a Eventos
+
+1. **Modo Síncrono (`USE_MAIN_LOOP_TO_PUBLISH` ativo):**
+   - O módulo roda em laço fechado no `while (1)` síncrono com `astro_ipc_sleep()`;
+   - Executa estritamente na frequência configurada no `.ini` (`robot_collision_avoidance_frequency`, ex: 20 vezes por segundo / a cada $0{,}05\text{ s}$);
+   - Nesse modo, os handlers de mensagens (`mpp`, `localize`, `mapa`) apenas guardam os dados no buffer e **não chamam** o [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1356);
+   - O watchdog [`check_message_absence_timeout_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1461) roda ativamente a cada ciclo para monitorar se sensores ou comandos pararam de chegar.
+
+2. **Modo Reativo / Orientado a Eventos (`#else` - Padrão em Produção):**
+   - O `#define USE_MAIN_LOOP_TO_PUBLISH` permanece desativado e os timers periódicos do IPC ficam comentados;
+   - O módulo entrega o controle para a escuta assíncrona do `astro_ipc_loop()`;
+   - **O fluxo opera exclusivamente através dos seus handlers de mensagens**, disparando a avaliação de colisão no momento exato em que os dados de planejamento e percepção chegam.
 
 ---
 
@@ -100,30 +127,12 @@ flowchart TD
 
     OA_CORE --> PUB["Publicação Final<br/><b style='color:#69f0ae'>obstacle_avoider_publish_base_ackerman()</b><br/>Envia comandos validados para a base"]
 ```
----
-
-### Diagnóstico Hipotético (Etapas 1 e 2) vs. Atuação Real no Plano (Etapa 3)
-
-No ciclo de colisão de emergência (*Potential Collision*), há uma divisão estrita de responsabilidades:
-
-* **[`astro_obstacle_avoider_set_trajectory_from_deceleration()`](06_desaceleracao_preventiva_phi_fixo.md) (Etapa 1):**  
-  Gera e avalia uma **trajetória puramente hipotética/virtual** (simulação interna de frenagem com $\phi$ fixo). Ela **não altera o plano real vindo do MPP**. Seu papel é unicamente diagnosticar se o veículo colidiria caso freasse com a direção travada, atualizando a variável global `global_acc_to_avoid_potential_collision`.
-
-* **[`set_extension_trajectory_from_deceleration()`](07_extensao_seguranca_potential_collision.md) (Etapa 2):**  
-  Também opera sobre uma **projeção hipotética**, avançando poses virtuais à frente para verificar se a margem de segurança mínima (`extension_length`, padrão $3{,}0\text{ m}$) está livre. **Também não altera o plano do MPP**.
-
-* **[`potential_collision_treatment()`](08_atuacao_potential_collision_treatment.md) (Etapa 3):**  
-  É a **única etapa do trio que de fato modifica o plano principal**. Ela **não faz nenhuma checagem de mapas nem verificação de colisão**; é um bloco de atuação puramente reativo que lê o gatilho de `global_acc_to_avoid_potential_collision` e, caso o alarme persista (Debounce 5/5), freia os comandos do plano ativo via `velocity_recalculate_with_acceleration()`.
-
----
-
 
 > [!NOTE]
 > **Divisão de Responsabilidades no *Potential Collision*:**  
 > As Etapas 1 (`set_trajectory_from_deceleration`) e 2 (`set_extension_trajectory`) geram **projeções puramente hipotéticas** para diagnosticar colisões com direção fixa e margem mínima, **sem alterar o plano real do MPP**. Já a Etapa 3 (`potential_collision_treatment`) é **a única que modifica o plano de comandos**, sendo puramente reativa ao gatilho de `global_acc_to_avoid_potential_collision` sem fazer checagem geométrica em mapas.
 
 ---
-
 
 ### Etapas Principais do Fluxo:
 
@@ -135,6 +144,7 @@ No ciclo de colisão de emergência (*Potential Collision*), há uma divisão es
 6. **[`limit_current_velocity_according_to_max_phi()`](04_restricoes_dinamica_veiculo.md)**: Restringe a velocidade caso o ângulo de esterçamento $\phi$ exija velocidade menor.
 7. **[`obstacle_avoider()`](02_planejamento_preventivo.md)**: Executa a simulação física futura do plano do MPP e atenua as velocidades caso haja obstáculos no caminho.
 8. **Publicação para `base_ackerman`**: Envia o plano validado/modificado para o controle de baixo nível.
+9. **[Fusão e Intersecção: Distance Map vs. Moving Objects (DATMO)](09_fusao_mapas_distance_map_e_moving_objects.md)**: Detalha a origem dos dados (LiDAR + Mapa Offline + DATMO), a distinção de objetos estáticos vs. móveis e a redundância de segurança na ordem de checagem de colisão.
 
 ---
 
@@ -143,9 +153,9 @@ No ciclo de colisão de emergência (*Potential Collision*), há uma divisão es
 
 O módulo publica os seguintes erros no barramento do sistema (`ASTRO_ERROR_CODE`):
 
-* **`ASTRO_ERROR_CODE_201`**: 
-* **`ASTRO_ERROR_CODE_203`**: 
-* **`ASTRO_ERROR_CODE_204`**: Colisão detectada na simulação de emergência (*potential collision* ou extensão).
-* **`ASTRO_ERROR_CODE_205`**: 
+* **`ASTRO_ERROR_CODE_201`**: Colisão física confirmada do veículo com obstáculo enquanto em movimento (`Robot_collided_with_obstacle`, Severidade 0 - Erro Fatal).
+* **`ASTRO_ERROR_CODE_203`**: Recálculo e redução preventiva de velocidade no plano devido a colisão detectada à frente ou margem de parada física insuficiente por Torricelli (`Obstacle_avoider_recalculated_velocity`, Severidade 4). Detalhes em [`02_planejamento_preventivo.md`](02_planejamento_preventivo.md).
+* **`ASTRO_ERROR_CODE_204`**: Colisão detectada na simulação de emergência (*potential collision* ou extensão de segurança com volante fixo). Detalhes em [`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md).
+* **`ASTRO_ERROR_CODE_205`**: Limitação preventiva de velocidade imposta pela geometria da curva e esterçamento de referência (`OA_hold_velocity_to_reference_phi`, Severidade 4).
 
 ---
