@@ -35,7 +35,8 @@ O fluxo de operação se baseia em 5 passos principais:
 1. **Projeção espacial da trajetória ([`build_predicted_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1471)):**  
    A predição espacial do veículo é realizada a partir da `pose_atual` vinda do `localize`. Aplicando o movimento `motion[0]` do MPP, uma nova pose é gerada e atribuída à própria `pose[0]` do plano, e de forma sequencial essa nova pose é usada como origem para a pose seguinte, calculando as coordenadas da cabine e dos reboques ao longo de todo o plano.
 
-    $$\mathbf{P}_{\text{nova}} = f_{\text{Ackerman}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
+$$\mathbf{P}_{\text{nova}} = f_{\text{Ackerman}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
+
 
 
 3. **Avaliar colisão na `pose_atual`:**  
