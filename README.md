@@ -17,20 +17,7 @@ O MPP **não** envia as coordenadas cartesianas globais $(X, Y, \theta)$ do plan
     double v;
     double phi;
     double time;
-} astro_robot_and_trailers_motion_command_t;
-
-</code></pre>
-
-struct{
-    <u>double x;</u>
-    <u>double y;</u>
-    <u>double theta;</u>
-    <u>int num_trailers;</u>
-    <u>double trailer_theta[MAX_NUM_TRAILERS];</u>
-    double v;
-    double phi;
-    double time;
-} astro_robot_and_trailers_motion_command_t;
+} astro_robot_and_trailers_motion_command_t;</code></pre>
 
 *(As variáveis sublinhadas não são preenchidas pelo MPP, cabendo ao `obstacle_avoider()` calculá-las)*.
 
