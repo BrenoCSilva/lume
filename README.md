@@ -35,7 +35,7 @@ O fluxo de operação se baseia em 5 passos principais:
 1. **Projeção espacial da trajetória ([`função: build_predicted_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1471)):**  
    A predição espacial do veículo é realizada a partir da `pose_atual` vinda do `localize`. Aplicando o movimento `motion[0]` do MPP, uma nova pose é gerada e atribuída à própria `pose[0]` do plano, e de forma sequencial essa nova pose é usada como origem para a pose seguinte, calculando as coordenadas da cabine e dos reboques ao longo de todo o plano.
  
-$$\mathbf{P}_{\text{nova}} = f_{\text{b-predicted-trajectory}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
+$$\mathbf{P}_{\text{nova}} = f_{\text{recalc-pos-ackerman}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
 
 
 2. **Avaliar colisão na `pose_atual`:**  
@@ -65,11 +65,11 @@ $$\mathbf{P}_{\text{nova}} = f_{\text{b-predicted-trajectory}}(\mathbf{P}_{\text
 ### 3.1. Como o caminho é desenhado (`build_predicted_trajectory`)
 A função [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/sharedlib/libcarmodel/ackerman_model.c) recebe a pose atual do caminhão, a velocidade $v$, o esterçamento $\phi$ e o tempo $dt$. Ela devolve a nova pose da cabine e o ângulo de cada semi-reboque atrelado. Sendo i diferente de 0:
 
-$$\mathbf{P}_{\text{i}} = f_{\text{b_predicted_trajectory}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
+$$\mathbf{P}_{\text{i}} = f_{\text{recalc-pos-ackerman}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
 
 Sendo a primeira iteração teremos:
 
-$$\mathbf{P}_{\text{i=0}} = f_{\text{b_predicted_trajectory}}(\mathbf{P}_{\text{localize}}, v, \phi, dt)$$
+$$\mathbf{P}_{\text{i=0}} = f_{\text{recalc-pos-ackerman}}(\mathbf{P}_{\text{localize}}, v, \phi, dt)$$
 
 Com isso, o OA sabe exatamente onde cada círculo de colisão (marker) da cabine e das carretas estará no chão a cada fração de segundo.
 
