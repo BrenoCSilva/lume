@@ -8,18 +8,20 @@ A principal função do [`obstacle_avoider()`](file:///home/lume/astro/src/obsta
 
 O MPP **não** envia as coordenadas cartesianas globais $(X, Y, \theta)$ do plano:
 
-<pre><code class="language-c">typedef struct {
-    <u>double x;</u>
-    <u>double y;</u>
-    <u>double theta;</u>
-    <u>int num_trailers;</u>
-    <u>double trailer_theta[MAX_NUM_TRAILERS];</u>
-    double v;
-    double phi;
-    double time;
-} astro_robot_and_trailers_motion_command_t;</code></pre>
+<pre>
+typedef struct {
+    <u><b>double x;</b></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><b>double y;</b></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><b>double theta;</b></u>                           <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><b>int num_trailers;</b></u>                       <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><b>double trailer_theta[MAX_NUM_TRAILERS];</b></u> <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    double v;                               <span style="color: #6a9955;">// Enviado pelo MPP</span>
+    double phi;                             <span style="color: #6a9955;">// Enviado pelo MPP</span>
+    double time;                            <span style="color: #6a9955;">// Enviado pelo MPP</span>
+} astro_robot_and_trailers_motion_command_t;
+</pre>
 
-*(As variáveis sublinhadas não são preenchidas pelo MPP, cabendo ao `obstacle_avoider()` calculá-las)*.
+*(As variáveis **<u>sublinhadas em negrito</u>** não são preenchidas pelo MPP, cabendo ao `obstacle_avoider()` calculá-las).*
 
 > [!NOTE]
 > **Diferença de escopo entre as checagens do OA:**  
@@ -56,7 +58,7 @@ $$\mathbf{P}_{\text{nova}} = f_{\text{recalc-pos-ackerman}}(\mathbf{P}_{\text{an
 
 > [!IMPORTANT]
 > **Publicação do plano modificado:**  
-> Sempre que o OA age sobre o plano por emergência (reduzindo a velocidade ou forçando a parada), ele verifica se a global `global_new_motion_command_need_to_be_published` não foi setada e a aciona para que seu plano recalculado seja publicado imediatamente para a base ackerman.
+> Sempre que o OA age sobre o plano por emergência (reduzindo a velocidade ou forçando a parada), ele verifica se a global `global_new_motion_command_need_to_be_published` não foi setada e a aciona para que seu plano recalculado seja publicado imediatamente.
 
 ---
 
