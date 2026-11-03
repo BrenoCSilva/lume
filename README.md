@@ -10,11 +10,11 @@ O MPP **não** envia as coordenadas cartesianas globais $(X, Y, \theta)$ do plan
 
 <pre>
 typedef struct {
-    <u><b>double x;</b></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
-    <u><b>double y;</b></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
-    <u><b>double theta;</b></u>                           <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
-    <u><b>int num_trailers;</b></u>                       <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
-    <u><b>double trailer_theta[MAX_NUM_TRAILERS];</b></u> <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <s>double x;</s><                              <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><s>double y;</s></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><s>double theta;</s></u>                           <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><s>int num_trailers;</s></u>                       <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><s>double trailer_theta[MAX_NUM_TRAILERS];</s></u> <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
     double v;                               <span style="color: #6a9955;">// Enviado pelo MPP</span>
     double phi;                             <span style="color: #6a9955;">// Enviado pelo MPP</span>
     double time;                            <span style="color: #6a9955;">// Enviado pelo MPP</span>
@@ -49,12 +49,9 @@ $$\mathbf{P}_{\text{nova}} = f_{\text{recalc-pos-ackerman}}(\mathbf{P}_{\text{an
    $\rightarrow$ Emite o erro **`ASTRO_ERROR_CODE_203`**.
 
 4. **Verificar se o tamanho do plano tem distância suficiente para parar:**  
-   Calcula a distância mínima necessária para o veículo parar na velocidade atual utilizando a equação de Torricelli:
-   $$\Delta S_{\text{parada}} = \frac{v^2}{2 \cdot a_{\max}}$$
-   *(onde $a_{\max}$ é a desaceleração configurada em `maximum_deceleration_forward` no `.ini`)*.  
-   Ao mesmo tempo, obtém o comprimento real restante do plano somando a distância euclidiana entre as poses futuras: $D_{\text{plano}} = \sum \text{dist2D}(P_i, P_{i+1})$. Caso $D_{\text{plano}} < \Delta S_{\text{parada}}$ (situação típica quando o MPP cessa o envio de novos planos e o buffer vai sendo consumido):  
-   $\rightarrow$ As velocidades do plano são atenuadas em 5% progressivamente ([`velocity_recalculate`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1435)) para frear antes do fim da trajetória autorizada.  
-   $\rightarrow$ Emite o erro **`ASTRO_ERROR_CODE_203`** e solicita publicação imediata para a base.
+   Calcula a distância necessária para o veículo parar com a velocidade atual pela equação de Torricelli ($\Delta S = \frac{v^2}{2a}$). Caso o plano restante seja menor que essa distância (por exemplo, quando o MPP para de enviar novos planos):  
+   $\rightarrow$ As velocidades do plano também são reduzidas em 5% exponencialmente para forçar a parada antes do término da trajetória autorizada.  
+   $\rightarrow$ Emite o erro **`ASTRO_ERROR_CODE_203`**.
 
 5. **Ajuste em ciclo até o caminho ficar seguro:**  
    Ocorrendo colisão no passo 3 ou margem insuficiente no passo 4, o passo 1 é chamado novamente com as velocidades atenuadas. A expectativa é que, se a colisão ocorreu na pose `[37]`, com as reduções espera-se chegar a um plano em que o veículo pare antes de colidir. Esse ciclo se repete até o plano ficar livre de colisão ou o veículo parar de vez.
@@ -97,20 +94,13 @@ void velocity_recalculate(astro_robot_ackerman_motion_command_t *motion_commands
 	}
 }
 ```
-#### Por que o tempo (`time`) aumenta quando a velocidade (`v`) diminui?
 O objetivo dessa função é fazer o veículo **desacelerar sem mudar o trajeto físico** planejado pelo MPP.
 
-Pela física básica:
-$$\text{Distância percorrida} = v \cdot \Delta t$$
-
-* **A relação física:** Se o veículo anda mais devagar ($v$ diminui), para ele percorrer aquele mesmo pedaço do trajeto ele obrigatoriamente precisa de **mais tempo** ($\Delta t$ aumenta).
+ Como o veículo se desloca em uma velocidade 5% menor(v diminui), para que percorra aquele mesmo pedaço do trajeto ele obrigatoriamente precisa de **mais tempo** ($\Delta t$ aumenta).
 * **A proporção exata:** Se a velocidade cai para $95\%$ ($v \cdot 0{,}95$), o tempo de duração daquele comando aumenta na exata mesma proporção ($\text{time} \div 0{,}95$).
-* **O cancelamento:** Ao calcular a distância percorrida pelo comando:
 
-$$\Delta S_{\text{novo}} = (v \cdot 0{,}95) \cdot \left(\frac{\text{time}}{0{,}95}\right) = v \cdot \text{time} = \Delta S_{\text{original}}$$
-
-> [!TIP]
-> **Significado prático:** A geometria do caminho não muda um milímetro sequer! O caminhão vai fazer a mesma curva e passar exatamente pelo mesmo lugar no mapa, apenas andando mais devagar. Quando a velocidade cai abaixo de $0{,}05\text{ m/s}$ ($5\text{ cm/s}$), o OA zera tudo (`v = 0.0`) e o caminhão atinge a parada total suavemente.
+> [!NOTE]
+> **Significado prático:** O caminho percorrido pelo veículo não muda, a mesma curva será feita, apenas em uma velocidade 5% menor do que a original.
 
 ---
 
