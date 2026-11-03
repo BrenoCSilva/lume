@@ -10,11 +10,11 @@ O MPP **não** envia as coordenadas cartesianas globais $(X, Y, \theta)$ do plan
 
 <pre>
 typedef struct {
-    <u><b>double x;</b></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
-    <u><b>double y;</b></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
-    <u><b>double theta;</b></u>                           <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
-    <u><b>int num_trailers;</b></u>                       <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
-    <u><b>double trailer_theta[MAX_NUM_TRAILERS];</b></u> <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <s>double x;</s><                              <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><s>double y;</s></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><s>double theta;</s></u>                           <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><s>int num_trailers;</s></u>                       <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <u><s>double trailer_theta[MAX_NUM_TRAILERS];</s></u> <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
     double v;                               <span style="color: #6a9955;">// Enviado pelo MPP</span>
     double phi;                             <span style="color: #6a9955;">// Enviado pelo MPP</span>
     double time;                            <span style="color: #6a9955;">// Enviado pelo MPP</span>
@@ -25,7 +25,7 @@ typedef struct {
 
 > [!NOTE]
 > **Diferença de escopo entre as checagens do OA:**  
-> - **Potential Collision (Emergência):** Simula uma frenagem de <ins>emergência supondo</ins> que o <s>veículo</s> freará mantendo o ângulo $\phi$ fixo (rodas mantidas na direção atual).  
+> - **Potential Collision (Emergência):** Simula uma frenagem de emergência supondo que o veículo freará mantendo o ângulo $\phi$ fixo (rodas mantidas na direção atual).  
 > - **obstacle_avoider() (Preventivo):** O objetivo é fazer a simulação supondo que o veículo execute os movimentos planejados pelo MPP.
 
 ---
