@@ -80,7 +80,7 @@ Para não depender de tempo de relógio, o OA usa a física clássica de Torrice
 
 $$\Delta S_{\text{parada}} = \frac{v^2}{2 \cdot a_{\max}}$$
 
-Onde $a_{\max}$ (`maximum_deceleration_forward`) é a capacidade máxima de frenagem da cabine configurada no arquivo `.ini`.
+Onde $a_{\max}$ é a capacidade máxima de frenagem da cabine configurada no arquivo `.ini`.
 
 Ao mesmo tempo, o OA soma a distância real que o plano do MPP ainda tem pela frente:
 $$D_{\text{plano}} = \text{distância somada de todos os comandos que ainda restam}$$
@@ -118,28 +118,46 @@ O objetivo dessa função é fazer o veículo **desacelerar sem mudar o trajeto 
 
 ---
 
-## 4. Exemplo prático (Logs Reais)
+## 4. Exemplo Prático: Validação do Tamanho do Plano na Ausência do MPP (Etapa 4 da Seção 2)
 
-Logo abaixo é mostrado o terminal de frenagem no momento em que o MPP foi desligado durante um teste a $10\text{ km/h}$:
+Este teste em ambiente real evidencia exatamente o funcionamento da **Etapa 4 da Seção 2** (*Verificar se o tamanho do plano tem distância suficiente para parar*): o que acontece quando o MPP é desligado ou interrompe o envio de trajetórias enquanto o veículo trafega a $10\text{ km/h}$ ($2{,}77\text{ m/s}$).
+
+![Validação do Tamanho do Plano com MPP Desligado](img/validacao_tamanho_plano_mpp_desligado.jpg)
+
+Abaixo está o registro extraído do terminal de frenagem (`/tmp/oa_braking_distance.log`) correspondente à imagem acima:
 
 ```text
->>> NOVO PLANO DO MPP ENVIADO!!! 140 comandos <<<
-[OA Frenagem - 140 comandos] Vel: 2.77 m/s (10.0 km/h) | Parada Nec.: 3.82 m | Restante Plano: 19.20 m | Margem: +15.38 m -> [OK - SEGURO]
-[OA Frenagem - 118 comandos] Vel: 2.77 m/s (10.0 km/h) | Parada Nec.: 3.82 m | Restante Plano: 17.24 m | Margem: +13.41 m -> [OK - SEGURO]
-[OA Frenagem -  87 comandos] Vel: 2.77 m/s (10.0 km/h) | Parada Nec.: 3.82 m | Restante Plano: 13.82 m | Margem:  +9.99 m -> [OK - SEGURO]
-[OA Frenagem -  48 comandos] Vel: 2.77 m/s (10.0 km/h) | Parada Nec.: 3.82 m | Restante Plano:  7.85 m | Margem:  +4.03 m -> [OK - SEGURO]
-[OA Frenagem -  22 comandos] Vel: 2.75 m/s ( 9.9 km/h) | Parada Nec.: 3.78 m | Restante Plano:  3.68 m | Margem:  -0.10 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
-[OA Frenagem -  21 comandos] Vel: 2.53 m/s ( 9.1 km/h) | Parada Nec.: 3.20 m | Restante Plano:  1.91 m | Margem:  -1.29 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
-[OA Frenagem -  21 comandos] Vel: 1.84 m/s ( 6.6 km/h) | Parada Nec.: 1.69 m | Restante Plano:  0.78 m | Margem:  -0.91 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
-[OA Frenagem -  21 comandos] Vel: 0.89 m/s ( 3.2 km/h) | Parada Nec.: 0.40 m | Restante Plano:  0.02 m | Margem:  -0.38 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
-[OA Frenagem -  21 comandos] Vel: 0.26 m/s ( 0.9 km/h) | Parada Nec.: 0.03 m | Restante Plano:  0.04 m | Margem:  +0.00 m -> [OK - SEGURO]
-[OA Frenagem -  21 comandos] Vel: -0.00 m/s (-0.0 km/h) | Parada Nec.: 0.00 m | Restante Plano:  0.08 m | Margem:  +0.08 m -> [OK - SEGURO]
+>>> NOVO PLANO DO MPP ENVIADO!!! 150 comandos <<<
+[OA Frenagem - 113 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano: 15.06 m | Margem: +11.23 m -> [OK - SEGURO]
+[OA Frenagem -  96 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano: 14.12 m | Margem: +10.29 m -> [OK - SEGURO]
+[OA Frenagem -  80 comandos] Vel:  2.78 m/s (10.0 km/h) | Parada Nec.:  3.85 m | Restante Plano: 13.24 m | Margem:  +9.39 m -> [OK - SEGURO]
+[OA Frenagem -  73 comandos] Vel:  2.78 m/s (10.0 km/h) | Parada Nec.:  3.85 m | Restante Plano: 11.85 m | Margem:  +7.99 m -> [OK - SEGURO]
+[OA Frenagem -  68 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano: 11.02 m | Margem:  +7.19 m -> [OK - SEGURO]
+[OA Frenagem -  62 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano: 10.02 m | Margem:  +6.20 m -> [OK - SEGURO]
+[OA Frenagem -  57 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano:  9.18 m | Margem:  +5.36 m -> [OK - SEGURO]
+[OA Frenagem -  51 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano:  8.21 m | Margem:  +4.38 m -> [OK - SEGURO]
+[OA Frenagem -  46 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano:  7.34 m | Margem:  +3.52 m -> [OK - SEGURO]
+[OA Frenagem -  40 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano:  6.35 m | Margem:  +2.52 m -> [OK - SEGURO]
+[OA Frenagem -  35 comandos] Vel:  2.78 m/s (10.0 km/h) | Parada Nec.:  3.85 m | Restante Plano:  5.53 m | Margem:  +1.68 m -> [OK - SEGURO]
+[OA Frenagem -  29 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano:  4.54 m | Margem:  +0.72 m -> [OK - SEGURO]
+[OA Frenagem -  24 comandos] Vel:  2.77 m/s (10.0 km/h) | Parada Nec.:  3.82 m | Restante Plano:  3.69 m | Margem:  -0.13 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel:  2.63 m/s ( 9.5 km/h) | Parada Nec.:  3.45 m | Restante Plano:  1.80 m | Margem:  -1.65 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel:  2.31 m/s ( 8.3 km/h) | Parada Nec.:  2.67 m | Restante Plano:  1.21 m | Margem:  -1.46 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel:  1.99 m/s ( 7.2 km/h) | Parada Nec.:  1.97 m | Restante Plano:  0.64 m | Margem:  -1.34 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel:  1.71 m/s ( 6.1 km/h) | Parada Nec.:  1.46 m | Restante Plano:  0.26 m | Margem:  -1.20 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel:  1.32 m/s ( 4.8 km/h) | Parada Nec.:  0.87 m | Restante Plano:  0.11 m | Margem:  -0.77 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel:  0.98 m/s ( 3.5 km/h) | Parada Nec.:  0.48 m | Restante Plano:  0.32 m | Margem:  -0.16 m -> [INSUFICIENTE - FRENAGEM FORÇADA]
+[OA Frenagem -  21 comandos] Vel:  0.66 m/s ( 2.4 km/h) | Parada Nec.:  0.22 m | Restante Plano:  0.38 m | Margem:  +0.16 m -> [OK - SEGURO]
+[OA Frenagem -  21 comandos] Vel:  0.35 m/s ( 1.3 km/h) | Parada Nec.:  0.06 m | Restante Plano:  0.32 m | Margem:  +0.26 m -> [OK - SEGURO]
+[OA Frenagem -  21 comandos] Vel:  0.05 m/s ( 0.2 km/h) | Parada Nec.:  0.00 m | Restante Plano:  0.28 m | Margem:  +0.28 m -> [OK - SEGURO]
+[OA Frenagem -  20 comandos] Vel: -0.00 m/s (-0.0 km/h) | Parada Nec.:  0.00 m | Restante Plano:  0.01 m | Margem:  +0.01 m -> [OK - SEGURO]
 ```
 
-### O que esses números mostram:
-1. **Comandos caindo:** De 140 até 22 comandos, o caminhão continuou andando e consumindo o buffer do último plano recebido.
-2. **O disparo no limite:** No comando 22, a distância restante ($3{,}68\text{ m}$) ficou menor que a distância necessária para parar ($3{,}78\text{ m}$). A margem ficou negativa ($-0{,}10\text{ m}$).
-3. **Frenagem :** O módulo OA como descrito em na seção 2 (4 - Verificar se o tamanho do plano tem distância suficiente para parar:), ocorre a redução gradativamente da velocidade ($2{,}75 \to 2{,}53 \to 1{,}84 \to 0{,}89 \to 0{,}26 \to 0{,}00\text{ m/s}$), parando o veículo em poucos ciclos.
+### O que esse comportamento evidencia:
+
+1. **Comandos caindo:** De 113 até 24 comandos, o veículo continuou se deslocando e consumindo o buffer do último plano recebido. Isso ocorreu porque o MPP foi desligado: o que antes tinha uma taxa de atualização frequente (um novo plano com ~150 comandos chegava e renovava o buffer a cada ~2 ciclos), dessa vez se estendeu indefinidamente, fazendo com que o plano fosse progressivamente encurtado pelo consumo de tempo.
+2. **O disparo no limite (Gatilho da Etapa 4):** No comando 24, a distância restante do plano ($3{,}69\text{ m}$) ficou menor que a distância necessária para parar o veículo ($3{,}82\text{ m}$). A margem de segurança ficou negativa ($-0{,}13\text{ m}$), acionando o estado `[INSUFICIENTE - FRENAGEM FORÇADA]`.
+3. **Frenagem progressiva e suave (`velocity_recalculate`):** A partir do comando 24, o módulo OA entra imediatamente em ação recalculando as velocidades em 5% por comando. A velocidade decai suavemente ciclo a ciclo ($2{,}77 \to 2{,}63 \to 2{,}31 \to 1{,}99 \to 1{,}71 \to 1{,}32 \to 0{,}98 \to 0{,}66 \to 0{,}35 \to 0{,}05 \to 0{,}00\text{ m/s}$), imobilizando o veículo com segurança e mantendo rigorosamente a geometria da trajetória.
 
 ---
 
