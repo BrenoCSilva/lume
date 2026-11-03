@@ -29,19 +29,18 @@ No [`main()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main
 1. **Modo Síncrono (`USE_MAIN_LOOP_TO_PUBLISH` ativo):**
    - O módulo roda em laço fechado no `while (1)` síncrono com `astro_ipc_sleep()`;
    - Executa estritamente na frequência configurada no `.ini` (`robot_collision_avoidance_frequency`, ex: 20 vezes por segundo / a cada $0{,}05\text{ s}$);
-   - Nesse modo, os handlers de mensagens (`mpp`, `localize`, `mapa`) apenas guardam os dados no buffer e **não chamam** o [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1356);
-   - O watchdog [`check_message_absence_timeout_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1461) roda ativamente a cada ciclo para monitorar se sensores ou comandos pararam de chegar.
+   - Nesse modo, os handlers de mensagens (`mpp`, `localize`, `mapa`) apenas guardam os dados no buffer e **não chamam** o [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1356) (função principal que processa as colisões no módulo);
+   - A função [`check_message_absence_timeout_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1461) roda ativamente a cada ciclo para monitorar se mapa e mpp pararam de se comunicar.
 
-2. **Modo Reativo / Orientado a Eventos (`#else` - Padrão em Produção):**
+2. **Modo Reativo / Orientado a Eventos (`#else` - atualmente é o executado no sistema):**
    - O `#define USE_MAIN_LOOP_TO_PUBLISH` permanece desativado e os timers periódicos do IPC ficam comentados;
-   - O módulo entrega o controle para a escuta assíncrona do `astro_ipc_loop()`;
-   - **O fluxo opera exclusivamente através dos seus handlers de mensagens**, disparando a avaliação de colisão no momento exato em que os dados de planejamento e percepção chegam.
+   - **O fluxo opera exclusivamente através dos seus handlers de mensagens**, disparando a avaliação de colisão no momento exato em que os dados de planejamento chegam.
 
 ---
 
 ## 1. Os Três Gatilhos de Entrada (Handlers)
 
-A validação de colisão e a emissão de comandos para a base são disparadas por **3 eventos principais**:
+A validação de colisão e a emissão de comandos para a função principal (**obstacle_avoider_timer_handler()**)são disparadas por **3 eventos principais**:
 
 ```mermaid
 flowchart TD
@@ -103,33 +102,14 @@ int can_execute_obstacle_avoider_handler()
 }
 ```
 
-* **Disparo Imediato para o MPP:** Quando o MPP envia um novo plano, o handler do MPP **não consulta** essa função e dispara o `obstacle_avoider_timer_handler()` na hora. A janela de $70\text{ ms}$ serve exclusivamente para controlar rechecagens baseadas em odometria e mapas.
+* **Disparo Imediato para o MPP:** Quando o MPP envia um novo plano, o handler do MPP **não consulta** essa função e dispara o `obstacle_avoider_timer_handler()` imediatamente. A janela de $70\text{ ms}$ serve exclusivamente para controlar rechecagens baseadas em odometria e mapas.
 * **Flag `-only_mpp on`:** Se ativada, bloqueia todas as chamadas vindas da odometria e do mapa, limitando o OA a agir apenas mediante novos planos do MPP.
-
----
-
-### 2.3. Dinâmica e Tamanho dos Planos Recebidos do MPP
-
-O MPP ajusta o horizonte de distância do plano conforme a velocidade da cabine, garantindo margem para manobras e frenagens preventivas:
-
-- A **$10\text{ km/h}$** ($2{,}77\text{ m/s}$): O plano tem alcance de cerca de **$19\text{ a }20\text{ m}$**.
-- A **$5\text{ km/h}$** ($1{,}38\text{ m/s}$): O plano tem alcance de cerca de **$15\text{ a }16\text{ m}$**.
-
-#### Relação entre Velocidade e Quantidade de Comandos
-Cada comando de movimento no plano possui uma duração de tempo curta $\Delta t$ ($0{,}02\text{ s}$ nos 70 primeiros comandos e $0{,}06\text{ s}$ nos comandos seguintes). O tempo total coberto pelo plano é dado por:
-
-$$\Delta t_{\text{total}} = \frac{\text{Distância}}{\text{Velocidade}}$$
-
-* **A $5\text{ km/h}$ ($1{,}38\text{ m/s}$):** Percorrer os $\approx 15{,}7\text{ m}$ requer cerca de $11{,}4\text{ s}$. Com passos pequenos de tempo, o plano contém em média **248 comandos**.
-* **A $10\text{ km/h}$ ($2{,}77\text{ m/s}$):** Percorrer os $\approx 19{,}2\text{ m}$ requer cerca de $6{,}9\text{ s}$. Por isso, o plano possui em média **140 a 175 comandos**.
-
-Assim, em velocidades menores o plano necessita de uma quantidade maior de comandos para cobrir a distância mínima estipulada de segurança.
 
 ---
 
 ## 3. Diagrama Macro Integrado de Fluxo
 
-O sistema opera de forma orientada a eventos. O fluxo geral de avaliação e os blocos principais que alteram o plano seguem o pipeline abaixo:
+O sistema opera de forma orientada a eventos. O fluxo geral de avaliação e os blocos principais que alteram o plano seguem o fluxo abaixo:
 
 ```mermaid
 flowchart TD
@@ -160,10 +140,6 @@ flowchart TD
     OA_CORE --> PUB["Publicação Final<br/><b style='color:#69f0ae'>obstacle_avoider_publish_base_ackerman()</b><br/>Envia comandos validados para a base"]
 ```
 
-> [!NOTE]
-> **Divisão de Responsabilidades no *Potential Collision*:**  
-> As Etapas 1 (`set_trajectory_from_deceleration`) e 2 (`set_extension_trajectory`) geram **projeções puramente hipotéticas** para diagnosticar colisões com direção fixa e margem mínima, **sem alterar o plano real do MPP**. Já a Etapa 3 (`potential_collision_treatment`) é **a única que modifica o plano de comandos**, sendo puramente reativa ao gatilho de `global_acc_to_avoid_potential_collision` sem fazer checagem geométrica em mapas.
-
 ---
 
 ### Etapas Principais do Fluxo:
@@ -178,15 +154,18 @@ flowchart TD
 8. **Publicação para `base_ackerman`**: Envia o plano validado/modificado para o controle de baixo nível.
 9. **[Fusão e Intersecção: Distance Map vs. Moving Objects (DATMO)](09_fusao_mapas_distance_map_e_moving_objects.md)**: Detalha a origem dos dados (LiDAR + Mapa Offline + DATMO), a distinção de objetos estáticos vs. móveis e a redundância de segurança na ordem de checagem de colisão.
 
+
+> [!NOTE]
+> **Divisão de Responsabilidades no *Potential Collision*:**  
+> As Etapas 1 (`set_trajectory_from_deceleration`) e 2 (`set_extension_trajectory`) fazem parte da avaliação de emergência do potential collision, ambas geram **projeções puramente hipotéticas** para diagnosticar colisões com direção fixa e margem mínima, **sem alterar o plano real do MPP**. Já a Etapa 3 (`potential_collision_treatment`) é **a única que modifica o plano de comandos**, sendo puramente reativa ao gatilho de `global_acc_to_avoid_potential_collision` sem fazer checagem geométrica em mapas.
+
 ---
-
-
 ## 5. Códigos de Erro Emitidos
 
 O módulo publica os seguintes erros no barramento do sistema (`ASTRO_ERROR_CODE`):
 
-* **`ASTRO_ERROR_CODE_201`**: Colisão física confirmada do veículo com obstáculo enquanto em movimento (`Robot_collided_with_obstacle`, Severidade 0 - Erro Fatal).
-* **`ASTRO_ERROR_CODE_203`**: Recálculo e redução preventiva de velocidade no plano devido a colisão detectada à frente ou margem de parada física insuficiente por Torricelli (`Obstacle_avoider_recalculated_velocity`, Severidade 4). Detalhes em [`02_planejamento_preventivo.md`](02_planejamento_preventivo.md).
+* **`ASTRO_ERROR_CODE_201`**: Foi identificado colisão na posição atual do veículo (`Robot_collided_with_obstacle`, Severidade 0 - Erro Fatal). Ação: Zera todo o plano imediatamente.
+* **`ASTRO_ERROR_CODE_203`**: Identificado colisão no plano futuro gerado pelo mpp ou com a velocidade atual o tamanho do plano é curto demais para parar o veículo.(`Obstacle_avoider_recalculated_velocity`, Severidade 4). Detalhes em [`02_planejamento_preventivo.md`](02_planejamento_preventivo.md). Ação: diminuir em 5% sequencialmente a velocidade do plano.
 * **`ASTRO_ERROR_CODE_204`**: Colisão detectada na simulação de emergência (*potential collision* ou extensão de segurança com volante fixo). Detalhes em [`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md).
 * **`ASTRO_ERROR_CODE_205`**: Limitação preventiva de velocidade imposta pela geometria da curva e esterçamento de referência (`OA_hold_velocity_to_reference_phi`, Severidade 4).
 
