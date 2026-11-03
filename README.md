@@ -90,26 +90,45 @@ $$D_{\text{plano}} = \text{distância somada de todos os comandos que ainda rest
 - **O momento do resgate:** Quando o plano encolhe tanto que fica menor que a distância de parada ($D_{\text{plano}} < \Delta S_{\text{parada}}$), o OA assume o controle, aciona o recálculo e freia o caminhão suavemente até parar no limite da pista autorizada.
 
 ### 3.3. Como a velocidade é reduzida em 5% (`velocity_recalculate`)
-Para frear sem dar tranco no caminhão e sem causar efeito canivete com os eboques, a velocidade decai 5% a cada comando:
 
-$$v_0 = v_0 \cdot 0{,}95, \quad v_1 = v_1 \cdot (0{,}95)^2, \quad v_2 = v_2 \cdot (0{,}95)^3 \dots$$
+Para frear sem dar tranco no caminhão e sem causar efeito canivete com os semirreboques, a velocidade decai progressivamente a cada comando:
 
-E tem um detalhe genial:
 ```cpp
-motion_commands_vector[i].v *= reduction_factor;
-motion_commands_vector[i].time *= 1.0 / reduction_factor;
-```
-Quando a velocidade é multiplicada por $0{,}95$, o tempo $dt$ é dividido por $0{,}95$.  
-Como $\text{distância} = v \cdot dt$, o resultado da multiplicação dá exatamente o mesmo valor!
-> **Significado prático:** A geometria do caminho não muda um milímetro sequer. O caminhão vai fazer a mesma curva e passar exatamente pelo mesmo lugar, apenas andando mais devagar.
+void velocity_recalculate(astro_robot_ackerman_motion_command_t *motion_commands_vector, int num_motion_commands)
+{
+	double reduction_factor = 0.95;
+	for (int i = 0; i < num_motion_commands; i++)
+	{
+		motion_commands_vector[i].v *= reduction_factor;
+		motion_commands_vector[i].time *= 1.0 / reduction_factor;
+		reduction_factor *= 0.95;
 
-Quando a velocidade cai abaixo de $0{,}05\text{ m/s}$ ($5\text{ cm/s}$), o OA zera tudo (`v = 0.0`) e o caminhão atinge a parada total com segurança.
+		if (motion_commands_vector[i].v < 0.05)
+			motion_commands_vector[i].v = 0.0;
+	}
+}
+```
+
+#### Por que o tempo (`time`) aumenta quando a velocidade (`v`) diminui?
+O objetivo dessa função é fazer o veículo **desacelerar sem mudar o trajeto físico** planejado pelo MPP.
+
+Pela física básica:
+$$\text{Distância percorrida} = v \cdot \Delta t$$
+
+* **A relação física:** Se o veículo anda mais devagar ($v$ diminui), para ele percorrer aquele mesmo pedaço do trajeto ele obrigatoriamente precisa de **mais tempo** ($\Delta t$ aumenta).
+* **A proporção exata:** Se a velocidade cai para $95\%$ ($v \cdot 0{,}95$), o tempo de duração daquele comando aumenta na exata mesma proporção ($\text{time} \div 0{,}95$).
+* **O cancelamento:** Ao calcular a distância percorrida pelo comando:
+
+$$\Delta S_{\text{novo}} = (v \cdot 0{,}95) \cdot \left(\frac{\text{time}}{0{,}95}\right) = v \cdot \text{time} = \Delta S_{\text{original}}$$
+
+> [!TIP]
+> **Significado prático:** A geometria do caminho não muda um milímetro sequer! O caminhão vai fazer a mesma curva e passar exatamente pelo mesmo lugar no mapa, apenas andando mais devagar. Quando a velocidade cai abaixo de $0{,}05\text{ m/s}$ ($5\text{ cm/s}$), o OA zera tudo (`v = 0.0`) e o caminhão atinge a parada total suavemente.
 
 ---
 
 ## 4. Exemplo prático (Logs Reais)
 
-Logo abaixo é mostrado o terminal de frenagem `no momento em que o MPP foi desligado durante um teste a $10\text{ km/h}$:
+Logo abaixo é mostrado o terminal de frenagem no momento em que o MPP foi desligado durante um teste a $10\text{ km/h}$:
 
 ```text
 >>> NOVO PLANO DO MPP ENVIADO!!! 140 comandos <<<
