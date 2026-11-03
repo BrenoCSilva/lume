@@ -25,7 +25,7 @@ typedef struct {
 
 > [!NOTE]
 > **Diferença de escopo entre as checagens do OA:**  
-> - **Potential Collision (Emergência):** Simula uma frenagem de emergência supondo que o veículo freará mantendo o ângulo $\phi$ fixo (rodas mantidas na direção atual).  
+> - **Potential Collision (Emergência):** Simula uma frenagem de <ins>emergência supondo</ins> que o <u>veículo</u> freará mantendo o ângulo $\phi$ fixo (rodas mantidas na direção atual).  
 > - **obstacle_avoider() (Preventivo):** O objetivo é fazer a simulação supondo que o veículo execute os movimentos planejados pelo MPP.
 
 ---
