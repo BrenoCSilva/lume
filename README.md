@@ -1,172 +1,151 @@
-# Arquitetura e Fluxo Geral do Obstacle Avoider
+# Desaceleração Preventiva com Ângulo de Esterçamento Fixo (`phi` Fixo)
 
-No [`main()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L2327-L2364) do `obstacle_avoider`, existem duas abordagens arquiteturais estruturadas no código através da diretiva `#ifdef USE_MAIN_LOOP_TO_PUBLISH`:
+A função [`astro_obstacle_avoider_set_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1308-L1401) é a **primeira etapa de verificação de colisão de emergência**, executada no [`localize_ackerman_globalpos_message_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1623) imediatamente após ser identificada a nova posição do veículo.
 
-```c
-#ifdef USE_MAIN_LOOP_TO_PUBLISH
-    double astro_obstacle_avoider_collision_avoidance_frequency;
-    astro_obstacle_avoider_collision_avoidance_frequency = astro_obstacle_avoider_initialize(argc, argv);
-
-    while (1)
-    {
-        obstacle_avoider_timer_handler();
-        check_message_absence_timeout_timer_handler();
-        astro_ipc_sleep(1.0 / astro_obstacle_avoider_collision_avoidance_frequency);
-    }
-#else
-    astro_obstacle_avoider_initialize(argc, argv);
-
-    // Timers periódicos comentados:
-    // astro_ipc_addPeriodicTimer(1.0 / freq, (TIMER_HANDLER_TYPE) obstacle_avoider_timer_handler, NULL);
-    // astro_ipc_addPeriodicTimer(1.0 / freq, (TIMER_HANDLER_TYPE) check_message_absence_timeout_timer_handler, NULL);
-
-    astro_ipc_loop(shutdown_obstacle_avoider);
-#endif
-```
-
-### Modos de Operação: Síncrono vs Orientado a Eventos
-
-1. **Modo Síncrono (`USE_MAIN_LOOP_TO_PUBLISH` ativo):**
-   - O módulo roda em laço fechado no `while (1)` síncrono com `astro_ipc_sleep()`;
-   - Executa estritamente na frequência configurada no `.ini` (`robot_collision_avoidance_frequency`, ex: 20 vezes por segundo / a cada $0{,}05\text{ s}$);
-   - Nesse modo, os handlers de mensagens (`mpp`, `localize`, `mapa`) apenas guardam os dados no buffer e **não chamam** o [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1356) (função principal que processa as colisões no módulo);
-   - A função [`check_message_absence_timeout_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1461) roda ativamente a cada ciclo para monitorar se mapa e mpp pararam de se comunicar.
-
-2. **Modo Reativo / Orientado a Eventos (`#else` - atualmente é o executado no sistema):**
-   - O `#define USE_MAIN_LOOP_TO_PUBLISH` permanece desativado e os timers periódicos do IPC ficam comentados;
-   - **O fluxo opera exclusivamente através dos seus handlers de mensagens**, disparando a avaliação de colisão no momento exato em que os dados de planejamento chegam.
+> [!IMPORTANT]
+> **Resumo do Papel da Desaceleração com `phi` Fixo:**
+> * **Condição de execução:** Roda a cada nova mensagem de localização (`localize_ackerman_globalpos`), desde que o veículo não esteja em controle manual (`manual_override == 0` ou forçado por `manual_override_activate`).
+> * **O problema que ela resolve:** Verifica se, caso o sistema trave ou precise frear agora mantendo o volante no ângulo atual (`odometry_phi` fixo) e partindo da velocidade atual (`odometry_velocity`), o veículo tem espaço livre suficiente para desacelerar até parar ($v = 0$) sem atingir nenhum obstáculo.
+> * **Como atua:** Projeta o veículo em pequenos passos de $0{,}1\text{ s}$ ao longo do ângulo de giro fixo e reduz a velocidade a cada passo pela **Equação de Torricelli** aplicando a frenagem máxima (`-maximum_deceleration_forward`), testando cada pose nos mapas.
+> * **Natureza Hipotética (Não altera o plano real):** Esta função simula um caminho virtual interno passo a passo e **não modifica o plano de comandos vindo do MPP**. O plano real permanece intocado nesta etapa; sua única função é diagnosticar o risco e preencher a variável `global_acc_to_avoid_potential_collision`.
+> * **Resultado:**
+>   * **Se colidir antes de parar:** Interrompe a simulação na hora (`break`), emite o **`ASTRO_ERROR_CODE_204`** e preenche a variável de controle `global_acc_to_avoid_potential_collision` com a desaceleração máxima de alarme (nem precisando executar a Etapa 2 de extensão).
+>   * **Se parar sem colidir ($v = 0$):** Retorna `0.0` (parada física garantida) e libera o fluxo para a Etapa 2 ([`07_extensao_seguranca_potential_collision.md`](07_extensao_seguranca_potential_collision.md)), que verificará se a margem mínima adicional também está livre.
 
 ---
 
-## 1. Os Três Gatilhos de Entrada (Handlers)
+## 1. Posição no Fluxo de Execução
 
-A validação de colisão e a emissão de comandos para a função principal (**obstacle_avoider_timer_handler()**)são disparadas por **3 eventos principais**:
+Ao contrário do consumo temporal da fila (que ocorre dentro do ciclo do timer de decisão), a desaceleração preventiva é disparada no handler de alta frequência da localização:
 
 ```mermaid
 flowchart TD
-    M1["Mensagem MPP<br/>(astro_robot_ackerman_motion_command)"] --> H1["robot_ackerman_motion_command<br/>_message_handler()"]
-    M2["Mensagem Localize<br/>(astro_localize_ackerman_globalpos)"] --> H2["localize_ackerman_globalpos<br/>_message_handler()"]
-    M3["Mensagem Mapa de Distâncias<br/>(astro_obstacle_distance_mapper_map)"] --> H3["astro_obstacle_distance_mapper<br/>_on_distance_map_message_handler()"]
-
-    H1 -->|"Imediato (Sem atraso)"| CORE["obstacle_avoider_timer_handler()"]
-    H2 --> LIM{"can_execute_obstacle<br/>_avoider_handler()?<br/>(Intervalo &gt; 70 ms)"}
-    H3 --> LIM
-
-    LIM -- Sim --> CORE
-    LIM -- Não --> IGNORE["Ignora disparo no ciclo<br/>(Evita sobrecarga de CPU)"]
+    subgraph HANDLER ["localize_ackerman_globalpos_message_handler()"]
+        PREV["astro_obstacle_avoider_set_trajectory_from_deceleration()<br/>Simula parada com phi fixo"]
+        PREV --> RES{"Houve Colisão na Frenagem?"}
+        RES -- "Sim" --> SET_ACC["global_acc_to_avoid_potential_collision = -a_max<br/>Dispara ASTRO_ERROR_CODE_204"]
+        RES -- "Não" --> CHECK_EXT["Testa Margem Adicional de Extensão<br/>set_extension_trajectory_from_deceleration()"]
+        
+        SET_ACC --> GATE{"can_execute_obstacle_avoider_handler()<br/>(dt &gt; 70 ms?)"}
+        CHECK_EXT --> GATE
+        GATE -- "Sim" --> TIMER["obstacle_avoider_timer_handler()"]
+    end
 ```
-
-### Detalhamento dos Handlers:
-
-| Handler | Mensagem de Entrada | Papel no Módulo | Condição de Disparo |
-| :--- | :--- | :--- | :--- |
-| [`robot_ackerman_motion_command_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1330) | `astro_robot_ackerman_motion_command_message` | Recebe o vetor de comandos $(v, \phi, \Delta t)$ gerado pelo MPP. Armazena no buffer circular de trajetórias. | **Imediato:**  |
-| [`localize_ackerman_globalpos_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1553) | `astro_localize_ackerman_globalpos_message` |Atualiza a localização (GPS/pose da cabine e semirreboques) e a odometria atual (velocidade v e ângulos das rodas ϕ ). | **Condicional:** Controlado por limitador de taxa (~14 Hz). |
-| [`astro_obstacle_distance_mapper_on_distance_map_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1588) | `astro_obstacle_distance_mapper_map_message` | Atualiza a matriz de distâncias aos obstáculos. | **Condicional:** Controlado por limitador de taxa (~14 Hz). |
 
 ---
 
-## 2. Frequências de Operação e Cadência dos Handlers
+## 2. Fluxo de Funcionamento da `astro_obstacle_avoider_set_trajectory_from_deceleration()`
 
-A cadência de execução do módulo depende diretamente do modo de compilação e das taxas de publicação dos módulos emissores:
+O objetivo central da [`astro_obstacle_avoider_set_trajectory_from_deceleration()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1308-L1401) é **tentar parar o veículo mantendo seu ângulo de esterçamento ($\phi$) fixo** e verificar se essa trajetória até a parada completa é segura.
 
-### 2.1. Tabela de Frequências e Filtro de Taxa
+Para fazer isso, a função executa um loop iterativo (`while (fabs(current_velocity) > 0.0)`) que projeta o futuro passo a passo:
 
-| Módulo Emissor / Handler | Frequência de Chegada | Intervalo Temporal | Comportamento no `obstacle_avoider` |
-| :--- | :--- | :--- | :--- |
-| **`localize`** (`handler_localize`) | ~50 vezes por segundo | $0{,}02\text{ s}$ ($20\text{ ms}$) | Atualiza a pose da cabine e semirreboques. No modo assíncrono, passa pelo filtro de taxa e só dispara a reavaliação a cada **$0{,}07\text{ s}$** (~14 vezes por segundo). |
-| **`mapa_distance`** (`handler_distance_map`) | Conforme percepção dos sensores | Variável | Submetido ao mesmo filtro de taxa de **$0{,}07\text{ s}$** antes de disparar o recálculo. |
-| **`mpp`** (`handler_mpp`) | ~10 vezes por segundo | $0{,}10\text{ s}$ ($100\text{ ms}$) | **Imediato:** Quando um novo plano chega, o OA não aguarda filtro e processa a checagem no mesmo instante. |
-| **Loop Principal Síncrono** (`USE_MAIN_LOOP_TO_PUBLISH`) | Fixo pelo parâmetro do `.ini` | **$0{,}05\text{ s}$** ($50\text{ ms}$) | Executa a cada ciclo de $20\text{ Hz}$ via `astro_ipc_sleep(1.0 / freq)`. Os handlers apenas armazenam os dados e o loop consome o tempo e checa o watchdog. |
+### Passo 1: Previsão da Pose Futura ("Passinho" de $0{,}1\text{ s}$)
+A partir da pose atual vinda do `localize`, a função utiliza a [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1358) para calcular a coordenada espacial onde o veículo (cabine e carretas) estará daqui a **$0{,}1\text{ s}$** (`full_time_interval = 0.1`, integrado com `delta_t = 0.05` e velocidade de referência `0.5 m/s` apenas para gerar o deslocamento geométrico na curva com `odometry_phi` fixo):
 
-### 2.2. Implementação do Filtro de Taxa (`can_execute_obstacle_avoider_handler`)
+```cpp
+iterative_pose = astro_libcarmodel_recalc_pos_ackerman(
+    &iterative_pose, vel_sign * 0.5, odometry_phi, 
+    full_time_interval, &distance_traveled, delta_t, 
+    &astro_robot_ackerman_config, &astro_semi_trailer_config
+);
+```
+> *Nota:* O objetivo dessa chamada não é testar a dinâmica de aceleração, mas simplesmente descobrir **o caminho geométrico (próximo ponto no espaço)** que o caminhão percorre ao avançar um "passinho" mantendo o volante travado em `odometry_phi`.
 
-Como o `localize` (GPS + Odometria) e o mapa de distâncias publicam mensagens em frequências elevadas, projetar o plano completo e checar colisão contra o mapa a cada nova pose consumiria processamento excessivo da CPU.
+---
 
-Para solucionar isso, a função [`can_execute_obstacle_avoider_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1004-L1027) atua como um filtro temporal:
+### Passo 2: Redução da Velocidade via Equação de Torricelli
+Encontrado esse novo ponto no espaço, mede-se a distância real percorrida nesse passinho ($\Delta s$, dada por `DIST2D(iterative_pose, prev_pose)`) e utiliza-se a **Equação de Torricelli** ([`compute_final_velocity_using_torricelli()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L969)) para identificar qual será a velocidade real do veículo após andar esse deslocamento aplicando a **frenagem máxima**:
 
-```c
-int can_execute_obstacle_avoider_handler()
+$$v^2 = v_0^2 + 2 \cdot a \cdot \Delta s$$
+
+Onde:
+* **$\Delta s$:** Distância percorrida entre a pose anterior e a nova pose calculada.
+* **$a$:** Valor negativo da desaceleração máxima (`-maximum_deceleration_forward`, vindo dos parâmetros).
+* **$v_0$:** Velocidade real do veículo no início daquele passo.
+
+```cpp
+current_velocity = vel_sign * compute_final_velocity_using_torricelli(
+    current_velocity, 
+    -astro_robot_ackerman_config.maximum_deceleration_forward, 
+    DIST2D(iterative_pose, prev_pose)
+);
+```
+
+---
+
+### Passo 3: Verificação de Colisão e Critério de Parada do Loop
+Obtida a posição futura exata e sua respectiva velocidade reduzida, chama-se [`check_collision_in_trajectory()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1012) para verificar se há colisão naquele ponto contra:
+1. O **mapa de distâncias / mapas especiais** (`obstacle_distance_map` / `maps_obstacle_avoider`).
+2. O **mapa de ocupação** (`occupancy_map`).
+3. Algum **objeto móvel** (`moving_objects`).
+
+```cpp
+while (fabs(current_velocity) > 0.0)
 {
-    if (param_only_mpp == 1)
-        return (0);
+    // 1. Projeta a pose 0.1s à frente mantendo phi fixo
+    // 2. Reduz a velocidade pelo deslocamento usando Torricelli com frenagem máxima
+    // 3. Verifica se a nova pose colide nos mapas:
+    returned_acc = check_collision_in_trajectory(
+        iterative_pose, astro_robot_ackerman_config, occupancy_map, 
+        astro_robot_ackerman_config.obstacle_avoider_obstacles_safe_distance, 
+        vel_sign, total_distance_traveled, timestamp
+    );
 
-    double current_time = astro_get_time();
-
-    if ((current_time - executed_obstacle_avoider_handler_last_timestamp) > 0.07) // 70 milissegundos (~14,3 Hz)
+    if ((returned_acc != 0.0) || (total_distance_traveled >= 50.0))
     {
-        executed_obstacle_avoider_handler_last_timestamp = current_time;
-        return (1);
+        break;
     }
-    return (0);
+    ...
 }
 ```
 
-* **Disparo Imediato para o MPP:** Quando o MPP envia um novo plano, o handler do MPP **não consulta** essa função e dispara o `obstacle_avoider_timer_handler()` imediatamente. A janela de $70\text{ ms}$ serve exclusivamente para controlar rechecagens baseadas em odometria e mapas.
-* **Flag `-only_mpp on`:** Se ativada, bloqueia todas as chamadas vindas da odometria e do mapa, limitando o OA a agir apenas mediante novos planos do MPP.
+* **Se houver colisão:** A função `check_collision_in_trajectory()` devolve imediatamente a desaceleração máxima de frenagem (`-maximum_deceleration_forward` em marcha à frente, ou `maximum_deceleration_reverse` em ré). A previsão é **finalizada na hora (`break`)** — sem precisar continuar calculando até a velocidade zerar — e esse valor de frenagem máxima é retornado para a variável de controle `global_acc_to_avoid_potential_collision` no `localize_ackerman_globalpos_message_handler()`.
+* **Se não houver colisão:** O fluxo continua repetindo o processo passo a passo enquanto a velocidade não chegar a zero (`fabs(current_velocity) > 0.0`) ou até atingir o limite de segurança de $50\text{ m}$ projetados (`total_distance_traveled >= 50.0`).
 
 ---
 
-## 3. Diagrama Macro Integrado de Fluxo
-
-O sistema opera de forma orientada a eventos. O fluxo geral de avaliação e os blocos principais que alteram o plano seguem o fluxo abaixo:
+## 3. Diagrama de Sequência e Fluxo Interno
 
 ```mermaid
-flowchart TD
-    subgraph Gatilhos ["1. Gatilhos de Entrada "]
-        T1["Novo Plano MPP"] --> H1["Handler MPP<br/>(robot_ackerman_motion_command)"]
-        T2["Novo Globalpos GPS"] --> H2["Handler Localize<br/>(localize_ackerman_globalpos)"]
-        T3["Novo Mapa Distâncias"] --> H3["Handler Mapa Distâncias<br/>(obstacle_distance_mapper)"]
+sequenceDiagram
+    autonumber
+    participant LOC as localize_ackerman
+    participant OA_MAIN as Handler do Localize (Main)
+    participant FUNC as set_trajectory_from_deceleration
+    participant TORR as Pose & Torricelli 
+    participant COL as check_collision_in_trajectory
+
+    LOC->>OA_MAIN: Publica Pose, v_odometria e phi
+    OA_MAIN->>FUNC: Inicia simulação preventiva
+    
+    loop Enquanto velocidade for maior que zero (Até Parar)
+        FUNC->>TORR: Avança pose em arco (phi fixo) e reduz v via Torricelli
+        TORR-->>FUNC: Nova pose e velocidade decrescente
+        FUNC->>COL: Checa polígonos da cabine + carretas contra o mapa
+        alt Colisão Detectada!
+            COL-->>FUNC: Colidiu! Retorna acc = -a_max
+            FUNC->>OA_MAIN: Retorna acc != 0 (Dispara ASTRO_ERROR_CODE_204)
+        else Livre
+            COL-->>FUNC: Desobstruído (continua no loop)
+        end
     end
-
-    subgraph Emergencia ["2. Simulação de Emergência (Potential Collision)"]
-        H2 --> PC["Simulação de Frenagem<br/><b style='color:#4fc3f7'>set_trajectory_from_deceleration()</b><br/>Volante travado em phi + Torricelli"]
-        PC --> EXT["Extensão de Segurança<br/><b style='color:#4fc3f7'>set_extension_trajectory()</b><br/>Projeção de N metros à frente"]
-        EXT --> ACC["Atualiza Aceleração de Emergência<br/><b style='color:#ffb74d'>global_acc_to_avoid_potential_collision</b>"]
-    end
-
-    H1 -->|"Imediato"| OA_TIMER["Handler Central de Decisão<br/><b style='color:#4fc3f7'>obstacle_avoider_timer_handler()</b>"]
-    ACC -->|"Frequência max ~14 Hz"| OA_TIMER
-    H3 -->|"Frequência max ~14 Hz"| OA_TIMER
-
-    subgraph PipelineOA ["3. Obstacle_avoider_timer_handler()"]
-        OA_TIMER --> CONSUME["Consumo Temporal da Fila<br/><b style='color:#4fc3f7'>consume_motion_command_time()</b><br/>Sincroniza o plano com o relógio atual"]
-        CONSUME --> TRAT_PC["Tratamento Potential Collision<br/><b style='color:#ff5252'>potential_collision_treatment()</b><br/>Filtro 5 ciclos -> Desacelera com Acc"]
-        TRAT_PC --> CENTR["Limite de Aceleração Centrípeta<br/><b style='color:#4fc3f7'>limit_centripetal_acceleration...()</b><br/>Proteção contra tombamento em curvas"]
-        CENTR --> PHI_LIM["Limite de Velocidade por Phi<br/><b style='color:#4fc3f7'>limit_current_velocity_to_max_phi()</b><br/>Envelope seguro esterçamento x vel"]
-        PHI_LIM --> OA_CORE["Validação Preventiva do Plano<br/><b style='color:#4fc3f7'>obstacle_avoider()</b><br/>Simula trajetória e atenua velocidades se houver obstáculo"]
-    end
-
-    OA_CORE --> PUB["Publicação Final<br/><b style='color:#69f0ae'>obstacle_avoider_publish_base_ackerman()</b><br/>Envia comandos validados para a base"]
+    
+    Note over FUNC,OA_MAIN: Se atingiu v = 0.0 sem colidir: PARADA SEGURA GARANTIDA!
+    FUNC-->>OA_MAIN: Retorna acc = 0.00  (Sem perigo imediato)
 ```
 
 ---
 
-### Etapas Principais do Fluxo:
+## 4. Continuação da Simulação de Emergência (*Potential Collision*)
 
-1. **[`astro_obstacle_avoider_set_trajectory_from_deceleration()`](06_desaceleracao_preventiva_phi_fixo.md)**: Etapa 1 da simulação de emergência (executada no handler do `localize`). Projeta a frenagem máxima por Torricelli mantendo o ângulo $\phi$ fixo para verificar se o veículo consegue parar sem colidir.
-2. **[`set_extension_trajectory_from_deceleration()`](07_extensao_seguranca_potential_collision.md)**: Etapa 2 da simulação de emergência (executada no handler do `localize` apenas se a Etapa 1 não colidir). Avança o veículo até o limite da extensão de segurança (`extension_length`, padrão $3{,}0\text{ m}$) para garantir a margem mínima livre à frente.
-3. **[`consume_motion_command_time()`](05_consumo_temporal_e_sincronizacao.md)**: Primeira etapa do `obstacle_avoider_timer_handler()`. Subtrai o tempo já transcorrido desde a última atualização, mantendo a sincronia temporal da fila de comandos e compensando a latência do MPP.
-4. **[`potential_collision_treatment()`](08_atuacao_potential_collision_treatment.md)**: Etapa 3 da simulação de emergência (no `obstacle_avoider_timer_handler()`). Verifica se o alarme vindo da Etapa 1 ou 2 persistiu por 5 ciclos consecutivos (Debounce 5/5) e desacelera os comandos do plano até zerar a velocidade.
-5. **[`limit_centripetal_acceleration_reducing_velocity()`](04_restricoes_dinamica_veiculo.md)**: Modula a velocidade em trechos de curva acentuada para garantir que a aceleração centrípeta não exceda $1{,}05 \cdot a_{c,\max}$.
-6. **[`limit_current_velocity_according_to_max_phi()`](04_restricoes_dinamica_veiculo.md)**: Restringe a velocidade caso o ângulo de esterçamento $\phi$ exija velocidade menor.
-7. **[`obstacle_avoider()`](02_planejamento_preventivo.md)**: Executa a simulação física futura do plano do MPP e atenua as velocidades caso haja obstáculos no caminho.
-8. **Publicação para `base_ackerman`**: Envia o plano validado/modificado para o controle de baixo nível.
-9. **[Fusão e Intersecção: Distance Map vs. Moving Objects (DATMO)](09_fusao_mapas_distance_map_e_moving_objects.md)**: Detalha a origem dos dados (LiDAR + Mapa Offline + DATMO), a distinção de objetos estáticos vs. móveis e a redundância de segurança na ordem de checagem de colisão.
+Ao finalizar a execução de `astro_obstacle_avoider_set_trajectory_from_deceleration()`, o valor retornado em `global_acc_to_avoid_potential_collision` define qual será o próximo passo do módulo:
 
+* **`acc == 0.0` (Parada livre de colisão na Etapa 1):**  
+  O fluxo avança imediatamente (ainda dentro do handler do `localize`) para a **Etapa 2 — Extensão de Segurança**, que verifica se a margem mínima à frente do veículo (`extension_length`) também está desobstruída:  
+**[`07_extensao_seguranca_potential_collision.md`](07_extensao_seguranca_potential_collision.md)**
 
-> [!NOTE]
-> **Divisão de Responsabilidades no *Potential Collision*:**  
-> As Etapas 1 (`set_trajectory_from_deceleration`) e 2 (`set_extension_trajectory`) fazem parte da avaliação de emergência do potential collision, ambas geram **projeções puramente hipotéticas** para diagnosticar colisões com direção fixa e margem mínima, **sem alterar o plano real do MPP**. Já a Etapa 3 (`potential_collision_treatment`) é **a única que modifica o plano de comandos**, sendo puramente reativa ao gatilho de `global_acc_to_avoid_potential_collision` sem fazer checagem geométrica em mapas.
+* **`acc != 0.0` (Colisão detectada na Etapa 1):**  
+  A Etapa 2 é ignorada (já que o perigo imediato foi confirmado) e o valor de frenagem armazenado em `global_acc_to_avoid_potential_collision` segue direto para a **Etapa 3 — atuação do potential_collision()** no `obstacle_avoider_timer_handler()`:  
+  **[`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md)** 
 
----
-## 5. Códigos de Erro Emitidos
-
-O módulo publica os seguintes erros no barramento do sistema (`ASTRO_ERROR_CODE`):
-
-* **`ASTRO_ERROR_CODE_201`**: Foi identificado colisão na posição atual do veículo (`Robot_collided_with_obstacle`, Severidade 0 - Erro Fatal). Ação: Zera todo o plano imediatamente.
-* **`ASTRO_ERROR_CODE_203`**: Identificado colisão no plano futuro gerado pelo mpp ou com a velocidade atual o tamanho do plano é curto demais para parar o veículo.(`Obstacle_avoider_recalculated_velocity`, Severidade 4). Detalhes em [`02_planejamento_preventivo.md`](02_planejamento_preventivo.md). Ação: diminuir em 5% sequencialmente a velocidade do plano.
-* **`ASTRO_ERROR_CODE_204`**: Colisão detectada na simulação de emergência (*potential collision* ou extensão de segurança com volante fixo). Detalhes em [`08_atuacao_potential_collision_treatment.md`](08_atuacao_potential_collision_treatment.md).
-* **`ASTRO_ERROR_CODE_205`**: Limitação preventiva de velocidade imposta pela geometria da curva e esterçamento de referência (`OA_hold_velocity_to_reference_phi`, Severidade 4).
-
----
