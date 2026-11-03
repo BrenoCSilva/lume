@@ -32,10 +32,10 @@ O MPP **não** envia as coordenadas cartesianas globais $(X, Y, \theta)$ do plan
 
 O fluxo de operação se baseia em 5 passos principais:
 
-1. **Projeção espacial da trajetória ([`build_predicted_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1471)):**  
+1. **Projeção espacial da trajetória ([`função: build_predicted_trajectory`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L1471)):**  
    A predição espacial do veículo é realizada a partir da `pose_atual` vinda do `localize`. Aplicando o movimento `motion[0]` do MPP, uma nova pose é gerada e atribuída à própria `pose[0]` do plano, e de forma sequencial essa nova pose é usada como origem para a pose seguinte, calculando as coordenadas da cabine e dos reboques ao longo de todo o plano.
  
-$$\mathbf{P}_{\text{nova}} = f_{\text{Ackerman}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
+$$\mathbf{P}_{\text{nova}} = f_{\text{b_predicted_trajectory}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
 
 
 2. **Avaliar colisão na `pose_atual`:**  
@@ -65,11 +65,11 @@ $$\mathbf{P}_{\text{nova}} = f_{\text{Ackerman}}(\mathbf{P}_{\text{anterior}}, v
 ### 3.1. Como o caminho é desenhado (`build_predicted_trajectory`)
 A função [`astro_libcarmodel_recalc_pos_ackerman()`](file:///home/lume/astro/sharedlib/libcarmodel/ackerman_model.c) recebe a pose atual do caminhão, a velocidade $v$, o esterçamento $\phi$ e o tempo $dt$. Ela devolve a nova pose da cabine e o ângulo de cada semi-reboque atrelado. Sendo i diferente de 0:
 
-$$\mathbf{P}_{\text{i}} = f_{\text{Ackerman}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
+$$\mathbf{P}_{\text{i}} = f_{\text{b_predicted_trajectory}}(\mathbf{P}_{\text{anterior}}, v, \phi, dt)$$
 
 Sendo a primeira iteração teremos:
 
-$$\mathbf{P}_{\text{i=0}} = f_{\text{Ackerman}}(\mathbf{P}_{\text{localize}}, v, \phi, dt)$$
+$$\mathbf{P}_{\text{i=0}} = f_{\text{b_predicted_trajectory}}(\mathbf{P}_{\text{localize}}, v, \phi, dt)$$
 
 Com isso, o OA sabe exatamente onde cada círculo de colisão (marker) da cabine e das carretas estará no chão a cada fração de segundo.
 
@@ -142,42 +142,8 @@ Abaixo vemos o terminal de frenagem (`/tmp/oa_braking_distance.log`) no momento 
 
 ---
 
-## 6. Frequências de Chamada e Dinâmica dos Planos
+## 6. Frequências de Operação e Cadência de Avaliação
 
-O ciclo principal de avaliação [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1291) é disparado a partir de **3 handlers de mensagens**:
+O detalhamento completo sobre a taxa de chegada de cada sensor, o filtro de taxa temporal de $0{,}07\text{ s}$ (`can_execute_obstacle_avoider_handler`), o laço síncrono de $0{,}05\text{ s}$ (`USE_MAIN_LOOP_TO_PUBLISH`) e a dinâmica de dimensionamento dos planos do MPP está documentado na:
 
-1. [`robot_ackerman_motion_command_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1542): Recebe os novos planos calculados pelo MPP.
-2. [`localize_ackerman_globalpos_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1670): Recebe a pose estimada do veículo.
-3. [`astro_obstacle_distance_mapper_on_distance_map_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1766): Recebe as atualizações do mapa de distâncias de obstáculos.
-
-### 6.1. Frequências e o Filtro de Avaliação (`can_execute_obstacle_avoider_handler`)
-
-Embora o módulo de localização forneça dados em alta taxa, projetar o plano completo e checar colisão contra o mapa a cada nova pose consumiria processamento excessivo da CPU. Por isso, o OA aplica um filtro de tempo:
-
-| Quem? / Handler | Frequência de Chegada | Intervalo | Comportamento e Atualização no `obstacle_avoider` |
-| :--- | :--- | :--- | :--- |
-| **`localize`** (`handler_localize`) | ~50 vezes por segundo | $0{,}02\text{ s}$ | Atualiza a `pose_atual`. O OA aplica um filtro e só reavalia o plano e consome os comandos já executados a cada **$0{,}07\text{ s}$** (~14 vezes por segundo). |
-| **`mapa_distance`** (`handler_distance_map`) | Variável (sensores) | Conforme mapa | Também é submetido ao filtro de **$0{,}07\text{ s}$** antes de executar a checagem. |
-| **`MPP`** (`handler_mpp`) | ~10 vezes por segundo | $0{,}1\text{ s}$ | **Imediato:** Quando um novo plano chega, o OA não aguarda o filtro e dispara a avaliação de imediato. |
-
-> [!NOTE]
-> O filtro de taxa [`can_execute_obstacle_avoider_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1114) garante que, na cadência dos sensores (pose e mapa), o OA reavalie o plano preventivo no máximo a cada **$0{,}07\text{ s}$** (~14 vezes por segundo), economizando CPU sem comprometer a segurança.
-
----
-
-### 6.2. Dinâmica e Tamanho do Plano do MPP
-
-O MPP ajusta o horizonte de distância do plano conforme a velocidade do veículo, garantindo margem para manobras e frenagens preventivas:
-
-- A **$10\text{ km/h}$** ($2{,}77\text{ m/s}$): O plano tem alcance de cerca de **$20\text{ m}$**.
-- A **$5\text{ km/h}$** ($1{,}38\text{ m/s}$): O plano tem alcance de cerca de **$15\text{ m}$**.
-
-#### Relação entre Velocidade e Quantidade de Comandos
-Cada comando de movimento no plano possui uma duração de tempo curta $\Delta t$ (geralmente entre $0{,}03\text{ s}$ e $0{,}05\text{ s}$). O tempo total coberto pelo plano é dado por:
-
-$$\Delta t_{\text{total}} = \frac{\text{Distância}}{\text{Velocidade}}$$
-
-- **A $5\text{ km/h}$ ($1{,}38\text{ m/s}$):** Percorrer os $\approx 15{,}7\text{ m}$ requer cerca de $11{,}4\text{ s}$. Com passos pequenos de tempo, o plano contém em média **248 comandos**.
-- **A $10\text{ km/h}$ ($2{,}77\text{ m/s}$):** Percorrer os $\approx 19{,}2\text{ m}$ requer cerca de $6{,}9\text{ s}$. Por isso, o plano possui em média **140 a 175 comandos**.
-
-Assim, em velocidades menores o plano necessita de uma quantidade maior de comandos para atingir a distância mínima estipulada de segurança.
+👉 **[Seção 2 de 01_arquitetura_e_fluxo_geral.md: Frequências de Operação e Cadência dos Handlers](01_arquitetura_e_fluxo_geral.md#2-frequencias-de-operacao-e-cadencia-dos-handlers)**.
