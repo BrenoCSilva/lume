@@ -108,21 +108,13 @@ void velocity_recalculate(astro_robot_ackerman_motion_command_t *motion_commands
 	}
 }
 ```
-
-#### Por que o tempo (`time`) aumenta quando a velocidade (`v`) diminui?
 O objetivo dessa função é fazer o veículo **desacelerar sem mudar o trajeto físico** planejado pelo MPP.
 
-Pela física básica:
-$$\text{Distância percorrida} = v \cdot \Delta t$$
-
-* **A relação física:** Se o veículo anda mais devagar ($v$ diminui), para ele percorrer aquele mesmo pedaço do trajeto ele obrigatoriamente precisa de **mais tempo** ($\Delta t$ aumenta).
+ Como o veículo se desloca em uma velocidade 5% menor(v diminui), para que percorra aquele mesmo pedaço do trajeto ele obrigatoriamente precisa de **mais tempo** ($\Delta t$ aumenta).
 * **A proporção exata:** Se a velocidade cai para $95\%$ ($v \cdot 0{,}95$), o tempo de duração daquele comando aumenta na exata mesma proporção ($\text{time} \div 0{,}95$).
-* **O cancelamento:** Ao calcular a distância percorrida pelo comando:
 
-$$\Delta S_{\text{novo}} = (v \cdot 0{,}95) \cdot \left(\frac{\text{time}}{0{,}95}\right) = v \cdot \text{time} = \Delta S_{\text{original}}$$
-
-> [!TIP]
-> **Significado prático:** A geometria do caminho não muda um milímetro sequer! O caminhão vai fazer a mesma curva e passar exatamente pelo mesmo lugar no mapa, apenas andando mais devagar. Quando a velocidade cai abaixo de $0{,}05\text{ m/s}$ ($5\text{ cm/s}$), o OA zera tudo (`v = 0.0`) e o caminhão atinge a parada total suavemente.
+> [!NOTE]
+> **Significado prático:** O caminho percorrido pelo veículo não muda, a mesma curva será feita, apenas em uma velocidade 5% menor do que a original.
 
 ---
 
