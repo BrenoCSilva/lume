@@ -21,7 +21,7 @@ typedef struct {
 } astro_robot_and_trailers_motion_command_t;
 </pre>
 
-*(As variáveis **<u>sublinhadas em negrito</u>** não são preenchidas pelo MPP, cabendo ao `obstacle_avoider()` calculá-las).*
+*(As variáveis destacadas não são preenchidas pelo MPP, cabendo ao `obstacle_avoider()` calculá-las).*
 
 > [!NOTE]
 > **Diferença de escopo entre as checagens do OA:**  
