@@ -10,7 +10,7 @@ O MPP **não** envia as coordenadas cartesianas globais $(X, Y, \theta)$ do plan
 
 <pre>
 typedef struct {
-    <s>double x;/s><                              <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
+    <s>double x;</s>                              <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
     <u><s>double y;</s></u>                               <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
     <u><s>double theta;</s></u>                           <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
     <u><s>int num_trailers;</s></u>                       <span style="color: #6a9955;">// Calculado pelo OA (não preenchido pelo MPP)</span>
