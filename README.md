@@ -30,7 +30,7 @@ obstacle_avoider_v_and_max_phi_reference_points  3 1.5 0.50 2.0 0.25 2.77 0.20
 A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744)  aceita **doi1s formatos** para especificar o ângulo $\phi$:
 
 1. **Porcentagem com `%`:** O valor é calculado como uma porcentagem do esterçamento máximo da cabine (`astro_robot_ackerman_config->max_phi`):
-   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\_veículo}}$$
+   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\-veículo}}$$
    *Exemplo:* se o `max_phi` do caminhão for $0{,}500\text{ rad}$ ($28{,}6^\circ$), então `100%` $\to 0{,}500\text{ rad}$ e `50%` $\to 0{,}250\text{ rad}$.
 2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
    *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
@@ -39,7 +39,7 @@ A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_
 graph LR
     E["Velocidade Baixa<br>(1.50 m/s / 5.4 km/h)"] --- F["Ângulo Máximo Permitido<br>(phi <= 0.50 rad / 28.6°)"]
     C["Velocidade Média<br>(2.00 m/s / 7.2 km/h)"] --- D["Ângulo Médio Permitido<br>(phi <= 0.25 rad / 14.3°)"]
-    A["Velocidade Alta<br>(2.77 m/s / 10 km/h)"] --- B["Ângulo Pequeno Permitido<br>(phi <= 0.20 rad / 11.5°)"]]
+    A["Velocidade Alta<br>(2.77 m/s / 10 km/h)"] --- B["Ângulo Pequeno Permitido<br>(phi <= 0.20 rad / 11.5°)"]
     
     style A fill:#ffcdd2,stroke:#d32f2f,color:#000
     style B fill:#ffcdd2,stroke:#d32f2f,color:#000
