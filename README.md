@@ -1,32 +1,12 @@
 # Guia Didático: Limitação de Velocidade por Esterçamento ($\phi$)
 
-Este documento explica de forma prática e passo a passo como o **Obstacle Avoider (OA)** protege o veículo contra instabilidade dinâmica e tombamento (*rollover*) ao contornar curvas, utilizando a tabela de calibração do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
+Este readme explica de forma prática como o **Obstacle Avoider (OA)** reage quando ocorrem limites de atuação do esterçamento do veículo para determinadas velocidades. Isso ocorre através de uma  "tabela" de calibração configurada através do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
 
 ---
 
-## 1. O Problema Físico e a Regra de Ouro
-
-Ao entrar em uma curva, a aceleração lateral exercida sobre a cabine e os reboques cresce com o quadrado da velocidade e com a curvatura ($a_c \approx \frac{v^2}{R} = v^2 \cdot \frac{|\tan(\phi)|}{L}$).
-
-> [!IMPORTANT]
-> **A Regra de Ouro do Obstacle Avoider:**  
-> O `obstacle_avoider` **NUNCA altera o ângulo de esterçamento ($\phi$)** de um comando planejado pelo MPP.  
-> Se o OA alterasse $\phi$, as rodas dianteiras abririam ou fechariam o traçado, fazendo o caminhão **sair da pista autorizada ou colidir com proteções laterais**.  
-> Portanto, o OA **respeita rigorosamente a geometria da curva** e atua **exclusivamente no acelerador e no freio**, reduzindo a velocidade linear ($v$) para um teto onde o esterçamento exigido seja 100% seguro.
-
----
-
-## 2. A Tabela de Calibração ($v \times \phi$)
+## 1. A Tabela de Calibração ($v \times \phi$)
 
 A tabela de calibração é carregada do arquivo `.ini` (ou linha de comando) através do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
-
-A função de leitura [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744) é flexível e aceita **dois formatos** para especificar o ângulo $\phi$:
-
-1. **Porcentagem com `%`:** O valor é calculado como uma porcentagem do esterçamento máximo da cabine (`astro_robot_ackerman_config->max_phi`):
-   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max-veículo}}$$
-   *Exemplo:* se o `max_phi` do caminhão for $0{,}500\text{ rad}$ ($28{,}6^\circ$), então `100%` $\to 0{,}500\text{ rad}$ e `50%` $\to 0{,}250\text{ rad}$.
-2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
-   *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
 
 ### Formato de Entrada no `.ini` / Linha de Comando:
 ```ini
@@ -37,22 +17,29 @@ obstacle_avoider_v_and_max_phi_reference_points  3 1.5 100% 2.0 50% 2.77 0.20
 obstacle_avoider_v_and_max_phi_reference_points  3 1.5 0.50 2.0 0.25 2.77 0.20
 ```
 
+* **Quantidade de pontos no exemplo:** `3`
+* **Pontos de envelope resultantes:**
+  * **Nível 0:** Até $1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) $\to \phi_{\max} = 100\% = 0{,}500\text{ rad}$ ($28{,}6^\circ$)
+  * **Nível 1:** Até $2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) $\to \phi_{\max} = 50\% = 0{,}250\text{ rad}$ ($14{,}3^\circ$) 
+  * **Nível 2:** Até $2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) $\to \phi_{\max} = 0{,}200\text{ rad}$ ($11{,}5^\circ$) 
+
 > [!NOTE]
 > **Internamente na memória e nos logs:**  
 > Independentemente de ter sido informado como `100%` ou `0.50`, a função converte e armazena o valor **sempre em radianos** dentro da struct `v_phi_reference_point_t`.  
-> Por isso, nos cálculos matemáticos, nas mensagens de erro (`ASTRO_ERROR_CODE_205`) e nos prints do terminal, o valor exibido já aparece como **radianos** e **graus** (ex: `0.500 rad (28.6°)`).
 
-* **Quantidade de pontos no exemplo:** `3`
-* **Pontos de envelope resultantes:**
-  * **Nível 0:** Até $1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) $\to \phi_{\max} = 100\% = 0{,}500\text{ rad}$ ($28{,}6^\circ$) *(Manobra em curva fechada)*
-  * **Nível 1:** Até $2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) $\to \phi_{\max} = 50\% = 0{,}250\text{ rad}$ ($14{,}3^\circ$) *(Curva intermediária)*
-  * **Nível 2:** Até $2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) $\to \phi_{\max} = 0{,}200\text{ rad}$ ($11{,}5^\circ$) *(Velocidade de cruzeiro em reta)*
+A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744)  aceita **doi1s formatos** para especificar o ângulo $\phi$:
+
+1. **Porcentagem com `%`:** O valor é calculado como uma porcentagem do esterçamento máximo da cabine (`astro_robot_ackerman_config->max_phi`):
+   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\_veículo}}$$
+   *Exemplo:* se o `max_phi` do caminhão for $0{,}500\text{ rad}$ ($28{,}6^\circ$), então `100%` $\to 0{,}500\text{ rad}$ e `50%` $\to 0{,}250\text{ rad}$.
+2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
+   *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
 
 ```mermaid
 graph LR
-    A["Velocidade Alta<br>(2.77 m/s / 10 km/h)"] --- B["Ângulo Pequeno Permitido<br>(phi <= 0.20 rad / 11.5°)"]
-    C["Velocidade Média<br>(2.00 m/s / 7.2 km/h)"] --- D["Ângulo Médio Permitido<br>(phi <= 0.25 rad / 14.3°)"]
     E["Velocidade Baixa<br>(1.50 m/s / 5.4 km/h)"] --- F["Ângulo Máximo Permitido<br>(phi <= 0.50 rad / 28.6°)"]
+    C["Velocidade Média<br>(2.00 m/s / 7.2 km/h)"] --- D["Ângulo Médio Permitido<br>(phi <= 0.25 rad / 14.3°)"]
+    A["Velocidade Alta<br>(2.77 m/s / 10 km/h)"] --- B["Ângulo Pequeno Permitido<br>(phi <= 0.20 rad / 11.5°)"]]
     
     style A fill:#ffcdd2,stroke:#d32f2f,color:#000
     style B fill:#ffcdd2,stroke:#d32f2f,color:#000
@@ -70,24 +57,25 @@ Para cada comando de movimento vindo do MPP, o OA executa quatro passos bem defi
 
 ```mermaid
 flowchart TD
-    CMD["Comando MPP Recebido<br>(v = 2.0 m/s, phi = 0.50 rad)"] --> E1
+    CMD["Plano do MPP é Recebido<br>"] --> E1
     
     subgraph E1 ["Etapa 1: Diagnóstico de Esterçamento"]
-        D1["Busca intervalo de v na tabela:<br>v = 2.00 m/s cai em [1.50, 2.00 m/s]"]
-        D1 --> D2["Interpola phi seguro:<br>phi_seguro = 0.250 rad (14.3°)"]
+        D1["Busca qual é o intervalo de v na tabela"]
+        D1 --> D2["retorna o phi_maximo para essa velocidade v"]
     end
     
     E1 --> E2
     
-    subgraph E2 ["Etapa 2: Comparação de Estabilidade"]
-        C1{"phi_comando > phi_seguro?<br>(0.500 rad > 0.250 rad)"}
-        C1 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
-        C1 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
+    subgraph E2 ["Etapa 2: Avaliar se o phi_atual está no limite seguro"]
+        C1{"phi_atual > phi_max?"}
+        C2 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
+        C3 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
+        style C1 fill:#c8e6c9,stroke:#388e3c,color:#000
     end
     
     ALERTA --> E3
     
-    subgraph E3 ["Etapa 3: Tratamento (Cálculo da Cura)"]
+    subgraph E3 ["Etapa 3: Tratamento "]
         T1["Qual velocidade aguenta phi = 0.500 rad?"]
         T1 --> T2["Busca na tabela:<br>Para phi = 0.500 rad -> v_segura = 1.50 m/s"]
     end
@@ -223,3 +211,16 @@ cd ~/astro/bin
 
 No Terminal 1, você verá o fluxo em 4 etapas detalhando a intervenção no primeiro comando que viola o limite e mantendo o resumo consolidado dos 50 comandos atenuados.
 
+
+
+## 1. O Problema Físico e a Regra de Ouro
+
+Ao entrar em uma curva, a aceleração lateral exercida sobre a cabine e os reboques cresce com o quadrado da velocidade e com a curvatura ($a_c \approx \frac{v^2}{R} = v^2 \cdot \frac{|\tan(\phi)|}{L}$).
+
+> [!IMPORTANT]
+> **A Regra de Ouro do Obstacle Avoider:**  
+> O `obstacle_avoider` **NUNCA altera o ângulo de esterçamento ($\phi$)** de um comando planejado pelo MPP.  
+> Se o OA alterasse $\phi$, as rodas dianteiras abririam ou fechariam o traçado, fazendo o caminhão **sair da pista autorizada ou colidir com proteções laterais**.  
+> Portanto, o OA **respeita rigorosamente a geometria da curva** e atua **exclusivamente no acelerador e no freio**, reduzindo a velocidade linear ($v$) para um teto onde o esterçamento exigido seja 100% seguro.
+
+---
