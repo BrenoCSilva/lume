@@ -80,6 +80,10 @@ $$\phi_{\max} = \phi_0 + t \cdot (\phi_1 - \phi_0)$$
 
 Isso garante que a transição de velocidade e volante seja **100% suave e livre de trancos operacionais** em qualquer valor decimal de velocidade enviado pelo planejador.
 
+
+> [!NOTE]
+>Na seção 4 a interpolação será apresentada através de um exemplo simulado.
+
 ---
 
 ## 3. O Fluxo de Decisão em 4 Etapas
