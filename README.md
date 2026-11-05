@@ -81,10 +81,8 @@ flowchart TD
     
     subgraph E2 ["Etapa 2: Comparação de Estabilidade"]
         C1{"phi_comando > phi_seguro?<br>(0.500 rad > 0.250 rad)"}
-        C2 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
-        C3 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
-        style C2 fill:#c8e6c9,stroke:#388e3c,color:#000
-        style C3 fill:#c8e6c9,stroke:#388e3c,color:#000
+        C1 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
+        C1 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
     end
     
     ALERTA --> E3
