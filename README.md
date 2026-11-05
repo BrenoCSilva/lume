@@ -27,22 +27,20 @@ obstacle_avoider_v_and_max_phi_reference_points  3 1.5 0.50 2.0 0.25 2.77 0.20
 > **Internamente na memória e nos logs:**  
 > Independentemente de ter sido informado como `100%` ou `0.50`, a função converte e armazena o valor **sempre em radianos** dentro da struct `v_phi_reference_point_t`.  
 
-A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744)  aceita **doi1s formatos** para especificar o ângulo $\phi$:
+A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744) aceita **dois formatos** para especificar o ângulo $\phi$:
 
 1. **Porcentagem com `%`:** O valor é calculado como uma porcentagem do esterçamento máximo da cabine (`astro_robot_ackerman_config->max_phi`):
-   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\-veículo}}$$
+   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\_veículo}}$$
    *Exemplo:* se o `max_phi` do caminhão for $0{,}500\text{ rad}$ ($28{,}6^\circ$), então `100%` $\to 0{,}500\text{ rad}$ e `50%` $\to 0{,}250\text{ rad}$.
 2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
    *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
-   
+
 | Velocidade Máxima ($v$) | Esterçamento Máximo ($\phi_{\max}$) | Porcentagem do Volante |
 | :--- | :--- | :---: |
 | $\le 1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) | $\le 0{,}500\text{ rad}$ ($28{,}6^\circ$) | `100%` |
 | $\le 2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) | $\le 0{,}250\text{ rad}$ ($14{,}3^\circ$) | `50%` |
 | $\le 2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) | $\le 0{,}200\text{ rad}$ ($11{,}5^\circ$) | `40%` |
-
-> [!NOTE]
-> A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
+A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
 
 ---
 
@@ -52,34 +50,30 @@ Para cada comando de movimento vindo do MPP, o OA executa quatro passos bem defi
 
 ```mermaid
 flowchart TD
-    CMD["Plano do MPP é Recebido"] --> E1
+    CMD["Plano do MPP é Recebido"] --> D1
     
     subgraph E1 ["Etapa 1: Diagnóstico de Esterçamento"]
-        D1["Busca qual é o intervalo de v na tabela"]
-        D1 --> D2["Retorna o phi_maximo para essa velocidade v"]
+        D1["Busca qual é o intervalo de v na tabela"] --> D2["Retorna o phi_maximo para essa velocidade v"]
     end
     
-    E1 --> E2
+    D2 --> C1
     
     subgraph E2 ["Etapa 2: Avaliar se o phi_atual está no limite seguro"]
         C1{"phi_atual > phi_max?"}
-        C1 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
         C1 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
+        C1 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
     end
     
-    ALERTA --> E3
-
-    subgraph E3 ["Etapa 3: Identificando v_maximo permitido pelo limite_seguro"]
-        T1["Qual velocidade aguenta o phi_atual?"]
-        T1 --> T2["Busca na tabela:Retorna v_max correspondente"]
+    ALERTA --> T1
+    
+    subgraph E3 ["Etapa 3: Identificando v_maximo permitido"]
+        T1["Qual velocidade aguenta o phi_atual?"] --> T2["Busca na tabela:<br>Retorna v_max correspondente"]
     end
-    E3 --> E4
-
+    
+    T2 --> A1
+    
     subgraph E4 ["Etapa 4: Atuação nos Comandos"]
-        A1["Reduz v para v_segura"]
-        A2["Dilata tempo (dt)<br>(Preserva geometria da curva)"]
-        A3["Publica ASTRO_ERROR_CODE_205"]
-        A1 --> A2 --> A3
+        A1["Reduz v para v_max"] --> A2["Dilata tempo (dt)<br>(Preserva geometria da curva)"] --> A3["Publica ASTRO_ERROR_CODE_205"]
     end
 
     style OK fill:#c8e6c9,stroke:#388e3c,color:#000
