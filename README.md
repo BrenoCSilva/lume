@@ -83,6 +83,7 @@ flowchart TD
         C1{"phi_comando > phi_seguro?<br>(0.500 rad > 0.250 rad)"}
         C1 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
         C1 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
+        style C1 fill:#c8e6c9,stroke:#388e3c,color:#000
     end
     
     ALERTA --> E3
