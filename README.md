@@ -40,9 +40,44 @@ A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_
 | $\le 1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) | $\le 0{,}500\text{ rad}$ ($28{,}6^\circ$) | `100%` |
 | $\le 2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) | $\le 0{,}250\text{ rad}$ ($14{,}3^\circ$) | `50%` |
 | $\le 2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) | $\le 0{,}200\text{ rad}$ ($11{,}5^\circ$) | `40%` |
+A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
 
-> [!NOTE]
-> A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
+### Como a Tabela Opera: Interpolação Linear Contínua (Sem Degraus Bruscos)
+
+Os pontos configurados na tabela **não funcionam como degraus fixos**, mas sim como **pontos de controle de uma rampa suave (interpolação linear)**. 
+
+Se o sistema funcionasse por degraus rígidos, uma aceleração de apenas $0{,}01\text{ m/s}$ (por exemplo, de $1{,}50$ para $1{,}51\text{ m/s}$) faria o limite de esterçamento despencar bruscamente de $28{,}6^\circ$ para $14{,}3^\circ$, causando trancos violentos na direção e no freio do caminhão.
+
+Por isso, o Obstacle Avoider traça retas contínuas entre cada par de pontos:
+
+```text
+phi (rad)
+  ^
+0.50 |======\ [0.0 a 1.50 m/s: Saturado no topo em 0.50 rad / 28.6°]
+     |       \
+0.25 |        \-------\ [Intervalo 1: Interpola suavemente de 1.50 a 2.00 m/s]
+     |                 \
+0.20 |                  \========== [Intervalo 2: Interpola suavemente de 2.00 a 2.77 m/s]
+     +--------+--------+--------+----> v (m/s)
+    0.0      1.5      2.0      2.77
+```
+
+* **Abaixo de $1{,}50\text{ m/s}$ ($v < v_{\min}$):** Velocidade de manobra lenta. O caminhão tem total segurança contra tombamento, então o esterçamento é liberado no limite máximo ($0{,}500\text{ rad} = 28{,}6^\circ$).
+* **Entre $1{,}50$ e $2{,}00\text{ m/s}$ (Intervalo 1):** O limite cai proporcionalmente ao longo da rampa:
+  * A $1{,}50\text{ m/s}$ ($0\%$ da rampa) $\to \phi_{\max} = 0{,}500\text{ rad}$ ($28{,}6^\circ$)
+  * A $1{,}75\text{ m/s}$ ($50\%$ da rampa) $\to \phi_{\max} = 0{,}375\text{ rad}$ ($21{,}5^\circ$)
+  * A $2{,}00\text{ m/s}$ ($100\%$ da rampa) $\to \phi_{\max} = 0{,}250\text{ rad}$ ($14{,}3^\circ$)
+* **Entre $2{,}00$ e $2{,}77\text{ m/s}$ (Intervalo 2):** O limite continua caindo suavemente de $0{,}250$ até $0{,}200\text{ rad}$ ($11{,}5^\circ$).
+* **Acima de $2{,}77\text{ m/s}$ ($v \ge v_{\max}$):** Velocidade de cruzeiro máxima. O esterçamento fica restrito ao piso seguro de $0{,}200\text{ rad}$ ($11{,}5^\circ$).
+
+#### A Fórmula da Interpolação Linear no Código:
+Dentro de [`get_max_phi_from_velocity()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L545), o cálculo equivale a uma regra de três simples da posição na rampa ($t$):
+
+$$t = \frac{v_{\text{atual}} - v_0}{v_1 - v_0}$$
+
+$$\phi_{\max} = \phi_0 + t \cdot (\phi_1 - \phi_0)$$
+
+Isso garante que a transição de velocidade e volante seja **100% suave e livre de trancos operacionais** em qualquer valor decimal de velocidade enviado pelo planejador.
 
 ---
 
@@ -69,13 +104,13 @@ flowchart TD
     ALERTA --> T1
     
     subgraph E3 ["Etapa 3: Identificando v_maximo permitido"]
-        T1["Qual velocidade aguenta o phi_atual?"] --> T2["Busca na tabela:<br>Retorna v_max correspondente"]
+        T1["Qual velocidade aguenta o phi_atual?"] --> T2["Busca na tabela:<br>Retorna v_maximo_seguro correspondente"]
     end
     
     T2 --> A1
     
     subgraph E4 ["Etapa 4: Atuação nos Comandos"]
-        A1["Reduz v para v_max"] --> A2["Dilata tempo (dt)<br>(Preserva geometria da curva)"] --> A3["Publica ASTRO_ERROR_CODE_205"]
+        A1["Reduz v para v_maximo_seguro"] --> A2["Dilata tempo (dt)<br>(Preserva geometria da curva)"] --> A3["Publica ASTRO_ERROR_CODE_205"]
     end
 
     style OK fill:#c8e6c9,stroke:#388e3c,color:#000
@@ -85,7 +120,7 @@ flowchart TD
 
 ---
 
-## 4. Análise Didática dos Casos Reais de Teste
+## 4. Análise de caso simulado
 
 Abaixo analisamos exatamente os logs capturados durante a execução com o binário de teste [`src/obstacle_avoider/obstacle_avoider_test.cpp`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_test.cpp).
 
@@ -96,6 +131,13 @@ Abaixo analisamos exatamente os logs capturados durante a execução com o biná
 O planejador envia uma intenção de andar a $7{,}2\text{ km/h}$ esterçando o volante a quase $29^\circ$.
 
 ```text
+
+3 limitações de esterçamento para velocidade
+
+| Até 1.500000 m/s o limite eh 0.50 rad/28.64º | 
+| Até 2.000000 m/s o limite eh 0.25 rad/14.32º |
+| Até 2.770000 m/s o limite eh 0.20 rad/11.45º | 
+
 ========================================================================================
 [OA PHI LIMIT] Avaliando Plano com 50 comandos contra tabela de referencia (3 niveis)
 ========================================================================================
