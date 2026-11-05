@@ -18,16 +18,34 @@ Ao entrar em uma curva, a aceleração lateral exercida sobre a cabine e os rebo
 
 ## 2. A Tabela de Calibração ($v \times \phi$)
 
-A tabela de calibração é carregada do arquivo `.ini` através do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`:
+A tabela de calibração é carregada do arquivo `.ini` (ou linha de comando) através do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
 
+A função de leitura [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744) é flexível e aceita **dois formatos** para especificar o ângulo $\phi$:
+
+1. **Porcentagem com `%`:** O valor é calculado como uma porcentagem do esterçamento máximo da cabine (`astro_robot_ackerman_config->max_phi`):
+   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\_veículo}}$$
+   *Exemplo:* se o `max_phi` do caminhão for $0{,}500\text{ rad}$ ($28{,}6^\circ$), então `100%` $\to 0{,}500\text{ rad}$ e `50%` $\to 0{,}250\text{ rad}$.
+2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
+   *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
+
+### Formato de Entrada no `.ini` / Linha de Comando:
 ```ini
-obstacle_avoider_v_and_max_phi_reference_points  3 1.5 0.5 2.0 0.25 2.77 0.20
+# Formato 1: Usando porcentagens relativas ao max_phi do veículo (ex: no seu teste)
+obstacle_avoider_v_and_max_phi_reference_points  3 1.5 100% 2.0 50% 2.77 0.20
+
+# Formato 2: Usando valores absolutos diretos em radianos
+obstacle_avoider_v_and_max_phi_reference_points  3 1.5 0.50 2.0 0.25 2.77 0.20
 ```
 
-* **Quantidade de pontos:** `3`
-* **Pontos de envelope:**
-  * **Nível 0:** Até $1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) $\to \phi_{\max} = 0{,}500\text{ rad}$ ($28{,}6^\circ$) *(Manobra em curva fechada)*
-  * **Nível 1:** Até $2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) $\to \phi_{\max} = 0{,}250\text{ rad}$ ($14{,}3^\circ$) *(Curva intermediária)*
+> [!NOTE]
+> **Internamente na memória e nos logs:**  
+> Independentemente de ter sido informado como `100%` ou `0.50`, a função converte e armazena o valor **sempre em radianos** dentro da struct `v_phi_reference_point_t`.  
+> Por isso, nos cálculos matemáticos, nas mensagens de erro (`ASTRO_ERROR_CODE_205`) e nos prints do terminal, o valor exibido já aparece como **radianos** e **graus** (ex: `0.500 rad (28.6°)`).
+
+* **Quantidade de pontos no exemplo:** `3`
+* **Pontos de envelope resultantes:**
+  * **Nível 0:** Até $1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) $\to \phi_{\max} = 100\% = 0{,}500\text{ rad}$ ($28{,}6^\circ$) *(Manobra em curva fechada)*
+  * **Nível 1:** Até $2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) $\to \phi_{\max} = 50\% = 0{,}250\text{ rad}$ ($14{,}3^\circ$) *(Curva intermediária)*
   * **Nível 2:** Até $2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) $\to \phi_{\max} = 0{,}200\text{ rad}$ ($11{,}5^\circ$) *(Velocidade de cruzeiro em reta)*
 
 ```mermaid
@@ -204,3 +222,4 @@ cd ~/astro/bin
 ```
 
 No Terminal 1, você verá o fluxo em 4 etapas detalhando a intervenção no primeiro comando que viola o limite e mantendo o resumo consolidado dos 50 comandos atenuados.
+
