@@ -57,37 +57,40 @@ Para cada comando de movimento vindo do MPP, o OA executa quatro passos bem defi
 
 ```mermaid
 flowchart TD
-    CMD["Plano do MPP é Recebido<br>"] --> E1
+    CMD["Plano do MPP é Recebido"] --> E1
     
     subgraph E1 ["Etapa 1: Diagnóstico de Esterçamento"]
         D1["Busca qual é o intervalo de v na tabela"]
-        D1 --> D2["retorna o phi_maximo para essa velocidade v"]
+        D1 --> D2["Retorna o phi_maximo para essa velocidade v"]
     end
     
     E1 --> E2
     
     subgraph E2 ["Etapa 2: Avaliar se o phi_atual está no limite seguro"]
         C1{"phi_atual > phi_max?"}
-        C2 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
-        C3 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
-        style C1 fill:#c8e6c9,stroke:#388e3c,color:#000
+        C1 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
+        C1 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
     end
     
     ALERTA --> E3
     
-    subgraph E3 ["Etapa 3: Tratamento "]
-        T1["Qual velocidade aguenta phi = 0.500 rad?"]
-        T1 --> T2["Busca na tabela:<br>Para phi = 0.500 rad -> v_segura = 1.50 m/s"]
+    subgraph E3 ["Etapa 3: Tratamento (Cálculo da Cura)"]
+        T1["Qual velocidade aguenta o phi_atual?"]
+        T1 --> T2["Busca na tabela:<br>Retorna v_segura correspondente"]
     end
     
     E3 --> E4
     
     subgraph E4 ["Etapa 4: Atuação nos Comandos"]
-        A1["Reduz v: 2.00 -> 1.50 m/s"]
-        A2["Dilata tempo (dt): 0.100s -> 0.125s<br>(Preserva geometria da curva)"]
+        A1["Reduz v para v_segura"]
+        A2["Dilata tempo (dt)<br>(Preserva geometria da curva)"]
         A3["Publica ASTRO_ERROR_CODE_205"]
-        A1 --- A2 --- A3
+        A1 --> A2 --> A3
     end
+
+    style OK fill:#c8e6c9,stroke:#388e3c,color:#000
+    style ALERTA fill:#ffcdd2,stroke:#d32f2f,color:#000
+    style C1 fill:#fff9c4,stroke:#fbc02d,color:#000
 ```
 
 ---
