@@ -117,7 +117,7 @@ flowchart TD
     style C1 fill:#fff9c4,stroke:#fbc02d,color:#000
 ```
 
-> [!NOTE]
+> [!IMPORTANT]
 > *** O **`ASTRO_ERROR_CODE_205`** e a **publicação do plano com a velocidade limitada** só serão executados se o parâmetro `obstacle_avoider_use_hold_velocity_to_reference_phi` estiver ativado (`on` / `1`).  
 > Esse parâmetro define se o Obstacle Avoider deve **intervir fisicamente na velocidade do veículo** ou **apenas monitorar** gravando a ocorrência no buffer de auditoria (`audit`).
 
