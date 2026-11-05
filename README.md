@@ -78,50 +78,6 @@ $$\phi_{\max} = \phi_0 + t \cdot (\phi_1 - \phi_0)$$
 
 Isso garante que a transição de velocidade e volante seja **100% suave e livre de trancos operacionais** em qualquer valor decimal de velocidade enviado pelo planejador.
 
-#### Exemplo Prático com os Logs Reais do Sistema ($v = 1{,}75\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$):
-Veja como o algoritmo calcula matematicamente e como isso se reflete no log de execução:
-
-1. **Localização do intervalo na tabela:**  
-   $v = 1{,}75\text{ m/s}$ cai exatamente no meio do intervalo entre $v_0 = 1{,}50\text{ m/s}$ ($\phi_0 = 0{,}500\text{ rad}$) e $v_1 = 2{,}00\text{ m/s}$ ($\phi_1 = 0{,}250\text{ rad}$).
-
-2. **Cálculo da rampa ($t$):**  
-   $$t = \frac{1{,}75 - 1{,}50}{2{,}00 - 1{,}50} = \frac{0{,}25}{0{,}50} = 0{,}50 \quad (50\%\text{ da rampa})$$
-
-3. **Cálculo do $\phi_{\max}$ interpolado:**  
-   $$\phi_{\max} = 0{,}500 + 0{,}50 \cdot (0{,}250 - 0{,}500) = 0{,}500 - 0{,}125 = \mathbf{0{,}375\text{ rad}}\ (21{,}5^\circ)$$
-
-4. **Log gerado em tempo real pelo `obstacle_avoider`:**
-```text
-========================================================================================
-[OA PHI LIMIT] Avaliando Plano com 400 comandos contra tabela de referencia (3 niveis)
-========================================================================================
-
---- Detalhes do Comando [0/400] | v_original: 1.75 m/s | phi_original: 0.500 rad (28.6°) ---
-
-  [Etapa 1] Procurando intervalo de velocidade para v = 1.75 m/s (6.3 km/h):
-    - Avaliando intervalo de v: [1.50 m/s, 2.00 m/s] -> [ENCONTRADO]
-      -> phi maximo para essa velocidade eh de: 0.375 rad (21.5°)
-
-  [Etapa 2] Comparando phi atual com limite seguro:
-    -> EXCEDEU LIMITE! (phi 0.500 rad > phi_seguro de 0.375 rad). Necessario limitar velocidade!
-
-  [Etapa 3] Calculando velocidade maxima permitida para conseguir fazer a curva de phi = 0.500 rad (28.6°):
-    -> phi_Atual (0.500 rad) >= phi_max configurado (0.500 rad).
-    -> Retornando v_minima segura da referencia: 1.50 m/s (5.4 km/h)
-
-  [Etapa 4] Atuacao do Obstacle Avoider:
-    -> Velocidade do plano: 1.75 -> 1.50 m/s (6.3 -> 5.4 km/h)
-    -> Tempo do comando compensado: 0.098 s -> 0.112 s
-
->>> [OA Phi Limit] 50/400 comandos limitados por exceder phi de referencia <<<
-
-ASTRO_ERROR_CODE_205 - Ângulo de articulação (phi) excedeu o limite seguro para a velocidade atual. Velocidade linear do veículo limitada para garantir a estabilidade do robô e dos reboques. Esses limites vem do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
-```
-
-> [!TIP]
-> **Por que a velocidade caiu para $1{,}50\text{ m/s}$ na Etapa 3?**  
-> Como o MPP exigiu esterçamento total ($\phi = 0{,}500\text{ rad} = 28{,}6^\circ$), o OA respeita a geometria da curva e busca na tabela qual a velocidade máxima segura para suportar $0{,}500\text{ rad}$. Pela tabela, esse ângulo só é permitido até $1{,}50\text{ m/s}$. Logo, a velocidade é reduzida de $1{,}75$ para $1{,}50\text{ m/s}$.
-
 ---
 
 ## 3. O Fluxo de Decisão em 4 Etapas
@@ -217,7 +173,54 @@ Velocidade linear do veículo limitada para garantir a estabilidade do robô e d
 
 ---
 
-### Caso 2: Plano no Limite Seguro ($v = 1{,}50\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
+### Caso 2: Interpolação Linear Intermediária ($v = 1{,}75\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
+
+Este caso ilustra perfeitamente na prática o conceito de **interpolação linear contínua** explicado na **Seção 2** do guia. 
+
+Aqui, o planejador enviou uma velocidade intermediária ($1{,}75\text{ m/s}$), que não coincide com nenhum ponto exato da tabela, mas está no intervalo $[1{,}50\text{ m/s}, 2{,}00\text{ m/s}]$.
+
+```text
+========================================================================================
+[OA PHI LIMIT] Avaliando Plano com 400 comandos contra tabela de referencia (3 niveis)
+========================================================================================
+
+--- Detalhes do Comando [0/400] | v_original: 1.75 m/s | phi_original: 0.500 rad (28.6°) ---
+
+  [Etapa 1] Procurando intervalo de velocidade para v = 1.75 m/s (6.3 km/h):
+    - Avaliando intervalo de v: [1.50 m/s, 2.00 m/s] -> [ENCONTRADO]
+      -> phi maximo para essa velocidade eh de: 0.375 rad (21.5°)
+
+  [Etapa 2] Comparando phi atual com limite seguro:
+    -> EXCEDEU LIMITE! (phi 0.500 rad > phi_seguro de 0.375 rad). Necessario limitar velocidade!
+
+  [Etapa 3] Calculando velocidade maxima permitida para conseguir fazer a curva de phi = 0.500 rad (28.6°):
+    -> phi_Atual (0.500 rad) >= phi_max configurado (0.500 rad).
+    -> Retornando v_minima segura da referencia: 1.50 m/s (5.4 km/h)
+
+  [Etapa 4] Atuacao do Obstacle Avoider:
+    -> Velocidade do plano: 1.75 -> 1.50 m/s (6.3 -> 5.4 km/h)
+    -> Tempo do comando compensado: 0.098 s -> 0.112 s
+
+>>> [OA Phi Limit] 50/400 comandos limitados por exceder phi de referencia <<<
+
+ASTRO_ERROR_CODE_205 - Ângulo de articulação (phi) excedeu o limite seguro para a velocidade atual. Velocidade linear do veículo limitada para garantir a estabilidade do robô e dos reboques. Esses limites vem do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
+```
+
+#### Justificativa matemática com base na Seção 2:
+1. **Posição na Rampa ($t$):**  
+   $$t = \frac{v - v_0}{v_1 - v_0} = \frac{1{,}75 - 1{,}50}{2{,}00 - 1{,}50} = \frac{0{,}25}{0{,}50} = 0{,}50 \quad (50\%\text{ da rampa})$$
+   A velocidade de $1{,}75\text{ m/s}$ está exatamente na metade do caminho entre $1{,}50\text{ m/s}$ e $2{,}00\text{ m/s}$.
+
+2. **Cálculo do $\phi_{\max}$ na Etapa 1:**  
+   $$\phi_{\max} = \phi_0 + t \cdot (\phi_1 - \phi_0) = 0{,}500 + 0{,}50 \cdot (0{,}250 - 0{,}500) = \mathbf{0{,}375\text{ rad}}\ (21{,}5^\circ)$$
+   O algoritmo não aplica nenhum "degrau": ele traça a reta e calcula com precisão que para $1{,}75\text{ m/s}$ o limite seguro é exatamente $0{,}375\text{ rad}$.
+
+3. **Por que a velocidade caiu para $1{,}50\text{ m/s}$ na Etapa 3?**  
+   Como o plano pedia $\phi = 0{,}500\text{ rad}$ ($28{,}6^\circ$) e a **Regra de Ouro** proíbe abrir a curva, o OA busca qual a velocidade máxima segura para contornar uma curva fechada com $\phi = 0{,}500\text{ rad}$. Como visto na tabela da Seção 2, $0{,}500\text{ rad}$ só é admitido a até $1{,}50\text{ m/s}$. Logo, a velocidade é reduzida para $1{,}50\text{ m/s}$.
+
+---
+
+### Caso 3: Plano no Limite Seguro ($v = 1{,}50\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
 
 No ciclo seguinte, o plano em execução já opera na velocidade reduzida:
 
@@ -243,7 +246,7 @@ No ciclo seguinte, o plano em execução já opera na velocidade reduzida:
 
 ---
 
-### Caso 3: Manobra em Baixa Velocidade ($v = 0{,}81\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
+### Caso 4: Manobra em Baixa Velocidade ($v = 0{,}81\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
 
 O caminhão está quase parado ou manobrando abaixo do menor piso de velocidade configurado ($0{,}81 < 1{,}50\text{ m/s}$):
 
