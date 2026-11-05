@@ -23,7 +23,7 @@ A tabela de calibração é carregada do arquivo `.ini` (ou linha de comando) at
 A função de leitura [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744) é flexível e aceita **dois formatos** para especificar o ângulo $\phi$:
 
 1. **Porcentagem com `%`:** O valor é calculado como uma porcentagem do esterçamento máximo da cabine (`astro_robot_ackerman_config->max_phi`):
-   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\_veículo}}$$
+   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max-veículo}}$$
    *Exemplo:* se o `max_phi` do caminhão for $0{,}500\text{ rad}$ ($28{,}6^\circ$), então `100%` $\to 0{,}500\text{ rad}$ e `50%` $\to 0{,}250\text{ rad}$.
 2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
    *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
