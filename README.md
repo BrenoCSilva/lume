@@ -109,7 +109,7 @@ flowchart TD
     T2 --> A1
     
     subgraph E4 ["Etapa 4: Atuação nos Comandos"]
-        A1["Reduz v para v_maximo_seguro"] --> A2["Dilata tempo (dt)<br>(Preserva geometria da curva)"] --> A3["Publica ASTRO_ERROR_CODE_205"]
+        A1["Reduz v para v_maximo_seguro"] --> A2["Dilata tempo (dt)<br>(Preserva geometria da curva)"] --> A3["Publica ASTRO_ERROR_CODE_205***"]
     end
 
     style OK fill:#c8e6c9,stroke:#388e3c,color:#000
@@ -117,34 +117,9 @@ flowchart TD
     style C1 fill:#fff9c4,stroke:#fbc02d,color:#000
 ```
 
-### 3.1. Modos de Operação: Ativo vs. Auditoria (`use_hold_velocity_to_reference_phi`)
-
-O parâmetro de linha de comando e configuração `-obstacle_avoider_use_hold_velocity_to_reference_phi` define se o Obstacle Avoider deve **intervir fisicamente na velocidade do veículo** ou apenas **monitorar em modo silencioso (Shadow Mode)**:
-
-```mermaid
-flowchart TD
-    E["Violação de phi Detectada na Etapa 2"] --> COND{"use_hold_velocity_to_reference_phi == 1?"}
-    
-    COND -->|Sim: Modo Ativo| ACT["1. set_new_motion_command_needs_to_be_published(1)<br>2. Publica plano alterado (freia o veículo)<br>3. Dispara ASTRO_ERROR_CODE_205 no Dashboard"]
-    
-    COND -->|Não: Modo Auditoria| AUD["1. NÃO altera o plano publicado (veículo segue v original)<br>2. NÃO dispara erro na rede<br>3. Grava aviso silencioso em astro_logging_info (Auditoria)"]
-
-    style ACT fill:#ffcdd2,stroke:#d32f2f,color:#000
-    style AUD fill:#fff9c4,stroke:#fbc02d,color:#000
-```
-
-| Comportamento | `use_hold... = 1` (Modo Ativo / Proteção Real) | `use_hold... = 0` (Modo Auditoria / Shadow Mode) |
-| :--- | :--- | :--- |
-| **Diagnóstico (Etapas 1 a 3)** | Executa 100% igual | Executa 100% igual |
-| **Comando enviado à Cabine** | **Plano com velocidade reduzida** (freia para segurança) | **Plano original do MPP** (não reduz velocidade) |
-| **Alarme do Sistema** | Dispara **`ASTRO_ERROR_CODE_205`** na rede IPC e telas | Silencioso na operação |
-| **Destino do Registro** | Dashboard operacional e telemetria de erro | Buffer de auditoria (`astro_logging_info`) |
-
-> [!TIP]
-> **Para que serve o Modo Auditoria (`off`)?**  
-> Ele é ideal para fases de teste ou validação de novas calibrações em campo. A engenharia consegue verificar através dos logs de auditoria se a tabela causaria intervenções indesejadas na rota, **sem arriscar frenagens inesperadas ou paradas do caminhão**.
-
----
+> [!NOTE]
+> *** O **`ASTRO_ERROR_CODE_205`** e a **publicação do plano com a velocidade limitada** só serão executados se o parâmetro `obstacle_avoider_use_hold_velocity_to_reference_phi` estiver ativado (`on` / `1`).  
+> Esse parâmetro define se o Obstacle Avoider deve **intervir fisicamente na velocidade do veículo** ou **apenas monitorar** gravando a ocorrência no buffer de auditoria (`audit`).
 
 ## 4. Análise de caso simulado
 
