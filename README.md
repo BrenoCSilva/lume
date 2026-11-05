@@ -30,7 +30,7 @@ obstacle_avoider_v_and_max_phi_reference_points  3 1.5 0.50 2.0 0.25 2.77 0.20
 A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744) aceita **dois formatos** para especificar o ângulo $\phi$:
 
 1. **Porcentagem com `%`:** O valor é calculado como uma porcentagem do esterçamento máximo da cabine (`astro_robot_ackerman_config->max_phi`):
-   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\_veículo}}$$
+   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\-veículo}}$$
    *Exemplo:* se o `max_phi` do caminhão for $0{,}500\text{ rad}$ ($28{,}6^\circ$), então `100%` $\to 0{,}500\text{ rad}$ e `50%` $\to 0{,}250\text{ rad}$.
 2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
    *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
@@ -40,7 +40,9 @@ A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_
 | $\le 1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) | $\le 0{,}500\text{ rad}$ ($28{,}6^\circ$) | `100%` |
 | $\le 2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) | $\le 0{,}250\text{ rad}$ ($14{,}3^\circ$) | `50%` |
 | $\le 2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) | $\le 0{,}200\text{ rad}$ ($11{,}5^\circ$) | `40%` |
-A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
+
+> [!NOTE]
+>A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
 
 
 ---
