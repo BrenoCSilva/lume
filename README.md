@@ -74,9 +74,9 @@ flowchart TD
     
     ALERTA --> E3
     
-    subgraph E3 ["Etapa 3: Tratamento (Cálculo da Cura)"]
+    subgraph E3 ["Etapa 3: Identificando v_maximo permitido pelo limite_seguro"]
         T1["Qual velocidade aguenta o phi_atual?"]
-        T1 --> T2["Busca na tabela:<br>Retorna v_segura correspondente"]
+        T1 --> T2["Busca na tabela:<br>Retorna v_max correspondente"]
     end
     
     E3 --> E4
