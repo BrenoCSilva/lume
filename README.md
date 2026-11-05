@@ -117,6 +117,33 @@ flowchart TD
     style C1 fill:#fff9c4,stroke:#fbc02d,color:#000
 ```
 
+### 3.1. Modos de Operação: Ativo vs. Auditoria (`use_hold_velocity_to_reference_phi`)
+
+O parâmetro de linha de comando e configuração `-obstacle_avoider_use_hold_velocity_to_reference_phi` define se o Obstacle Avoider deve **intervir fisicamente na velocidade do veículo** ou apenas **monitorar em modo silencioso (Shadow Mode)**:
+
+```mermaid
+flowchart TD
+    E["Violação de phi Detectada na Etapa 2"] --> COND{"use_hold_velocity_to_reference_phi == 1?"}
+    
+    COND -->|Sim: Modo Ativo| ACT["1. set_new_motion_command_needs_to_be_published(1)<br>2. Publica plano alterado (freia o veículo)<br>3. Dispara ASTRO_ERROR_CODE_205 no Dashboard"]
+    
+    COND -->|Não: Modo Auditoria| AUD["1. NÃO altera o plano publicado (veículo segue v original)<br>2. NÃO dispara erro na rede<br>3. Grava aviso silencioso em astro_logging_info (Auditoria)"]
+
+    style ACT fill:#ffcdd2,stroke:#d32f2f,color:#000
+    style AUD fill:#fff9c4,stroke:#fbc02d,color:#000
+```
+
+| Comportamento | `use_hold... = 1` (Modo Ativo / Proteção Real) | `use_hold... = 0` (Modo Auditoria / Shadow Mode) |
+| :--- | :--- | :--- |
+| **Diagnóstico (Etapas 1 a 3)** | Executa 100% igual | Executa 100% igual |
+| **Comando enviado à Cabine** | **Plano com velocidade reduzida** (freia para segurança) | **Plano original do MPP** (não reduz velocidade) |
+| **Alarme do Sistema** | Dispara **`ASTRO_ERROR_CODE_205`** na rede IPC e telas | Silencioso na operação |
+| **Destino do Registro** | Dashboard operacional e telemetria de erro | Buffer de auditoria (`astro_logging_info`) |
+
+> [!TIP]
+> **Para que serve o Modo Auditoria (`off`)?**  
+> Ele é ideal para fases de teste ou validação de novas calibrações em campo. A engenharia consegue verificar através dos logs de auditoria se a tabela causaria intervenções indesejadas na rota, **sem arriscar frenagens inesperadas ou paradas do caminhão**.
+
 ---
 
 ## 4. Análise de caso simulado
@@ -164,7 +191,7 @@ ASTRO_ERROR_CODE_205 - Ângulo de articulação (phi) excedeu o limite seguro pa
 Velocidade linear do veículo limitada para garantir a estabilidade do robô e dos reboques.
 ```
 
-#### O que o log nos ensina:
+#### O que o log apresenta:
 1. **Etapa 1:** A $2{,}00\text{ m/s}$, o ângulo limite é de $0{,}250\text{ rad}$ ($14{,}3^\circ$).
 2. **Etapa 2:** O comando pede $0{,}500\text{ rad}$. Como $0{,}500 > 0{,}250$, o limite de estabilidade foi violado.
 3. **Etapa 3:** Como o caminhão **não pode mudar o traçado da curva**, o OA calcula qual a velocidade que suporta essa curva fechada de $0{,}500\text{ rad}$. A resposta é $1{,}50\text{ m/s}$.
@@ -288,28 +315,11 @@ cd ~/astro/bin
 ```bash
 cd ~/astro/bin
 
-# 1. Teste padrão (v = 1.5 m/s, phi = 0.500 rad):
-./obstacle_avoider_test
-
-# 2. Teste com interpolação intermediária (v = 1.75 m/s, phi = 0.500 rad):
+#  Teste com interpolação intermediária (v = 1.75 m/s, phi = 0.500 rad):
 ./obstacle_avoider_test 1.75 0.500
 
-# 3. Teste em alta velocidade (v = 2.50 m/s, phi = 0.350 rad):
+# Teste em alta velocidade (v = 2.50 m/s, phi = 0.350 rad):
 ./obstacle_avoider_test 2.50 0.350
 ```
 
 No Terminal 1, você verá o fluxo em 4 etapas detalhando a intervenção no primeiro comando que viola o limite e mantendo o resumo consolidado dos 50 comandos atenuados.
-
-
-
-## 1. O Problema Físico e a Regra de Ouro
-
-Ao entrar em uma curva, a aceleração lateral exercida sobre a cabine e os reboques cresce com o quadrado da velocidade e com a curvatura ($a_c \approx \frac{v^2}{R} = v^2 \cdot \frac{|\tan(\phi)|}{L}$).
-
-> [!IMPORTANT]
-> **A Regra de Ouro do Obstacle Avoider:**  
-> O `obstacle_avoider` **NUNCA altera o ângulo de esterçamento ($\phi$)** de um comando planejado pelo MPP.  
-> Se o OA alterasse $\phi$, as rodas dianteiras abririam ou fechariam o traçado, fazendo o caminhão **sair da pista autorizada ou colidir com proteções laterais**.  
-> Portanto, o OA **respeita rigorosamente a geometria da curva** e atua **exclusivamente no acelerador e no freio**, reduzindo a velocidade linear ($v$) para um teto onde o esterçamento exigido seja 100% seguro.
-
----
