@@ -73,7 +73,6 @@ flowchart TD
         T1["Qual velocidade aguenta o phi_atual?"]
         T1 --> T2["Busca na tabela:<br>Retorna v_max correspondente"]
     end
-    
     E3 --> E4
     
     subgraph E4 ["Etapa 4: Atuação nos Comandos"]
