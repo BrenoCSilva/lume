@@ -35,17 +35,12 @@ A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_
 2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
    *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
 
-```mermaid
-graph LR
-    E["Velocidade Baixa<br>(1.50 m/s / 5.4 km/h)"] --- F["Ângulo Máximo Permitido<br>(phi <= 0.50 rad / 28.6°)"]
-    C["Velocidade Média<br>(2.00 m/s / 7.2 km/h)"] --- D["Ângulo Médio Permitido<br>(phi <= 0.25 rad / 14.3°)"]
-    A["Velocidade Alta<br>(2.77 m/s / 10 km/h)"] --- B["Ângulo Pequeno Permitido<br>(phi <= 0.20 rad / 11.5°)"]
-    
-    style A fill:#ffcdd2,stroke:#d32f2f,color:#000
-    style B fill:#ffcdd2,stroke:#d32f2f,color:#000
-    style E fill:#c8e6c9,stroke:#388e3c,color:#000
-    style F fill:#c8e6c9,stroke:#388e3c,color:#000
-```
+| Velocidade Máxima ($v$) | Esterçamento Máximo ($\phi_{\max}$) | Porcentagem do Volante | Comportamento da Composição |
+| :--- | :--- | :--- | :---: | :--- |
+| $\le 1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) | $\le 0{,}500\text{ rad}$ ($28{,}6^\circ$) | `100%` | Manobras de pátio e curvas fechadas com estabilidade total |
+| $\le 2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) | $\le 0{,}250\text{ rad}$ ($14{,}3^\circ$) | `50%` | Curvas intermediárias com aceleração lateral controlada |
+| * | $\le 2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) | $\le 0{,}200\text{ rad}$ ($11{,}5^\circ$) | `40%` | Velocidade de cruzeiro em traçado predominantemente reto |
+
 
 A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
 
