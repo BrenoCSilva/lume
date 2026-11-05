@@ -50,16 +50,12 @@ Se o sistema funcionasse por degraus rígidos, uma aceleração de apenas $0{,}0
 
 Por isso, o Obstacle Avoider traça retas contínuas entre cada par de pontos:
 
-```text
-phi (rad)
-  ^
-0.50 |======\ [0.0 a 1.50 m/s: Saturado no topo em 0.50 rad / 28.6°]
-     |       \
-0.25 |        \-------\ [Intervalo 1: Interpola suavemente de 1.50 a 2.00 m/s]
-     |                 \
-0.20 |                  \========== [Intervalo 2: Interpola suavemente de 2.00 a 2.77 m/s]
-     +--------+--------+--------+----> v (m/s)
-    0.0      1.5      2.0      2.77
+```mermaid
+xychart-beta
+    title "Envelope Contínuo de Estabilidade: phi_max(v)"
+    x-axis "Velocidade v (m/s)" ["0.00", "0.50", "1.00", "1.50 (v0)", "1.75", "2.00 (v1)", "2.38", "2.77 (v2)", "3.20"]
+    y-axis "Esterçamento Máximo Permitido (rad)" 0.0 --> 0.6
+    line [0.50, 0.50, 0.50, 0.50, 0.375, 0.25, 0.225, 0.20, 0.20]
 ```
 
 * **Abaixo de $1{,}50\text{ m/s}$ ($v < v_{\min}$):** Velocidade de manobra lenta. O caminhão tem total segurança contra tombamento, então o esterçamento é liberado no limite máximo ($0{,}500\text{ rad} = 28{,}6^\circ$).
