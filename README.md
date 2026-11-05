@@ -42,7 +42,10 @@ A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_
 | $\le 2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) | $\le 0{,}200\text{ rad}$ ($11{,}5^\circ$) | `40%` |
 A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
 
-### Como a Tabela Opera: Interpolação Linear Contínua (Sem Degraus Bruscos)
+
+---
+
+## 2. A Tabela de Calibração Interpolação Linear Contínua (Sem Degraus Bruscos)
 
 Os pontos configurados na tabela **não funcionam como degraus fixos**, mas sim como **pontos de controle de uma rampa suave (interpolação linear)**. 
 
@@ -74,6 +77,50 @@ $$t = \frac{v_{\text{atual}} - v_0}{v_1 - v_0}$$
 $$\phi_{\max} = \phi_0 + t \cdot (\phi_1 - \phi_0)$$
 
 Isso garante que a transição de velocidade e volante seja **100% suave e livre de trancos operacionais** em qualquer valor decimal de velocidade enviado pelo planejador.
+
+#### Exemplo Prático com os Logs Reais do Sistema ($v = 1{,}75\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$):
+Veja como o algoritmo calcula matematicamente e como isso se reflete no log de execução:
+
+1. **Localização do intervalo na tabela:**  
+   $v = 1{,}75\text{ m/s}$ cai exatamente no meio do intervalo entre $v_0 = 1{,}50\text{ m/s}$ ($\phi_0 = 0{,}500\text{ rad}$) e $v_1 = 2{,}00\text{ m/s}$ ($\phi_1 = 0{,}250\text{ rad}$).
+
+2. **Cálculo da rampa ($t$):**  
+   $$t = \frac{1{,}75 - 1{,}50}{2{,}00 - 1{,}50} = \frac{0{,}25}{0{,}50} = 0{,}50 \quad (50\%\text{ da rampa})$$
+
+3. **Cálculo do $\phi_{\max}$ interpolado:**  
+   $$\phi_{\max} = 0{,}500 + 0{,}50 \cdot (0{,}250 - 0{,}500) = 0{,}500 - 0{,}125 = \mathbf{0{,}375\text{ rad}}\ (21{,}5^\circ)$$
+
+4. **Log gerado em tempo real pelo `obstacle_avoider`:**
+```text
+========================================================================================
+[OA PHI LIMIT] Avaliando Plano com 400 comandos contra tabela de referencia (3 niveis)
+========================================================================================
+
+--- Detalhes do Comando [0/400] | v_original: 1.75 m/s | phi_original: 0.500 rad (28.6°) ---
+
+  [Etapa 1] Procurando intervalo de velocidade para v = 1.75 m/s (6.3 km/h):
+    - Avaliando intervalo de v: [1.50 m/s, 2.00 m/s] -> [ENCONTRADO]
+      -> phi maximo para essa velocidade eh de: 0.375 rad (21.5°)
+
+  [Etapa 2] Comparando phi atual com limite seguro:
+    -> EXCEDEU LIMITE! (phi 0.500 rad > phi_seguro de 0.375 rad). Necessario limitar velocidade!
+
+  [Etapa 3] Calculando velocidade maxima permitida para conseguir fazer a curva de phi = 0.500 rad (28.6°):
+    -> phi_Atual (0.500 rad) >= phi_max configurado (0.500 rad).
+    -> Retornando v_minima segura da referencia: 1.50 m/s (5.4 km/h)
+
+  [Etapa 4] Atuacao do Obstacle Avoider:
+    -> Velocidade do plano: 1.75 -> 1.50 m/s (6.3 -> 5.4 km/h)
+    -> Tempo do comando compensado: 0.098 s -> 0.112 s
+
+>>> [OA Phi Limit] 50/400 comandos limitados por exceder phi de referencia <<<
+
+ASTRO_ERROR_CODE_205 - Ângulo de articulação (phi) excedeu o limite seguro para a velocidade atual. Velocidade linear do veículo limitada para garantir a estabilidade do robô e dos reboques. Esses limites vem do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
+```
+
+> [!TIP]
+> **Por que a velocidade caiu para $1{,}50\text{ m/s}$ na Etapa 3?**  
+> Como o MPP exigiu esterçamento total ($\phi = 0{,}500\text{ rad} = 28{,}6^\circ$), o OA respeita a geometria da curva e busca na tabela qual a velocidade máxima segura para suportar $0{,}500\text{ rad}$. Pela tabela, esse ângulo só é permitido até $1{,}50\text{ m/s}$. Logo, a velocidade é reduzida de $1{,}75$ para $1{,}50\text{ m/s}$.
 
 ---
 
@@ -237,7 +284,15 @@ cd ~/astro/bin
 ### Terminal 2: Injetar a trajetória de teste
 ```bash
 cd ~/astro/bin
+
+# 1. Teste padrão (v = 1.5 m/s, phi = 0.500 rad):
 ./obstacle_avoider_test
+
+# 2. Teste com interpolação intermediária (v = 1.75 m/s, phi = 0.500 rad):
+./obstacle_avoider_test 1.75 0.500
+
+# 3. Teste em alta velocidade (v = 2.50 m/s, phi = 0.350 rad):
+./obstacle_avoider_test 2.50 0.350
 ```
 
 No Terminal 1, você verá o fluxo em 4 etapas detalhando a intervenção no primeiro comando que viola o limite e mantendo o resumo consolidado dos 50 comandos atenuados.
