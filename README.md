@@ -38,49 +38,46 @@ Diferente de módulos puramente orientados a eventos de IPC, o simulador opera d
 O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN até a atualização física e o posterior envio periódico de telemetria:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'fontSize': '13px' }}}%%
 flowchart TD
-    classDef default padding:12px;
-
-    subgraph EntradaCAN ["Entrada de Dados CAN"]
-        CAN_IN["&nbsp;&nbsp;&nbsp;&nbsp;Barramento CAN (Entrada)&nbsp;&nbsp;&nbsp;&nbsp;<br/>Chegada de Comandos de Controle"]
+    subgraph EntradaCAN ["1. Entrada de Dados CAN"]
+        CAN_IN["&nbsp;&nbsp;&nbsp;Barramento Físico / Virtual CAN&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>Entrada de Comandos</b>"]
     end
 
-    CAN_IN -->|"Frames CAN recebidos"| RECV["recv_frame()<br/>Bloqueia até o próximo pacote"]
+    CAN_IN -->|"Chegada de frames CAN"| RECV["&nbsp;&nbsp;&nbsp;Leitura do Socket CAN&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>recv_frame()</b><br/>&nbsp;&nbsp;&nbsp;Bloqueia até chegar pacote&nbsp;&nbsp;&nbsp;"]
 
-    subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
-        RECV --> UPDATE["update_state_from_can()"]
-        UPDATE --> PARSER_CHECK{"Validação do DBC:<br/>valid_parser == true?"}
+    subgraph ThreadEscuta ["2. Thread de Escuta (update_state_thread)"]
+        RECV --> UPDATE["&nbsp;&nbsp;&nbsp;Roteamento de Entrada&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>update_state_from_can()</b>"]
+        UPDATE --> PARSER_CHECK{"&nbsp;&nbsp;&nbsp;Modo DBC Ativo?&nbsp;&nbsp;&nbsp;<br/>valid_parser == true"}
         
-        PARSER_CHECK -- "Sim (Modo DBC)" --> PROC_DBC["process_frame_from_dbc_mode()<br/>Leitura da mensagem 'write'"]
-        PARSER_CHECK -- "Não (Legado)" --> PROC_LEGACY["process_astro_can_message()<br/>Processamento por IDs fixos"]
+        PARSER_CHECK -- "Sim" --> PROC_DBC["&nbsp;&nbsp;&nbsp;Processamento via DBC&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>process_frame_from_dbc_mode()</b><br/>&nbsp;&nbsp;&nbsp;Lê sinais da mensagem 'write'&nbsp;&nbsp;&nbsp;"]
+        PARSER_CHECK -- "Não" --> PROC_LEGACY["&nbsp;&nbsp;&nbsp;Processamento Legado&nbsp;&nbsp;&nbsp;<br/><b style='color:#ffb74d'>process_astro_can_message()</b><br/>&nbsp;&nbsp;&nbsp;Decodifica por IDs fixos&nbsp;&nbsp;&nbsp;"]
 
-        PROC_DBC --> EXTRACT["Extração de Sinais via DBC:<br/>• Gear (Comando de Marcha)<br/>• ThrottleEffort (Acelerador)<br/>• BrakesEffort (Freio)<br/>• SteeringEffort (Volante)"]
-        EXTRACT --> CALC_DYN["Cálculo da Dinâmica Veicular:<br/>• Velocidade (Aceleração e Freio)<br/>• Ângulo Phi (Esterçamento)"]
-        CALC_DYN --> SET_TARGET["set_target_v_and_target_phi()<br/>Salva na struct estática"]
+        PROC_DBC --> EXTRACT["&nbsp;&nbsp;&nbsp;Extração de Sinais (read_signal)&nbsp;&nbsp;&nbsp;<br/>• Gear (Marcha)<br/>• ThrottleEffort (Acelerador)<br/>• BrakesEffort (Freio)<br/>• SteeringEffort (Volante)"]
+        EXTRACT --> CALC_DYN["&nbsp;&nbsp;&nbsp;Cálculo da Dinâmica Veicular&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>compute_v_from_throttle...()</b><br/><b style='color:#4fc3f7'>compute_phi_from_steering...()</b>"]
+        CALC_DYN --> SET_TARGET["&nbsp;&nbsp;&nbsp;Atualização de Comando Alvo&nbsp;&nbsp;&nbsp;<br/><b style='color:#69f0ae'>set_target_v_and_target_phi()</b><br/>&nbsp;&nbsp;&nbsp;Salva na struct estática&nbsp;&nbsp;&nbsp;"]
     end
 
-    subgraph MemoriaCompartilhada ["Memória Compartilhada do Simulador"]
-        SET_TARGET --> MEM["Vetor de Comandos Alvo:<br/>simulator_config-><br/>current_motion_command_vector<br/>(Struct static permanente na RAM)"]
+    subgraph MemoriaCompartilhada ["3. Memória Compartilhada do Simulador"]
+        SET_TARGET --> MEM["&nbsp;&nbsp;&nbsp;Vetor de Comandos Alvo&nbsp;&nbsp;&nbsp;<br/><b style='color:#ffb74d'>current_motion_command_vector</b><br/>&nbsp;&nbsp;&nbsp;Struct static permanente na RAM&nbsp;&nbsp;&nbsp;"]
     end
 
-    subgraph ThreadSimulacao ["2. Thread de Simulação e Envio (one_simulation_step)"]
-        TIMER["Timer Periódico de Simulação<br/>Clock cíclico: 20 ms / 50 Hz"] --> SIM_STEP["simulate_car_and_publish_readings()"]
+    subgraph ThreadSimulacao ["4. Thread de Simulação e Envio (one_simulation_step)"]
+        TIMER["&nbsp;&nbsp;&nbsp;Timer Periódico de Simulação&nbsp;&nbsp;&nbsp;<br/>Clock cíclico: 20 ms (50 Hz)"] --> SIM_STEP["&nbsp;&nbsp;&nbsp;Passo da Simulação&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>simulate_car_and_publish_readings()</b>&nbsp;&nbsp;&nbsp;"]
         
-        MEM -.->|"Consome comando alvo"| RECALC["Atualização da Física do Carro:<br/>astro_simulator_ackerman_<br/>recalc_pos()<br/>(Atualiza odometria e posição)"]
+        MEM -.->|"Consome v e phi"| RECALC["&nbsp;&nbsp;&nbsp;Integração Cinemática Ackermann&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>astro_simulator_ackerman_recalc_pos()</b>&nbsp;&nbsp;&nbsp;<br/>&nbsp;&nbsp;&nbsp;Atualiza odometria e posição&nbsp;&nbsp;&nbsp;"]
         SIM_STEP --> RECALC
         
-        RECALC --> PUB_ODO["publish_odometry(timestamp)<br/>Prepara telemetria de resposta"]
-        PUB_ODO --> CALC_RPM["Cálculo da Transmissão:<br/>• driver_outputs.rpm (RPM simulado)<br/>• current_gear (Marcha atual)"]
-        CALC_RPM --> BATCH["build_can_frames_batch()<br/>Empacota Gear e RPM na mensagem 'read'"]
-        BATCH --> SEND["send_message_frame()<br/>Transmite frame via can_sockfd"]
+        RECALC --> PUB_ODO["&nbsp;&nbsp;&nbsp;Publicação de Odometria&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>publish_odometry()</b>"]
+        PUB_ODO --> CALC_RPM["&nbsp;&nbsp;&nbsp;Simulação do Motor&nbsp;&nbsp;&nbsp;<br/>• Calcula RPM (driver_outputs.rpm)<br/>• Obtém Marcha (current_gear)"]
+        CALC_RPM --> BATCH["&nbsp;&nbsp;&nbsp;Empacotamento DBC em Lote&nbsp;&nbsp;&nbsp;<br/><b style='color:#4fc3f7'>build_can_frames_batch()</b><br/>&nbsp;&nbsp;&nbsp;Monta frame da mensagem 'read'&nbsp;&nbsp;&nbsp;"]
+        BATCH --> SEND["&nbsp;&nbsp;&nbsp;Envio para a Interface CAN&nbsp;&nbsp;&nbsp;<br/><b style='color:#69f0ae'>send_message_frame()</b>"]
     end
 
-    subgraph SaidaCAN ["Saída de Dados CAN"]
-        CAN_OUT["&nbsp;&nbsp;&nbsp;&nbsp;Barramento CAN (Saída)&nbsp;&nbsp;&nbsp;&nbsp;<br/>Transmissão de Telemetria"]
+    subgraph SaidaCAN ["5. Saída de Dados CAN"]
+        CAN_OUT["&nbsp;&nbsp;&nbsp;Barramento Físico / Virtual CAN&nbsp;&nbsp;&nbsp;<br/><b style='color:#69f0ae'>Saída de Telemetria</b>"]
     end
 
-    SEND -->|"Frames de telemetria enviados"| CAN_OUT
+    SEND -->|"Transmite telemetria na rede"| CAN_OUT
 ```
 
 ---
