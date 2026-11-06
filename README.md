@@ -39,45 +39,45 @@ O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN 
 
 ```mermaid
 flowchart TD
-    subgraph EntradaCAN["Barramento Físico / Virtual CAN (Entrada de Dados)"]
-        CAN_IN[("Barramento CAN<br/>(Entrada de Comandos)")]
+    subgraph EntradaCAN ["Entrada de Dados CAN"]
+        CAN_IN["Barramento CAN<br/>Entrada de Comandos"]
     end
 
-    CAN_IN -->|"Chegada de frames CAN"| RECV["recv_frame()<br/>(Bloqueia até chegar pacote)"]
+    CAN_IN -->|"Frames CAN recebidos"| RECV["recv_frame()<br/>Bloqueia até chegar pacote"]
 
-    subgraph ThreadEscuta["1. Thread de Escuta (update_state_thread)"]
+    subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
         RECV --> UPDATE["update_state_from_can()"]
         UPDATE --> PARSER_CHECK{"dbc_can_process<br/>.valid_parser == true?"}
         
-        PARSER_CHECK -- "Sim (Modo DBC)" --> PROC_DBC["process_frame_from_dbc_mode()<br/>(Lê sinais da mensagem 'write')"]
-        PARSER_CHECK -- "Não (Legado)" --> PROC_LEGACY["process_astro_can_message()<br/>(Processa IDs fixos)"]
+        PARSER_CHECK -- "Sim (Modo DBC)" --> PROC_DBC["process_frame_from_dbc_mode()<br/>Lê sinais da mensagem 'write'"]
+        PARSER_CHECK -- "Não (Legado)" --> PROC_LEGACY["process_astro_can_message()<br/>Processa IDs fixos"]
 
         PROC_DBC --> EXTRACT["Extração de Sinais via DBC:<br/>- Gear (Comando de Marcha)<br/>- ThrottleEffort (Acelerador)<br/>- BrakesEffort (Freio)<br/>- SteeringEffort (Volante)"]
         EXTRACT --> CALC_DYN["Cálculo da Dinâmica Veicular:<br/>- compute_v_from_throttle_and_brakes()<br/>- compute_phi_from_steering()"]
-        CALC_DYN --> SET_TARGET["set_target_v_and_target_phi()<br/>(Salva na struct com qualificador static)"]
+        CALC_DYN --> SET_TARGET["set_target_v_and_target_phi()<br/>Salva na struct estática"]
     end
 
-    subgraph MemoriaCompartilhada["Memória Compartilhada do Simulador"]
-        SET_TARGET --> MEM["simulator_config->current_motion_command_vector<br/>(Ponteiro para memória estática permanente)"]
+    subgraph MemoriaCompartilhada ["Memória Compartilhada do Simulador"]
+        SET_TARGET --> MEM["simulator_config->current_motion_command_vector<br/>Ponteiro para struct static persistente"]
     end
 
-    subgraph ThreadSimulacao["2. Thread de Simulação e Envio (one_simulation_step)"]
-        TIMER["Timer Periódico de Simulação<br/>(Clock cíclico: real_time ex. 20ms / 50Hz)"] --> SIM_STEP["simulate_car_and_publish_readings()"]
+    subgraph ThreadSimulacao ["2. Thread de Simulação e Envio (one_simulation_step)"]
+        TIMER["Timer Periódico de Simulação<br/>Clock cíclico: 20 ms / 50 Hz"] --> SIM_STEP["simulate_car_and_publish_readings()"]
         
-        MEM -.->|"Consome comando alvo"| RECALC["astro_simulator_ackerman_recalc_pos()<br/>(Atualiza posição, velocidade v e esterçamento phi)"]
+        MEM -.->|"Consome comando alvo"| RECALC["astro_simulator_ackerman_recalc_pos()<br/>Atualiza odometria e física veicular"]
         SIM_STEP --> RECALC
         
         RECALC --> PUB_ODO["publish_odometry(timestamp)"]
-        PUB_ODO --> CALC_RPM["Cálculo de RPM Simulado e Marcha:<br/>- driver_outputs.rpm<br/>- current_gear"]
-        CALC_RPM --> BATCH["build_can_frames_batch()<br/>(Empacota Gear e RPM na mensagem 'read')"]
-        BATCH --> SEND["send_message_frame()<br/>(send_frame via can_sockfd)"]
+        PUB_ODO --> CALC_RPM["Cálculo de RPM e Marcha:<br/>- driver_outputs.rpm<br/>- current_gear"]
+        CALC_RPM --> BATCH["build_can_frames_batch()<br/>Empacota Gear e RPM na mensagem 'read'"]
+        BATCH --> SEND["send_message_frame()<br/>send_frame via can_sockfd"]
     end
 
-    subgraph SaidaCAN["Barramento Físico / Virtual CAN (Saída de Dados)"]
-        CAN_OUT[("Barramento CAN<br/>(Saída de Telemetria)")]
+    subgraph SaidaCAN ["Saída de Dados CAN"]
+        CAN_OUT["Barramento CAN<br/>Saída de Telemetria"]
     end
 
-    SEND -->|"Transmite pacotes de odometria"| CAN_OUT
+    SEND -->|"Transmite telemetria na rede"| CAN_OUT
 ```
 
 ---
