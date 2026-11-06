@@ -1,126 +1,133 @@
-# Arquitetura e Fluxo Geral do Simulator Ackerman CAN
+# Arquitetura e Fluxo Geral do Obstacle Avoider
 
-No [`main()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L3010-L3077) do `simulator_ackerman_can`, o módulo inicializa a interface CAN, faz o parse do arquivo de definições de rede (DBC), cria uma thread dedicada para escuta de mensagens do barramento e inicia o loop de simulação física do veículo:
+No [`main()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L2285-L2322) do `obstacle_avoider`, existe a possibilidade de o módulo atuar em uma frequência fixa chamando periodicamente a função principal [`obstacle_avoider_timer_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1359) via timer do IPC. Porém, como essa funcionalidade está comentada no código, **o módulo funciona exclusivamente através dos seus handlers de mensagens**:
 
-```cpp
-// Em simulator_ackerman_can_main.cpp:
-can_sockfd = init_can(argv[1]);
-read_parameters(argc, argv, &simulator_conf);
+```c
+// Em obstacle_avoider_main.cpp:
+// astro_ipc_addPeriodicTimer(1.0 / astro_obstacle_avoider_collision_avoidance_frequency, (TIMER_HANDLER_TYPE) obstacle_avoider_timer_handler, NULL);
+// astro_ipc_addPeriodicTimer(1.0 / astro_obstacle_avoider_collision_avoidance_frequency, (TIMER_HANDLER_TYPE) check_message_absence_timeout_timer_handler, NULL);
 
-if (dbc_path != NULL)
-{
-    astro_hal_can_interactions::process_dbc_file(dbc_can_process, dbc_path, argv[1]);
-    astro_hal_can_interactions::register_socket_to_interface(dbc_can_process, argv[1], can_sockfd);
-}
-
-// Cria a thread concorrente de escuta da CAN
-pthread_create(&can_thread, NULL, update_state_thread, NULL);
-
-// Inicia o loop periódico de simulação e envio de telemetria
-astro_ipc_pooling(one_simulation_step, shutdown_module);
+astro_ipc_loop(shutdown_obstacle_avoider);
 ```
 
-Diferente de módulos puramente orientados a eventos de IPC, o simulador opera desacoplado em **duas frentes concorrentes**: a **escuta contínua de comandos** e a **simulação periódica com envio de telemetria**.
-
 ---
 
-## 1. As Duas Frentes do Módulo
+## 1. Os Três Gatilhos de Entrada (Handlers)
 
-| Frente | Ponto de Entrada | Modelo de Execução | Papel no Módulo |
-| :--- | :--- | :--- | :--- |
-| **Escuta CAN (Comandos)** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Bloqueia no socket CAN aguardando pacotes. Quando chegam mensagens de comando (mensagem `"write"` no DBC), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
-| **Simulação e Envio (Telemetria)** | [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793) | **Orientado a Tempo (Timer Periódico)** | Disparado ciclicamente na frequência da simulação (ex: a cada 20 ms / 50 Hz). Atualiza a odometria do carro virtual e transmite frames de volta para a rede CAN (mensagem `"read"` no DBC: RPM e marcha). |
-
----
-
-## 2. Diagrama Macro Integrado de Fluxo
-
-O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN até a atualização física e o posterior envio periódico de telemetria:
+A validação de colisão e a emissão de comandos para a base são disparadas por **3 eventos principais**:
 
 ```mermaid
 flowchart TD
-    subgraph EntradaCAN ["1. Barramento Físico / Virtual CAN (Entrada)"]
-        CAN_IN["⠀⠀Barramento CAN - Entrada de Comandos⠀⠀"]
-    end
+    M1["Mensagem MPP<br/>(astro_robot_ackerman_motion_command)"] --> H1["robot_ackerman_motion_command<br/>_message_handler()"]
+    M2["Mensagem Localize<br/>(astro_localize_ackerman_globalpos)"] --> H2["localize_ackerman_globalpos<br/>_message_handler()"]
+    M3["Mensagem Mapa de Distâncias<br/>(astro_obstacle_distance_mapper_map)"] --> H3["astro_obstacle_distance_mapper<br/>_on_distance_map_message_handler()"]
 
-    CAN_IN -->|"Chegada de frames CAN"| RECV["⠀⠀recv_frame() - Leitura do Socket CAN⠀⠀"]
+    H1 -->|"Imediato (Sem atraso)"| CORE["obstacle_avoider_timer_handler()"]
+    H2 --> LIM{"can_execute_obstacle<br/>_avoider_handler()?<br/>(Intervalo &gt; 70 ms)"}
+    H3 --> LIM
 
-    subgraph ThreadEscuta ["2. Thread de Escuta (update_state_thread)"]
-        RECV --> UPDATE["⠀⠀update_state_from_can()⠀⠀"]
-        UPDATE --> PARSER_CHECK{"⠀⠀valid_parser == true?⠀⠀"}
-        
-        PARSER_CHECK -->|"Sim (Modo DBC)"| PROC_DBC["⠀⠀process_frame_from_dbc_mode()⠀⠀"]
-        PARSER_CHECK -->|"Não (Modo Legado)"| PROC_LEGACY["⠀⠀process_astro_can_message()⠀⠀"]
-
-        PROC_DBC --> EXTRACT["⠀⠀read_signal() - Extrai Gear, Throttle, Brakes, Steering⠀⠀"]
-        EXTRACT --> CALC_DYN["⠀⠀Calcula Dinâmica: Velocidade (v) e Esterçamento (phi)⠀⠀"]
-        CALC_DYN --> SET_TARGET["⠀⠀set_target_v_and_target_phi(v, phi)⠀⠀"]
-    end
-
-    subgraph MemoriaCompartilhada ["3. Memória Compartilhada do Simulador"]
-        SET_TARGET --> MEM["⠀⠀current_motion_command_vector (Struct static na RAM)⠀⠀"]
-    end
-
-    subgraph ThreadSimulacao ["4. Thread de Simulação e Envio (one_simulation_step)"]
-        TIMER["⠀⠀Timer Periódico de Simulação (20 ms / 50 Hz)⠀⠀"] --> SIM_STEP["⠀⠀simulate_car_and_publish_readings()⠀⠀"]
-        
-        MEM -.->|"Consome v e phi alvo"| RECALC["⠀⠀astro_simulator_ackerman_recalc_pos()⠀⠀"]
-        SIM_STEP --> RECALC
-        
-        RECALC --> PUB_ODO["⠀⠀publish_odometry(timestamp)⠀⠀"]
-        PUB_ODO --> CALC_RPM["⠀⠀Calcula RPM Simulado e Marcha Atual⠀⠀"]
-        CALC_RPM --> BATCH["⠀⠀build_can_frames_batch() - Monta mensagem 'read'⠀⠀"]
-        BATCH --> SEND["⠀⠀send_message_frame() - Envia no Socket CAN⠀⠀"]
-    end
-
-    subgraph SaidaCAN ["5. Barramento Físico / Virtual CAN (Saída)"]
-        CAN_OUT["⠀⠀Barramento CAN - Saída de Telemetria⠀⠀"]
-    end
-
-    SEND -->|"Transmite pacotes de odometria"| CAN_OUT
+    LIM -- Sim --> CORE
+    LIM -- Não --> IGNORE["Ignora disparo no ciclo<br/>(Evita sobrecarga de CPU)"]
 ```
 
----
+### Detalhamento dos Handlers:
 
-## 3. Detalhamento dos Componentes Principais
-
-### A. Inicialização e Parsing do DBC
-No início do programa, a função [`astro_hal_can_interactions::process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L95-L150) lê o arquivo DBC passado por `--dbc_path` e constrói as tabelas hash na memória RAM:
-* **`composite_to_message`**: Mapeia chaves compostas (ex: `"write::gear"`) para o ID CAN correspondente (`0x98EF00FE`).
-* **`composite_to_signal`**: Mapeia chaves compostas para as propriedades físicas de decodificação (`start_bit`, `size`, `factor`, `offset`).
-* **`signal_to_val_map`**: Tabela de estados discretos (`VAL_`), traduzindo códigos brutos em strings legíveis (`"neutral"`, `"drive"`, `"reverse"`).
-
-### B. Recepção e Decodificação de Comandos
-A thread [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) processa cada frame que chega:
-1. Compara o ID do frame com o ID da mensagem de atuadores registrada como `"write"` no DBC.
-2. Extrai o estado textual da marcha via [`read_can_signal_state()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L295-L341) e atualiza o estado interno da transmissão (`target_gear_id` e `gear_map`).
-3. Extrai os esforços percentuais de aceleração, freio e esterçamento.
-4. Calcula a nova velocidade desejada ($v$) e ângulo desejado ($\phi$).
-5. Chama [`set_target_v_and_target_phi()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2472-L2485), gravando os dados em uma variável declarada com **`static`**, garantindo que o comando persista válido na memória RAM para o consumo da outra thread.
-
-### C. Simulação Cinemática e Transmissão Cíclica
-No loop [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793):
-1. [`astro_simulator_ackerman_recalc_pos()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman.cpp) lê os comandos alvo da memória estática e integra o modelo cinemático Ackermann para atualizar a velocidade real `v` e o ângulo real `phi`.
-2. [`publish_odometry()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L683-L795) calcula a rotação do motor (`RPM`) em função da velocidade atual e da relação de marcha.
-3. As informações de telemetria são agrupadas no vetor de envio com a mensagem `"read"` do DBC.
-4. O HAL executa [`build_can_frames_batch()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L579-L627), inserindo os sinais de telemetria dentro do payload de 8 bytes e enviando para o socket com [`send_message_frame()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L510-L548).
+| Handler | Mensagem de Entrada | Papel no Módulo | Condição de Disparo |
+| :--- | :--- | :--- | :--- |
+| [`robot_ackerman_motion_command_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1330) | `astro_robot_ackerman_motion_command_message` | Recebe o vetor de comandos $(v, \phi, \Delta t)$ gerado pelo MPP. Armazena no buffer circular de trajetórias. | **Imediato:**  |
+| [`localize_ackerman_globalpos_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1553) | `astro_localize_ackerman_globalpos_message` |Atualiza a localização (GPS/pose da cabine e semirreboques) e a odometria atual (velocidade v e ângulos das rodas ϕ ). | **Condicional:** Controlado por limitador de taxa (~14 Hz). |
+| [`astro_obstacle_distance_mapper_on_distance_map_message_handler`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1588) | `astro_obstacle_distance_mapper_map_message` | Atualiza a matriz de distâncias aos obstáculos. | **Condicional:** Controlado por limitador de taxa (~14 Hz). |
 
 ---
 
-## 4. Estruturas de Memória Compartilhadas
+## 2. Controle de frequência do handler GPS e mapa de distâncias
 
-Para permitir a comunicação entre a thread de escuta e a thread de simulação sem corrupção de dados:
+Como o `localize` (GPS + Odometria) e o mapa de distâncias publicam mensagens em frequências elevadas um filtro de suas mensagens é realizado para evitar sobrecarga de processamento.
 
-* **`simulator_config`**: Ponteiro global para a configuração e estado dinâmico do simulador (`astro_simulator_ackerman_config_t`).
-* **`current_motion_command_vector` (estático)**: Estrutura local com tempo de vida global (`static`), cujo ponteiro é atribuído a `simulator_config->current_motion_command_vector`.
-* **`driver_outputs`**: Armazena o estado atual das saídas do motorista simulado (ex: `driver_outputs.current_gear` e `driver_outputs.rpm`).
+Para solucionar isso, a função [`can_execute_obstacle_avoider_handler()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_main.cpp#L1004-L1027) atua como um filtro das mensagens:
+
+```c
+int can_execute_obstacle_avoider_handler()
+{
+    if (param_only_mpp == 1)
+        return (0);
+
+    double current_time = astro_get_time();
+
+    if ((current_time - executed_obstacle_avoider_handler_last_timestamp) > 0.07) // 70 milissegundos (~14,3 Hz)
+    {
+        executed_obstacle_avoider_handler_last_timestamp = current_time;
+        return (1);
+    }
+    return (0);
+}
+```
+
+* **Comportamento para o handler do mpp:** Quando o MPP envia um novo plano, ele **não consulta** essa função e dispara o `obstacle_avoider_timer_handler()` na hora. A janela de 70 ms serve apenas para controlar rechecagens baseadas em odometria e mapas.
+* **Flag `-only_mpp on`:** Se ativada, bloqueia todas as chamadas vindas do GPS e do mapa, limitando o OA a agir apenas mediante novos planos.
 
 ---
 
-## 5. Índice de Documentação Específica
+## 3. Diagrama Macro Integrado de Fluxo
 
-Para o detalhamento aprofundado de cada funcionalidade:
+O sistema opera de forma orientada a eventos. O fluxo geral de avaliação e os blocos principais que alteram o plano seguem o pipeline abaixo:
 
-1. **[`01_arquitetura_e_fluxo_geral.md`](01_arquitetura_e_fluxo_geral.md)**: Visão macro da arquitetura bi-thread, inicialização e fluxo integrado.
-2. **`02_leitura_e_processamento_de_comandos.md`** *(em desenvolvimento)*: Detalhamento do parser de entrada, extração de sinais DBC e máquina de estados da transmissão.
-3. **`03_escrita_e_envio_odometria_can.md`** *(em desenvolvimento)*: Detalhamento do cálculo de RPM, empacotamento em lote (`build_can_frames_batch`) e transmissão via socket CAN.
+```mermaid
+flowchart TD
+    subgraph Gatilhos ["1. Gatilhos de Entrada "]
+        T1["Novo Plano MPP"] --> H1["Handler MPP<br/>(robot_ackerman_motion_command)"]
+        T2["Novo Globalpos GPS"] --> H2["Handler Localize<br/>(localize_ackerman_globalpos)"]
+        T3["Novo Mapa Distâncias"] --> H3["Handler Mapa Distâncias<br/>(obstacle_distance_mapper)"]
+    end
+
+    subgraph Emergencia ["2. Simulação de Emergência (Potential Collision)"]
+        H2 --> PC["Simulação de Frenagem<br/><b style='color:#4fc3f7'>set_trajectory_from_deceleration()</b><br/>Volante travado em phi + Torricelli"]
+        PC --> EXT["Extensão de Segurança<br/><b style='color:#4fc3f7'>set_extension_trajectory()</b><br/>Projeção de N metros à frente"]
+        EXT --> ACC["Atualiza Aceleração de Emergência<br/><b style='color:#ffb74d'>global_acc_to_avoid_potential_collision</b>"]
+    end
+
+    H1 -->|"Imediato"| OA_TIMER["Handler Central de Decisão<br/><b style='color:#4fc3f7'>obstacle_avoider_timer_handler()</b>"]
+    ACC -->|"Frequência max ~14 Hz"| OA_TIMER
+    H3 -->|"Frequência max ~14 Hz"| OA_TIMER
+
+    subgraph PipelineOA ["3. Obstacle_avoider_timer_handler()"]
+        OA_TIMER --> CONSUME["Consumo Temporal da Fila<br/><b style='color:#4fc3f7'>consume_motion_command_time()</b><br/>Sincroniza o plano com o relógio atual"]
+        CONSUME --> TRAT_PC["Tratamento Potential Collision<br/><b style='color:#ff5252'>potential_collision_treatment()</b><br/>Filtro 5 ciclos -> Desacelera com Acc"]
+        TRAT_PC --> CENTR["Limite de Aceleração Centrípeta<br/><b style='color:#4fc3f7'>limit_centripetal_acceleration...()</b><br/>Proteção contra tombamento em curvas"]
+        CENTR --> PHI_LIM["Limite de Velocidade por Phi<br/><b style='color:#4fc3f7'>limit_current_velocity_to_max_phi()</b><br/>Envelope seguro esterçamento x vel"]
+        PHI_LIM --> OA_CORE["Validação Preventiva do Plano<br/><b style='color:#4fc3f7'>obstacle_avoider()</b><br/>Simula trajetória e atenua velocidades se houver obstáculo"]
+    end
+
+    OA_CORE --> PUB["Publicação Final<br/><b style='color:#69f0ae'>obstacle_avoider_publish_base_ackerman()</b><br/>Envia comandos validados para a base"]
+```
+
+> [!NOTE]
+> **Divisão de Responsabilidades no *Potential Collision*:**  
+> As Etapas 1 (`set_trajectory_from_deceleration`) e 2 (`set_extension_trajectory`) geram **projeções puramente hipotéticas** para diagnosticar colisões com direção fixa e margem mínima, **sem alterar o plano real do MPP**. Já a Etapa 3 (`potential_collision_treatment`) é **a única que modifica o plano de comandos**, sendo puramente reativa ao gatilho de `global_acc_to_avoid_potential_collision` sem fazer checagem geométrica em mapas.
+
+---
+
+### Etapas Principais do Fluxo:
+
+1. **[`astro_obstacle_avoider_set_trajectory_from_deceleration()`](06_desaceleracao_preventiva_phi_fixo.md)**: Etapa 1 da simulação de emergência (executada no handler do `localize`). Projeta a frenagem máxima por Torricelli mantendo o ângulo $\phi$ fixo para verificar se o veículo consegue parar sem colidir.
+2. **[`set_extension_trajectory_from_deceleration()`](07_extensao_seguranca_potential_collision.md)**: Etapa 2 da simulação de emergência (executada no handler do `localize` apenas se a Etapa 1 não colidir). Avança o veículo até o limite da extensão de segurança (`extension_length`, padrão $3{,}0\text{ m}$) para garantir a margem mínima livre à frente.
+3. **[`consume_motion_command_time()`](05_consumo_temporal_e_sincronizacao.md)**: Primeira etapa do `obstacle_avoider_timer_handler()`. Subtrai o tempo já transcorrido desde a última atualização, mantendo a sincronia temporal da fila de comandos e compensando a latência do MPP.
+4. **[`potential_collision_treatment()`](08_atuacao_potential_collision_treatment.md)**: Etapa 3 da simulação de emergência (no `obstacle_avoider_timer_handler()`). Verifica se o alarme vindo da Etapa 1 ou 2 persistiu por 5 ciclos consecutivos (Debounce 5/5) e desacelera os comandos do plano até zerar a velocidade.
+5. **[`limit_centripetal_acceleration_reducing_velocity()`](04_restricoes_dinamica_veiculo.md)**: Modula a velocidade em trechos de curva acentuada para garantir que a aceleração centrípeta não exceda $1{,}05 \cdot a_{c,\max}$.
+6. **[`limit_current_velocity_according_to_max_phi()`](04_restricoes_dinamica_veiculo.md)**: Restringe a velocidade caso o ângulo de esterçamento $\phi$ exija velocidade menor.
+7. **[`obstacle_avoider()`](02_planejamento_preventivo.md)**: Executa a simulação física futura do plano do MPP e atenua as velocidades caso haja obstáculos no caminho.
+8. **Publicação para `base_ackerman`**: Envia o plano validado/modificado para o controle de baixo nível.
+
+---
+
+
+## 5. Códigos de Erro Emitidos
+
+O módulo publica os seguintes erros no barramento do sistema (`ASTRO_ERROR_CODE`):
+
+* **`ASTRO_ERROR_CODE_201`**: 
+* **`ASTRO_ERROR_CODE_203`**: 
+* **`ASTRO_ERROR_CODE_204`**: Colisão detectada na simulação de emergência (*potential collision* ou extensão).
+* **`ASTRO_ERROR_CODE_205`**: 
+
+---
