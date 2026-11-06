@@ -1,119 +1,160 @@
-# HAL CAN & DBC: Arquitetura de Hashes e Mapeamento de Sinais
+# Fluxo de Comunicação e Simulação: Simulator Ackerman CAN
 
-Este documento explica como o módulo **Astro HAL CAN** interpreta arquivos `.dbc`, como organiza essas informações em tabelas Hash na memória RAM e como os bytes de um frame CAN são fatiados e decodificados em tempo real.
-
----
-
-## 1. O Pacote de Controle: `0x98EF00FE write`
-
-Considere a seguinte declaração no arquivo DBC ([`ojAstro_fullDBC.dbc`](dbc_file_example/ojAstro_fullDBC.dbc)):
-
-```dbc
-BO_ 0x98EF00FE write: 8 DRIVER
- SG_ BrakesEffort : 0|16@1+ (0.1,0) [0|100] "" DRIVER
- SG_ ThrottleEffort : 16|16@1+ (0.1,0) [0|100] "" DRIVER
- SG_ SteeringEffort : 32|16@1- (0.1,0) [-100|100] "" DRIVER
- SG_ SignalsByte : 48|8@1+ (1,0) [0|100] "" DRIVER
- SG_ Gear : 56|8@1+ (1,0) [0|255] "" DRIVER
-VAL_ 0x98EF00FE Gear 16 "drive" 32 "reverse" 8 "neutral" ;
-```
-
-### O que isso significa no Barramento Físico?
-Quando a mensagem com **CAN ID `0x98EF00FE`** trafega na rede, ela carrega um payload de **8 bytes (64 bits)**. 
-
-O DBC nos ensina exatamente como fatiar esses 8 bytes:
-
-```text
-Payload de 8 Bytes (64 bits):
-+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
-|    Byte 0     |    Byte 1     |    Byte 2     |    Byte 3     |    Byte 4     |    Byte 5     |    Byte 6     |    Byte 7     |
-| (Bits 0 a 7)  | (Bits 8 a 15) | (Bits 16 a 23)| (Bits 24 a 31)| (Bits 32 a 39)| (Bits 40 a 47)| (Bits 48 a 55)| (Bits 56 a 63)|
-+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
-|<------- BrakesEffort -------->|<------ ThrottleEffort ------->|<------ SteeringEffort ------->|  SignalsByte  |     Gear      |
-|           (16 bits)           |           (16 bits)           |           (16 bits)           |   (8 bits)    |   (8 bits)    |
-+-------------------------------+-------------------------------+-------------------------------+---------------+---------------+
-```
-
-* **`BrakesEffort` (Bits 0 a 15):** Esforço de frenagem (0 a 100%).
-* **`ThrottleEffort` (Bits 16 a 31):** Esforço de aceleração (0 a 100%).
-* **`SteeringEffort` (Bits 32 a 47):** Esforço do volante com sinal negativo/positivo (-100 a +100%).
-* **`SignalsByte` (Bits 48 a 55):** Byte de flags de sinalização (setas, buzina, farol, retarder).
-* **`Gear` (Bits 56 a 63):** Comando de marcha (`8` = neutral, `16` = drive, `32` = reverse).
+Este documento detalha o funcionamento interno do simulador CAN ([`simulator_ackerman_can_main.cpp`](simulator_ackerman_can_main.cpp)), abordando a **divisão concorrente entre Escuta e Envio** e os fluxos completos de **leitura de comandos** e **escrita de telemetria na rede CAN** via DBC.
 
 ---
 
-## 2. A Estrutura das Tabelas Hash na Memória
+## 1. Arquitetura Geral: Divisão entre Escuta e Envio
 
-Para buscar e decodificar qualquer sinal em tempo constante ($O(1)$) sem percorrer listas a cada frame recebido, o HAL utiliza **duas tabelas hash principais** indexadas pela mesma **Chave Composta** (`<nome_da_msg>::<nome_do_sinal>`):
+O simulador emula uma ECU automotiva real utilizando **duas frentes concorrentes desacopladas**:
 
-```text
-Chave Composta: "write::brakeseffort"
-   │
-   ├──> composite_to_message["write::brakeseffort"] -> Aponta para Message: ID 0x98EF00FE, DLC: 8
-   └──> composite_to_signal["write::brakeseffort"]  -> Aponta para Signal: start_bit: 0, size: 16, factor: 0.1
+1. **Thread de Escuta (Event-driven):** Fica bloqueada aguardando frames chegarem do barramento CAN. Assim que um pacote chega, interpreta os comandos do veículo autônomo e atualiza os alvos físicos.
+2. **Thread de Simulação e Envio (Time-driven):** Roda em um ciclo fixo de clock (ex: 50Hz / 20ms). Calcula o deslocamento do veículo no mundo virtual e transmite a telemetria do carro de volta para o barramento CAN.
+
+```mermaid
+flowchart TD
+    subgraph RedecCAN["Barramento Físico / Virtual CAN"]
+        CAN_BUS[(Barramento CAN)]
+    end
+
+    subgraph Thread1["1. Thread de Escuta (update_state_thread)"]
+        A["recv_frame()"] <-- "Escuta Frames" --- CAN_BUS
+        A --> B["update_state_from_can()"]
+        B --> C["process_frame_from_dbc_mode()"]
+        C --> D["Lê Gear e Esforços (Throttle, Brakes, Steering)"]
+        D --> E["Calcula dinâmica (v, phi)"]
+        E --> F["set_target_v_and_target_phi()<br/>(Guarda na struct static)"]
+    end
+
+    subgraph SharedMem["Memória Compartilhada do Simulador"]
+        F --> G["simulator_config->current_motion_command_vector"]
+    end
+
+    subgraph Thread2["2. Thread de Simulação e Envio (one_simulation_step)"]
+        H["Timer Periódico (real_time: 20ms)"] --> I["simulate_car_and_publish_readings()"]
+        G -.-> J["astro_simulator_ackerman_recalc_pos()<br/>(Atualiza odometria com base no target)"]
+        I --> J
+        J --> K["publish_odometry()"]
+        K --> L["Calcula RPM e Marcha atual"]
+        L --> M["build_can_frames_batch(Gear, RPM)"]
+        M --> N["send_message_frame()"]
+    end
+
+    N -- "Transmite Telemetria" ---> CAN_BUS
 ```
-
-### Tabela 1: `composite_to_message` (Validação de Endereço)
-* **Chave:** `std::string` (`"write::brakeseffort"`, `"write::gear"`, etc.)
-* **Valor:** Ponteiro `const Libdbc::Message*`
-* **Função:** Guarda o **endereço CAN (ID)** da mensagem onde o sinal reside.
-  * Quando o frame chega da CAN, o simulador compara: `frame->can_id == msg->id()`.
-  * Se bater, o simulador sabe que aquele frame contém o sinal desejado.
-
-### Tabela 2: `composite_to_signal` (A Receita de Interpretação)
-* **Chave:** Mesma string composta (`"write::brakeseffort"`, `"write::gear"`, etc.)
-* **Valor:** Ponteiro `const Libdbc::Signal*`
-* **Função:** Guarda a receita matemática de decodificação extraída da linha `SG_`:
-  ```cpp
-  struct Signal {
-      uint32_t start_bit; // Onde começa o sinal (ex: bit 0)
-      uint32_t size;      // Quantos bits ocupa (ex: 16 bits)
-      bool is_signed;     // Se tem sinal (+ ou -)
-      double factor;      // Fator multiplicador (ex: 0.1)
-      double offset;      // Deslocamento (ex: 0.0)
-      ...
-  };
-  ```
-
-### Tabela 3: `signal_to_val_map` (Tabela de Estados `VAL_`)
-* **Chave Primária:** Chave Composta (`"write::gear"`)
-* **Chave Secundária:** Valor numérico bruto (`uint64_t`)
-* **Valor:** Nome textual (`std::string`)
-  * `signal_to_val_map["write::gear"][8]  = "neutral"`
-  * `signal_to_val_map["write::gear"][16] = "drive"`
-  * `signal_to_val_map["write::gear"][32] = "reverse"`
 
 ---
 
-## 3. Fluxo de Decodificação na Prática: `read_signal()`
+## 2. Fluxo da Escuta (Leitura de Comandos da CAN)
 
-Quando o código do simulador executa:
+A escuta roda continuamente na função [`update_state_thread()`](simulator_ackerman_can_main.cpp):
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CAN as Barramento CAN
+    participant Thread as update_state_thread
+    participant DBC as astro_hal_can_interactions
+    participant Physics as Modelo Dinâmico
+    participant Mem as simulator_config
+
+    CAN->>Thread: Frame CAN chega (can_id, data)
+    Thread->>DBC: read_signal(dbc, "write", "Gear", frame)
+    alt Se o frame for da mensagem "write" (0x98EF00FE)
+        DBC-->>Thread: is_match = true
+        Thread->>DBC: read_can_signal_state("write", "Gear")
+        DBC-->>Thread: Retorna estado ("drive", "reverse", "neutral")
+        Thread->>Thread: Atualiza marcha interna (target_gear_id)
+        
+        Thread->>DBC: read_signal("write", "ThrottleEffort")
+        Thread->>DBC: read_signal("write", "BrakesEffort")
+        Thread->>DBC: read_signal("write", "SteeringEffort")
+        
+        Thread->>Physics: compute_v_from_throttle_and_brakes_efforts(...)
+        Thread->>Physics: compute_phi_from_steering_effort(...)
+        Physics-->>Thread: Retorna velocidade (v) e esterçamento (phi)
+        
+        Thread->>Mem: set_target_v_and_target_phi(v, phi)
+        Note over Mem: Armazena em variável 'static'<br/>(permanece viva na RAM)
+    else Frame de outro ID
+        DBC-->>Thread: is_match = false (Descarta pacote)
+    end
+```
+
+### Por que a memória não é perdida ao final da leitura?
+Em [`set_target_v_and_target_phi()`](simulator_ackerman_can_main.cpp):
 ```cpp
-bool is_match = false;
-double valor = astro_hal_can_interactions::read_signal(dbc, "write", "BrakesEffort", &frame, is_match);
+void set_target_v_and_target_phi(double v, double phi)
+{
+    static astro_robot_and_trailers_motion_command_t current_motion_command_vector = {};
+
+    current_motion_command_vector.v = v;
+    current_motion_command_vector.phi = phi;
+    current_motion_command_vector.time = 1.0;
+
+    simulator_config->current_motion_command_vector = &current_motion_command_vector;
+    ...
+}
 ```
-
-O processamento ocorre em 3 passos:
-
-1. **Gera a chave:** Converte para minúsculas: `"write::brakeseffort"`.
-2. **Checa o ID:** 
-   * Busca em `composite_to_message["write::brakeseffort"]` $\rightarrow$ ID esperado é `0x98EF00FE`.
-   * Compara com `frame->can_id`. Se forem iguais, `is_match = true`.
-3. **Decodifica os bits:**
-   * Busca em `composite_to_signal["write::brakeseffort"]` $\rightarrow$ `start_bit = 0`, `size = 16`, `factor = 0.1`.
-   * Isola os 16 bits iniciais de `frame->data`.
-   * Aplica a fórmula:
-     $$\text{valor} = (\text{bits brutos}) \times 0.1 + 0.0$$
+A variável possui o qualificador **`static`**. Ela não reside na pilha temporária de funções (Stack), mas sim na seção de dados permanentes do processo. O endereço `&current_motion_command_vector` permanece válido por todo o ciclo de vida do simulador.
 
 ---
 
-## 4. Resumo das Responsabilidades
+## 3. Fluxo de Escrita (Envio de Telemetria de Volta para a CAN)
 
-| Componente | Papel no Sistema |
-| :--- | :--- |
-| **Linha `BO_`** | Define o endereço (ID CAN), o tamanho total e quem transmite a mensagem. |
-| **Linha `SG_`** | Fatia o payload da mensagem, definindo a posição de início, tamanho e conversão física. |
-| **Linha `VAL_`** | Mapeia números discretos para palavras textuais (ex: marcha, modos de operação). |
-| **`composite_to_message`** | Hash que responde: *"Qual o ID CAN que devo esperar para ler este sinal?"* |
-| **`composite_to_signal`** | Hash que responde: *"Como recorto os bits e converto para o valor físico real?"* |
-| **`signal_to_val_map`** | Hash que responde: *"Qual o nome textual associado a este número de estado?"* |
+O envio é cíclico e controlado pelo loop de eventos IPC em [`one_simulation_step()`](simulator_ackerman_can_main.cpp), disparado pela frequência da simulação:
+
+```mermaid
+flowchart TD
+    A["one_simulation_step()"] --> B["simulate_car_and_publish_readings()"]
+    
+    subgraph Dinamica["1. Avanço da Cinemática"]
+        B --> C["astro_simulator_ackerman_recalc_pos()"]
+        C --> D["Lê target_v e target_phi da memória estática"]
+        D --> E["Calcula nova velocidade atual (simulator_config->v)"]
+    end
+    
+    subgraph Odometria["2. Preparação dos Sinais"]
+        E --> F["publish_odometry(timestamp)"]
+        F --> G["Verifica: if (dbc_can_process.valid_parser == true)"]
+        G --> H["Calcula RPM com base na velocidade, marcha e ruído estocástico"]
+        H --> I["Monta a lista de requisição de envio:<br/>1. {'read', 'Gear', current_gear}<br/>2. {'read', 'RPM', driver_outputs.rpm}"]
+    end
+    
+    subgraph HAL_Batch["3. Empacotamento de Bits via DBC"]
+        I --> J["build_can_frames_batch(dbc_can_process, fila_de_envio)"]
+        J --> K["Localiza ID da mensagem 'read' no DBC (0x8000022D)"]
+        K --> L["Insere bits do Gear no byte 1 (start_bit 8, size 8)"]
+        L --> M["Insere bits do RPM no byte 7 (start_bit 56, size 8, escala 41.82)"]
+    end
+    
+    subgraph Transmissao["4. Transmissão no Socket"]
+        M --> N["send_message_frame(dbc_can_process, lote)"]
+        N --> O["send_frame(can_sockfd, &frame)"]
+        O --> P[("Frame enviado para o barramento CAN")]
+    end
+```
+
+### Detalhes do Empacotamento em Lote (`build_can_frames_batch`)
+No trecho de escrita em [`publish_odometry()`](simulator_ackerman_can_main.cpp):
+```cpp
+std::vector<astro_hal_can_interactions::SignalWriteRequest> fila_de_envio = {
+    {"read", "Gear", current_gear},
+    {"read", "RPM", driver_outputs.rpm}
+};
+
+auto frames_prontos = astro_hal_can_interactions::build_can_frames_batch(dbc_can_process, fila_de_envio);
+
+for (auto& lote : frames_prontos) 
+{
+    astro_hal_can_interactions::send_message_frame(
+        dbc_can_process,
+        lote.anchor_msg_name,
+        lote.anchor_sig_name,
+        &lote.frame
+    );
+}
+```
+
+* **Agrupamento inteligente:** O HAL verifica a qual mensagem do DBC cada sinal pertence. Como tanto `Gear` quanto `RPM` pertencem à mensagem `read` (ID `0x8000022D`), o HAL empacota ambos no **mesmo frame de 8 bytes**.
+* **Transmissão final:** `send_message_frame()` identifica o socket da interface registrada e transmite o frame montado diretamente para a rede CAN.
