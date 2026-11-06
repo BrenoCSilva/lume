@@ -38,34 +38,33 @@ Diferente de módulos puramente orientados a eventos de IPC, o simulador opera d
 O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN até a atualização física e o posterior envio periódico de telemetria:
 
 ```mermaid
-%%{init: {'flowchart': {'htmlLabels': false}} }%%
 flowchart TD
-    CAN_IN["Barramento Físico / Virtual CAN<br/>Entrada de Dados (Socket CAN)<br/>Recebe pacotes enviados pelo Vehicle Driver"]
+    CAN_IN["<span style='padding:0 24px'>Barramento Físico / Virtual CAN</span><br/><b style='color:#69f0ae; padding:0 24px'>Entrada de Dados (Socket CAN)</b><br/><span style='padding:0 24px'>⠀⠀Recebe pacotes enviados pelo Vehicle Driver⠀⠀</span>"]
 
     CAN_IN -->|"Chegada de frames CAN"| RECV
 
     subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
-        RECV["Recepção no Socket CAN<br/>recv_frame()<br/>Fica bloqueado aguardando novos pacotes"]
-        RECV --> UPDATE["Roteamento de Mensagens CAN<br/>update_state_from_can()<br/>Direciona o frame para o modo DBC ativo"]
-        UPDATE --> PROC_DBC["Decodificação via DBC<br/>process_frame_from_dbc_mode()<br/>Extrai Gear, Throttle, Brakes e Steering"]
-        PROC_DBC --> CALC_DYN["Cálculo da Dinâmica Veicular<br/>compute_v_and_phi_from_efforts()<br/>Converte esforços em velocidade v e ângulo phi"]
-        CALC_DYN --> SET_TARGET["Atualização do Comando Alvo<br/>set_target_v_and_target_phi()<br/>Grava v e phi alvo na memória estática"]
+        RECV["<span style='padding:0 24px'>Recepção no Socket CAN</span><br/><b style='color:#4fc3f7; padding:0 24px'>recv_frame()</b><br/><span style='padding:0 24px'>⠀⠀Bloqueia aguardando pacotes da rede⠀⠀</span>"]
+        RECV --> UPDATE["<span style='padding:0 24px'>Roteamento de Mensagens CAN</span><br/><b style='color:#4fc3f7; padding:0 24px'>update_state_from_can()</b><br/><span style='padding:0 24px'>⠀⠀Direciona frame para o modo DBC ativo⠀⠀</span>"]
+        UPDATE --> PROC_DBC["<span style='padding:0 24px'>Decodificação via DBC</span><br/><b style='color:#4fc3f7; padding:0 24px'>process_frame_from_dbc_mode()</b><br/><span style='padding:0 24px'>⠀⠀Extrai Gear, Throttle, Brakes e Steering⠀⠀</span>"]
+        PROC_DBC --> CALC_DYN["<span style='padding:0 24px'>Cálculo da Dinâmica Veicular</span><br/><b style='color:#4fc3f7; padding:0 24px'>compute_v_and_phi_from_efforts()</b><br/><span style='padding:0 24px'>⠀⠀Converte esforços em velocidade v e phi⠀⠀</span>"]
+        CALC_DYN --> SET_TARGET["<span style='padding:0 24px'>Atualização do Comando Alvo</span><br/><b style='color:#4fc3f7; padding:0 24px'>set_target_v_and_target_phi()</b><br/><span style='padding:0 24px'>⠀⠀Grava v e phi na estrutura estática⠀⠀</span>"]
     end
 
-    SET_TARGET -->|"Salva na memória RAM"| MEM["Memória Compartilhada do Simulador<br/>current_motion_command_vector<br/>Estrutura static compartilhada entre as threads"]
+    SET_TARGET -->|"Salva na memória RAM"| MEM["<span style='padding:0 24px'>Memória Compartilhada do Simulador</span><br/><b style='color:#ffb74d; padding:0 24px'>current_motion_command_vector</b><br/><span style='padding:0 24px'>⠀⠀Estrutura static compartilhada na RAM⠀⠀</span>"]
 
-    TIMER["Gatilho Cíclico de Tempo<br/>astro_ipc_pooling (20 ms / 50 Hz)<br/>Dispara periodicamente o passo de simulação"] -->|"Ciclo de 20 ms"| SIM_STEP
+    TIMER["<span style='padding:0 24px'>Gatilho Cíclico de Tempo</span><br/><b style='color:#ffb74d; padding:0 24px'>astro_ipc_pooling (20 ms / 50 Hz)</b><br/><span style='padding:0 24px'>⠀⠀Dispara periodicamente a simulação⠀⠀</span>"] -->|"Ciclo de 20 ms"| SIM_STEP
     MEM -->|"Consome v e phi alvo"| SIM_STEP
 
     subgraph ThreadSimulacao ["2. Thread de Simulação e Envio (one_simulation_step)"]
-        SIM_STEP["Passo Central da Simulação<br/>simulate_car_and_publish_readings()<br/>Coordena o avanço físico do veículo"]
-        SIM_STEP --> RECALC["Integração Cinemática Ackermann<br/>astro_simulator_ackerman_recalc_pos()<br/>Atualiza pose, velocidade real e esterçamento"]
-        RECALC --> PUB_ODO["Publicação de Odometria CAN<br/>publish_odometry()<br/>Calcula o RPM simulado conforme a marcha"]
-        PUB_ODO --> BATCH["Empacotamento de Sinais DBC<br/>build_can_frames_batch()<br/>Codifica sinais Gear e RPM na mensagem read"]
-        BATCH --> SEND["Transmissão no Socket CAN<br/>send_message_frame()<br/>Envia os frames CAN pelo socket can_sockfd"]
+        SIM_STEP["<span style='padding:0 24px'>Passo Central da Simulação</span><br/><b style='color:#4fc3f7; padding:0 24px'>simulate_car_and_publish_readings()</b><br/><span style='padding:0 24px'>⠀⠀Coordena o avanço físico do veículo⠀⠀</span>"]
+        SIM_STEP --> RECALC["<span style='padding:0 24px'>Integração Cinemática Ackermann</span><br/><b style='color:#4fc3f7; padding:0 24px'>astro_simulator_ackerman_recalc_pos()</b><br/><span style='padding:0 24px'>⠀⠀Atualiza pose, velocidade e esterçamento⠀⠀</span>"]
+        RECALC --> PUB_ODO["<span style='padding:0 24px'>Publicação de Odometria CAN</span><br/><b style='color:#4fc3f7; padding:0 24px'>publish_odometry()</b><br/><span style='padding:0 24px'>⠀⠀Calcula RPM simulado conforme a marcha⠀⠀</span>"]
+        PUB_ODO --> BATCH["<span style='padding:0 24px'>Empacotamento de Sinais DBC</span><br/><b style='color:#4fc3f7; padding:0 24px'>build_can_frames_batch()</b><br/><span style='padding:0 24px'>⠀⠀Codifica Gear e RPM na mensagem read⠀⠀</span>"]
+        BATCH --> SEND["<span style='padding:0 24px'>Transmissão no Socket CAN</span><br/><b style='color:#4fc3f7; padding:0 24px'>send_message_frame()</b><br/><span style='padding:0 24px'>⠀⠀Envia frames CAN pelo descritor can_sockfd⠀⠀</span>"]
     end
 
-    SEND -->|"Transmite telemetria"| CAN_OUT["Barramento Físico / Virtual CAN<br/>Saída de Telemetria (Socket CAN)<br/>Disponibiliza odometria para a pilha autônoma"]
+    SEND -->|"Transmite telemetria"| CAN_OUT["<span style='padding:0 24px'>Barramento Físico / Virtual CAN</span><br/><b style='color:#69f0ae; padding:0 24px'>Saída de Telemetria (Socket CAN)</b><br/><span style='padding:0 24px'>⠀⠀Disponibiliza odometria para a pilha⠀⠀</span>"]
 ```
 
 ---
