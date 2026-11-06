@@ -1,160 +1,126 @@
-# Fluxo de Comunicação e Simulação: Simulator Ackerman CAN
+# Arquitetura e Fluxo Geral do Simulator Ackerman CAN
 
-Este documento detalha o funcionamento interno do simulador CAN ([`simulator_ackerman_can_main.cpp`](simulator_ackerman_can_main.cpp)), abordando a **divisão concorrente entre Escuta e Envio** e os fluxos completos de **leitura de comandos** e **escrita de telemetria na rede CAN** via DBC.
+No [`main()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L3010-L3077) do `simulator_ackerman_can`, o módulo inicializa a interface CAN, faz o parse do arquivo de definições de rede (DBC), cria uma thread dedicada para escuta de mensagens do barramento e inicia o loop de simulação física do veículo:
+
+```cpp
+// Em simulator_ackerman_can_main.cpp:
+can_sockfd = init_can(argv[1]);
+read_parameters(argc, argv, &simulator_conf);
+
+if (dbc_path != NULL)
+{
+    astro_hal_can_interactions::process_dbc_file(dbc_can_process, dbc_path, argv[1]);
+    astro_hal_can_interactions::register_socket_to_interface(dbc_can_process, argv[1], can_sockfd);
+}
+
+// Cria a thread concorrente de escuta da CAN
+pthread_create(&can_thread, NULL, update_state_thread, NULL);
+
+// Inicia o loop periódico de simulação e envio de telemetria
+astro_ipc_pooling(one_simulation_step, shutdown_module);
+```
+
+Diferente de módulos puramente orientados a eventos de IPC, o simulador opera desacoplado em **duas frentes concorrentes**: a **escuta contínua de comandos** e a **simulação periódica com envio de telemetria**.
 
 ---
 
-## 1. Arquitetura Geral: Divisão entre Escuta e Envio
+## 1. As Duas Frentes do Módulo
 
-O simulador emula uma ECU automotiva real utilizando **duas frentes concorrentes desacopladas**:
+| Frente | Ponto de Entrada | Modelo de Execução | Papel no Módulo |
+| :--- | :--- | :--- | :--- |
+| **Escuta CAN (Comandos)** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Bloqueia no socket CAN aguardando pacotes. Quando chegam mensagens de comando (mensagem `"write"` no DBC), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
+| **Simulação e Envio (Telemetria)** | [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793) | **Orientado a Tempo (Timer Periódico)** | Disparado ciclicamente na frequência da simulação (ex: a cada 20 ms / 50 Hz). Atualiza a odometria do carro virtual e transmite frames de volta para a rede CAN (mensagem `"read"` no DBC: RPM e marcha). |
 
-1. **Thread de Escuta (Event-driven):** Fica bloqueada aguardando frames chegarem do barramento CAN. Assim que um pacote chega, interpreta os comandos do veículo autônomo e atualiza os alvos físicos.
-2. **Thread de Simulação e Envio (Time-driven):** Roda em um ciclo fixo de clock (ex: 50Hz / 20ms). Calcula o deslocamento do veículo no mundo virtual e transmite a telemetria do carro de volta para o barramento CAN.
+---
+
+## 2. Diagrama Macro Integrado de Fluxo
+
+O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN até a atualização física e o posterior envio periódico de telemetria:
 
 ```mermaid
 flowchart TD
-    subgraph RedecCAN["Barramento Físico / Virtual CAN"]
-        CAN_BUS[(Barramento CAN)]
+    subgraph EntradaCAN["Barramento Físico / Virtual CAN (Entrada de Dados)"]
+        CAN_IN[("Barramento CAN<br/>(Entrada de Comandos)")]
     end
 
-    subgraph Thread1["1. Thread de Escuta (update_state_thread)"]
-        A["recv_frame()"] <-- "Escuta Frames" --- CAN_BUS
-        A --> B["update_state_from_can()"]
-        B --> C["process_frame_from_dbc_mode()"]
-        C --> D["Lê Gear e Esforços (Throttle, Brakes, Steering)"]
-        D --> E["Calcula dinâmica (v, phi)"]
-        E --> F["set_target_v_and_target_phi()<br/>(Guarda na struct static)"]
+    CAN_IN -->|"Chegada de frames CAN"| RECV["recv_frame()<br/>(Bloqueia até chegar pacote)"]
+
+    subgraph ThreadEscuta["1. Thread de Escuta (update_state_thread)"]
+        RECV --> UPDATE["update_state_from_can()"]
+        UPDATE --> PARSER_CHECK{"dbc_can_process<br/>.valid_parser == true?"}
+        
+        PARSER_CHECK -- "Sim (Modo DBC)" --> PROC_DBC["process_frame_from_dbc_mode()<br/>(Lê sinais da mensagem 'write')"]
+        PARSER_CHECK -- "Não (Legado)" --> PROC_LEGACY["process_astro_can_message()<br/>(Processa IDs fixos)"]
+
+        PROC_DBC --> EXTRACT["Extração de Sinais via DBC:<br/>- Gear (Comando de Marcha)<br/>- ThrottleEffort (Acelerador)<br/>- BrakesEffort (Freio)<br/>- SteeringEffort (Volante)"]
+        EXTRACT --> CALC_DYN["Cálculo da Dinâmica Veicular:<br/>- compute_v_from_throttle_and_brakes()<br/>- compute_phi_from_steering()"]
+        CALC_DYN --> SET_TARGET["set_target_v_and_target_phi()<br/>(Salva na struct com qualificador static)"]
     end
 
-    subgraph SharedMem["Memória Compartilhada do Simulador"]
-        F --> G["simulator_config->current_motion_command_vector"]
+    subgraph MemoriaCompartilhada["Memória Compartilhada do Simulador"]
+        SET_TARGET --> MEM["simulator_config->current_motion_command_vector<br/>(Ponteiro para memória estática permanente)"]
     end
 
-    subgraph Thread2["2. Thread de Simulação e Envio (one_simulation_step)"]
-        H["Timer Periódico (real_time: 20ms)"] --> I["simulate_car_and_publish_readings()"]
-        G -.-> J["astro_simulator_ackerman_recalc_pos()<br/>(Atualiza odometria com base no target)"]
-        I --> J
-        J --> K["publish_odometry()"]
-        K --> L["Calcula RPM e Marcha atual"]
-        L --> M["build_can_frames_batch(Gear, RPM)"]
-        M --> N["send_message_frame()"]
+    subgraph ThreadSimulacao["2. Thread de Simulação e Envio (one_simulation_step)"]
+        TIMER["Timer Periódico de Simulação<br/>(Clock cíclico: real_time ex. 20ms / 50Hz)"] --> SIM_STEP["simulate_car_and_publish_readings()"]
+        
+        MEM -.->|"Consome comando alvo"| RECALC["astro_simulator_ackerman_recalc_pos()<br/>(Atualiza posição, velocidade v e esterçamento phi)"]
+        SIM_STEP --> RECALC
+        
+        RECALC --> PUB_ODO["publish_odometry(timestamp)"]
+        PUB_ODO --> CALC_RPM["Cálculo de RPM Simulado e Marcha:<br/>- driver_outputs.rpm<br/>- current_gear"]
+        CALC_RPM --> BATCH["build_can_frames_batch()<br/>(Empacota Gear e RPM na mensagem 'read')"]
+        BATCH --> SEND["send_message_frame()<br/>(send_frame via can_sockfd)"]
     end
 
-    N -- "Transmite Telemetria" ---> CAN_BUS
+    subgraph SaidaCAN["Barramento Físico / Virtual CAN (Saída de Dados)"]
+        CAN_OUT[("Barramento CAN<br/>(Saída de Telemetria)")]
+    end
+
+    SEND -->|"Transmite pacotes de odometria"| CAN_OUT
 ```
 
 ---
 
-## 2. Fluxo da Escuta (Leitura de Comandos da CAN)
+## 3. Detalhamento dos Componentes Principais
 
-A escuta roda continuamente na função [`update_state_thread()`](simulator_ackerman_can_main.cpp):
+### A. Inicialização e Parsing do DBC
+No início do programa, a função [`astro_hal_can_interactions::process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L95-L150) lê o arquivo DBC passado por `--dbc_path` e constrói as tabelas hash na memória RAM:
+* **`composite_to_message`**: Mapeia chaves compostas (ex: `"write::gear"`) para o ID CAN correspondente (`0x98EF00FE`).
+* **`composite_to_signal`**: Mapeia chaves compostas para as propriedades físicas de decodificação (`start_bit`, `size`, `factor`, `offset`).
+* **`signal_to_val_map`**: Tabela de estados discretos (`VAL_`), traduzindo códigos brutos em strings legíveis (`"neutral"`, `"drive"`, `"reverse"`).
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant CAN as Barramento CAN
-    participant Thread as update_state_thread
-    participant DBC as astro_hal_can_interactions
-    participant Physics as Modelo Dinâmico
-    participant Mem as simulator_config
+### B. Recepção e Decodificação de Comandos
+A thread [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) processa cada frame que chega:
+1. Compara o ID do frame com o ID da mensagem de atuadores registrada como `"write"` no DBC.
+2. Extrai o estado textual da marcha via [`read_can_signal_state()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L295-L341) e atualiza o estado interno da transmissão (`target_gear_id` e `gear_map`).
+3. Extrai os esforços percentuais de aceleração, freio e esterçamento.
+4. Calcula a nova velocidade desejada ($v$) e ângulo desejado ($\phi$).
+5. Chama [`set_target_v_and_target_phi()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2472-L2485), gravando os dados em uma variável declarada com **`static`**, garantindo que o comando persista válido na memória RAM para o consumo da outra thread.
 
-    CAN->>Thread: Frame CAN chega (can_id, data)
-    Thread->>DBC: read_signal(dbc, "write", "Gear", frame)
-    alt Se o frame for da mensagem "write" (0x98EF00FE)
-        DBC-->>Thread: is_match = true
-        Thread->>DBC: read_can_signal_state("write", "Gear")
-        DBC-->>Thread: Retorna estado ("drive", "reverse", "neutral")
-        Thread->>Thread: Atualiza marcha interna (target_gear_id)
-        
-        Thread->>DBC: read_signal("write", "ThrottleEffort")
-        Thread->>DBC: read_signal("write", "BrakesEffort")
-        Thread->>DBC: read_signal("write", "SteeringEffort")
-        
-        Thread->>Physics: compute_v_from_throttle_and_brakes_efforts(...)
-        Thread->>Physics: compute_phi_from_steering_effort(...)
-        Physics-->>Thread: Retorna velocidade (v) e esterçamento (phi)
-        
-        Thread->>Mem: set_target_v_and_target_phi(v, phi)
-        Note over Mem: Armazena em variável 'static'<br/>(permanece viva na RAM)
-    else Frame de outro ID
-        DBC-->>Thread: is_match = false (Descarta pacote)
-    end
-```
-
-### Por que a memória não é perdida ao final da leitura?
-Em [`set_target_v_and_target_phi()`](simulator_ackerman_can_main.cpp):
-```cpp
-void set_target_v_and_target_phi(double v, double phi)
-{
-    static astro_robot_and_trailers_motion_command_t current_motion_command_vector = {};
-
-    current_motion_command_vector.v = v;
-    current_motion_command_vector.phi = phi;
-    current_motion_command_vector.time = 1.0;
-
-    simulator_config->current_motion_command_vector = &current_motion_command_vector;
-    ...
-}
-```
-A variável possui o qualificador **`static`**. Ela não reside na pilha temporária de funções (Stack), mas sim na seção de dados permanentes do processo. O endereço `&current_motion_command_vector` permanece válido por todo o ciclo de vida do simulador.
+### C. Simulação Cinemática e Transmissão Cíclica
+No loop [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793):
+1. [`astro_simulator_ackerman_recalc_pos()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman.cpp) lê os comandos alvo da memória estática e integra o modelo cinemático Ackermann para atualizar a velocidade real `v` e o ângulo real `phi`.
+2. [`publish_odometry()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L683-L795) calcula a rotação do motor (`RPM`) em função da velocidade atual e da relação de marcha.
+3. As informações de telemetria são agrupadas no vetor de envio com a mensagem `"read"` do DBC.
+4. O HAL executa [`build_can_frames_batch()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L579-L627), inserindo os sinais de telemetria dentro do payload de 8 bytes e enviando para o socket com [`send_message_frame()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L510-L548).
 
 ---
 
-## 3. Fluxo de Escrita (Envio de Telemetria de Volta para a CAN)
+## 4. Estruturas de Memória Compartilhadas
 
-O envio é cíclico e controlado pelo loop de eventos IPC em [`one_simulation_step()`](simulator_ackerman_can_main.cpp), disparado pela frequência da simulação:
+Para permitir a comunicação entre a thread de escuta e a thread de simulação sem corrupção de dados:
 
-```mermaid
-flowchart TD
-    A["one_simulation_step()"] --> B["simulate_car_and_publish_readings()"]
-    
-    subgraph Dinamica["1. Avanço da Cinemática"]
-        B --> C["astro_simulator_ackerman_recalc_pos()"]
-        C --> D["Lê target_v e target_phi da memória estática"]
-        D --> E["Calcula nova velocidade atual (simulator_config->v)"]
-    end
-    
-    subgraph Odometria["2. Preparação dos Sinais"]
-        E --> F["publish_odometry(timestamp)"]
-        F --> G["Verifica: if (dbc_can_process.valid_parser == true)"]
-        G --> H["Calcula RPM com base na velocidade, marcha e ruído estocástico"]
-        H --> I["Monta a lista de requisição de envio:<br/>1. {'read', 'Gear', current_gear}<br/>2. {'read', 'RPM', driver_outputs.rpm}"]
-    end
-    
-    subgraph HAL_Batch["3. Empacotamento de Bits via DBC"]
-        I --> J["build_can_frames_batch(dbc_can_process, fila_de_envio)"]
-        J --> K["Localiza ID da mensagem 'read' no DBC (0x8000022D)"]
-        K --> L["Insere bits do Gear no byte 1 (start_bit 8, size 8)"]
-        L --> M["Insere bits do RPM no byte 7 (start_bit 56, size 8, escala 41.82)"]
-    end
-    
-    subgraph Transmissao["4. Transmissão no Socket"]
-        M --> N["send_message_frame(dbc_can_process, lote)"]
-        N --> O["send_frame(can_sockfd, &frame)"]
-        O --> P[("Frame enviado para o barramento CAN")]
-    end
-```
+* **`simulator_config`**: Ponteiro global para a configuração e estado dinâmico do simulador (`astro_simulator_ackerman_config_t`).
+* **`current_motion_command_vector` (estático)**: Estrutura local com tempo de vida global (`static`), cujo ponteiro é atribuído a `simulator_config->current_motion_command_vector`.
+* **`driver_outputs`**: Armazena o estado atual das saídas do motorista simulado (ex: `driver_outputs.current_gear` e `driver_outputs.rpm`).
 
-### Detalhes do Empacotamento em Lote (`build_can_frames_batch`)
-No trecho de escrita em [`publish_odometry()`](simulator_ackerman_can_main.cpp):
-```cpp
-std::vector<astro_hal_can_interactions::SignalWriteRequest> fila_de_envio = {
-    {"read", "Gear", current_gear},
-    {"read", "RPM", driver_outputs.rpm}
-};
+---
 
-auto frames_prontos = astro_hal_can_interactions::build_can_frames_batch(dbc_can_process, fila_de_envio);
+## 5. Índice de Documentação Específica
 
-for (auto& lote : frames_prontos) 
-{
-    astro_hal_can_interactions::send_message_frame(
-        dbc_can_process,
-        lote.anchor_msg_name,
-        lote.anchor_sig_name,
-        &lote.frame
-    );
-}
-```
+Para o detalhamento aprofundado de cada funcionalidade:
 
-* **Agrupamento inteligente:** O HAL verifica a qual mensagem do DBC cada sinal pertence. Como tanto `Gear` quanto `RPM` pertencem à mensagem `read` (ID `0x8000022D`), o HAL empacota ambos no **mesmo frame de 8 bytes**.
-* **Transmissão final:** `send_message_frame()` identifica o socket da interface registrada e transmite o frame montado diretamente para a rede CAN.
+1. **[`01_arquitetura_e_fluxo_geral.md`](01_arquitetura_e_fluxo_geral.md)**: Visão macro da arquitetura bi-thread, inicialização e fluxo integrado.
+2. **`02_leitura_e_processamento_de_comandos.md`** *(em desenvolvimento)*: Detalhamento do parser de entrada, extração de sinais DBC e máquina de estados da transmissão.
+3. **`03_escrita_e_envio_odometria_can.md`** *(em desenvolvimento)*: Detalhamento do cálculo de RPM, empacotamento em lote (`build_can_frames_batch`) e transmissão via socket CAN.
