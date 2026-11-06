@@ -39,32 +39,32 @@ O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN 
 
 ```mermaid
 flowchart TD
-    CAN_IN["<span style='padding:0 24px'>Barramento Físico / Virtual CAN</span><br/><b style='color:#69f0ae; padding:0 24px'>Entrada de Dados (Socket CAN)</b><br/><span style='padding:0 24px'>⠀⠀Recebe pacotes enviados pelo Vehicle Driver⠀⠀</span>"]
+    CAN_IN["Barramento Físico / Virtual CAN<br/><b style='color:#69f0ae'>Entrada de Dados (Socket CAN)</b><br/>Recebe pacotes enviados pelo Vehicle Driver na rede"]
 
     CAN_IN -->|"Chegada de frames CAN"| RECV
 
     subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
-        RECV["<span style='padding:0 24px'>Recepção no Socket CAN</span><br/><b style='color:#4fc3f7; padding:0 24px'>recv_frame()</b><br/><span style='padding:0 24px'>⠀⠀Bloqueia aguardando pacotes da rede⠀⠀</span>"]
-        RECV --> UPDATE["<span style='padding:0 24px'>Roteamento de Mensagens CAN</span><br/><b style='color:#4fc3f7; padding:0 24px'>update_state_from_can()</b><br/><span style='padding:0 24px'>⠀⠀Direciona frame para o modo DBC ativo⠀⠀</span>"]
-        UPDATE --> PROC_DBC["<span style='padding:0 24px'>Decodificação via DBC</span><br/><b style='color:#4fc3f7; padding:0 24px'>process_frame_from_dbc_mode()</b><br/><span style='padding:0 24px'>⠀⠀Extrai Gear, Throttle, Brakes e Steering⠀⠀</span>"]
-        PROC_DBC --> CALC_DYN["<span style='padding:0 24px'>Cálculo da Dinâmica Veicular</span><br/><b style='color:#4fc3f7; padding:0 24px'>compute_v_and_phi_from_efforts()</b><br/><span style='padding:0 24px'>⠀⠀Converte esforços em velocidade v e phi⠀⠀</span>"]
-        CALC_DYN --> SET_TARGET["<span style='padding:0 24px'>Atualização do Comando Alvo</span><br/><b style='color:#4fc3f7; padding:0 24px'>set_target_v_and_target_phi()</b><br/><span style='padding:0 24px'>⠀⠀Grava v e phi na estrutura estática⠀⠀</span>"]
+        RECV["Recepção no Socket CAN<br/><b style='color:#4fc3f7'>recv_frame()</b><br/>Fica bloqueado aguardando novos pacotes da rede"]
+        RECV --> UPDATE["Roteamento de Mensagens CAN<br/><b style='color:#4fc3f7'>update_state_from_can()</b><br/>Direciona o frame recebido para o modo DBC ativo"]
+        UPDATE --> PROC_DBC["Decodificação via DBC<br/><b style='color:#4fc3f7'>process_frame_from_dbc_mode()</b><br/>Extrai Gear, ThrottleEffort, BrakesEffort e SteeringEffort"]
+        PROC_DBC --> CALC_DYN["Cálculo da Dinâmica Veicular<br/><b style='color:#4fc3f7'>compute_v_and_phi_from_efforts()</b><br/>Converte os esforços recebidos em velocidade v e ângulo phi"]
+        CALC_DYN --> SET_TARGET["Atualização do Comando Alvo<br/><b style='color:#4fc3f7'>set_target_v_and_target_phi()</b><br/>Grava v e phi alvo na estrutura de memória estática"]
     end
 
-    SET_TARGET -->|"Salva na memória RAM"| MEM["<span style='padding:0 24px'>Memória Compartilhada do Simulador</span><br/><b style='color:#ffb74d; padding:0 24px'>current_motion_command_vector</b><br/><span style='padding:0 24px'>⠀⠀Estrutura static compartilhada na RAM⠀⠀</span>"]
+    SET_TARGET -->|"Salva na memória RAM"| MEM["Memória Compartilhada do Simulador<br/><b style='color:#ffb74d'>current_motion_command_vector</b><br/>Estrutura static permanente compartilhada entre as threads"]
 
-    TIMER["<span style='padding:0 24px'>Gatilho Cíclico de Tempo</span><br/><b style='color:#ffb74d; padding:0 24px'>astro_ipc_pooling (20 ms / 50 Hz)</b><br/><span style='padding:0 24px'>⠀⠀Dispara periodicamente a simulação⠀⠀</span>"] -->|"Ciclo de 20 ms"| SIM_STEP
+    TIMER["Gatilho Cíclico de Tempo<br/><b style='color:#ffb74d'>astro_ipc_pooling (20 ms / 50 Hz)</b><br/>Dispara periodicamente o passo de simulação física"] -->|"Ciclo de 20 ms"| SIM_STEP
     MEM -->|"Consome v e phi alvo"| SIM_STEP
 
     subgraph ThreadSimulacao ["2. Thread de Simulação e Envio (one_simulation_step)"]
-        SIM_STEP["<span style='padding:0 24px'>Passo Central da Simulação</span><br/><b style='color:#4fc3f7; padding:0 24px'>simulate_car_and_publish_readings()</b><br/><span style='padding:0 24px'>⠀⠀Coordena o avanço físico do veículo⠀⠀</span>"]
-        SIM_STEP --> RECALC["<span style='padding:0 24px'>Integração Cinemática Ackermann</span><br/><b style='color:#4fc3f7; padding:0 24px'>astro_simulator_ackerman_recalc_pos()</b><br/><span style='padding:0 24px'>⠀⠀Atualiza pose, velocidade e esterçamento⠀⠀</span>"]
-        RECALC --> PUB_ODO["<span style='padding:0 24px'>Publicação de Odometria CAN</span><br/><b style='color:#4fc3f7; padding:0 24px'>publish_odometry()</b><br/><span style='padding:0 24px'>⠀⠀Calcula RPM simulado conforme a marcha⠀⠀</span>"]
-        PUB_ODO --> BATCH["<span style='padding:0 24px'>Empacotamento de Sinais DBC</span><br/><b style='color:#4fc3f7; padding:0 24px'>build_can_frames_batch()</b><br/><span style='padding:0 24px'>⠀⠀Codifica Gear e RPM na mensagem read⠀⠀</span>"]
-        BATCH --> SEND["<span style='padding:0 24px'>Transmissão no Socket CAN</span><br/><b style='color:#4fc3f7; padding:0 24px'>send_message_frame()</b><br/><span style='padding:0 24px'>⠀⠀Envia frames CAN pelo descritor can_sockfd⠀⠀</span>"]
+        SIM_STEP["Passo Central da Simulação<br/><b style='color:#4fc3f7'>simulate_car_and_publish_readings()</b><br/>Coordena o avanço físico do veículo e publicações"]
+        SIM_STEP --> RECALC["Integração Cinemática Ackermann<br/><b style='color:#4fc3f7'>astro_simulator_ackerman_recalc_pos()</b><br/>Atualiza a pose, velocidade real e esterçamento no mapa"]
+        RECALC --> PUB_ODO["Publicação de Odometria CAN<br/><b style='color:#4fc3f7'>publish_odometry()</b><br/>Calcula o RPM simulado do motor conforme a marcha atual"]
+        PUB_ODO --> BATCH["Empacotamento de Sinais DBC<br/><b style='color:#4fc3f7'>build_can_frames_batch()</b><br/>Agrupa e codifica os sinais Gear e RPM na mensagem read"]
+        BATCH --> SEND["Transmissão no Socket CAN<br/><b style='color:#4fc3f7'>send_message_frame()</b><br/>Envia os frames CAN montados pelo descritor can_sockfd"]
     end
 
-    SEND -->|"Transmite telemetria"| CAN_OUT["<span style='padding:0 24px'>Barramento Físico / Virtual CAN</span><br/><b style='color:#69f0ae; padding:0 24px'>Saída de Telemetria (Socket CAN)</b><br/><span style='padding:0 24px'>⠀⠀Disponibiliza odometria para a pilha⠀⠀</span>"]
+    SEND -->|"Transmite telemetria"| CAN_OUT["Barramento Físico / Virtual CAN<br/><b style='color:#69f0ae'>Saída de Telemetria (Socket CAN)</b><br/>Disponibiliza pacotes de odometria para a pilha autônoma"]
 ```
 
 ---
