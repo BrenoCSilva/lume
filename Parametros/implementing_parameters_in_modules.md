@@ -353,7 +353,113 @@ Um sinal jamais entra nas duas etapas ao mesmo tempo:
 
 ---
 
-## 10. Parte 6: Inicialização e Validação Antecipada em `load_and_validate_dbc()`
+## 10. Parte 6: Como Funcionam `dbc_derived_signal_is_writable()` e `dbc_build_derived_frame()`
+
+Na Etapa 4 de [`publish_odometry()` (linhas 935-949)](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L935-L949), para cada sinal candidato (`Velocity`, `VelocityEncoder`, `SteeringAngle`), o `if` executa duas funções em sequência:
+
+```cpp
+if (dbc_derived_signal_is_writable(d.name) && dbc_build_derived_frame(d.name, d.value, &frame, &anchor))
+    astro_hal_can_interactions::send_message_frame(dbc_can_process, "read", anchor, &frame);
+```
+
+1. **Primeiro pergunta (`dbc_derived_signal_is_writable`)**: *"Esse sinal existe como fórmula `ASTRO_EXPR` no `.dbc` e pode ser invertido matematicamente?"*
+2. **Se `true`, manda montar (`dbc_build_derived_frame`)**: *"Pegue o valor físico real (`d.value`) e preencha os bytes do `frame` para envio na rede CAN!"*
+
+---
+
+### 10.1 Função 1: `dbc_derived_signal_is_writable(const char *name)`
+
+Definida nas [linhas 451-466](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L451-L466):
+
+```cpp
+static bool
+dbc_derived_signal_is_writable(const char *name)
+{
+    static std::unordered_map<std::string, bool> cache;
+
+    auto it = cache.find(name);
+
+    if (it != cache.end())
+        return (it->second);
+
+    struct can_frame frame;
+    std::string anchor;
+    bool ok = dbc_build_derived_frame(name, 0.1, &frame, &anchor);
+    cache[name] = ok;
+
+    return (ok);
+}
+```
+
+#### O que ela faz passo a passo:
+1. **Tabela de memória (`cache`)**: Mantém um `static std::unordered_map<std::string, bool> cache` durante toda a execução do programa. Se o sinal `name` já foi testado antes (`it != cache.end()`), retorna imediatamente `true` ou `false` sem recalcular nada.
+2. **Teste único com corpo de prova (`0.1`)**: Na primeira vez que é chamada para um sinal, cria um `struct can_frame frame` **local e descartável** (que nunca é enviado à rede CAN) e chama `dbc_build_derived_frame(name, 0.1, &frame, &anchor)`.
+   * **Por que `0.1`?** Porque `0.1` (seja `0.1 m/s` ou `0.1 rad`) é um valor diferente de zero (evitando que bytes zerados passem por coincidência) e pequeno o suficiente para caber nos limites `[min|max]` de qualquer sensor veicular sem saturar.
+   * O resultado (`ok = true` ou `false`) é salvo em `cache[name]` para todas as consultas futuras.
+
+---
+
+### 10.2 Função 2: `dbc_build_derived_frame()` (Dividida em 3 Blocos)
+
+Definida nas [linhas 412-446](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L412-L446), seu objetivo é receber o nome do sinal derivado (`sig_name`, ex: `"VelocityEncoder"`) e o valor físico desejado (`target`, ex: `5.0 m/s`), descobrir qual valor bruto `x` gravar nos sinais físicos da mensagem e preencher o `frame`.
+
+#### Bloco 1: Localizar a mensagem no `.dbc` ([linhas 414-423](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L414-L423))
+```cpp
+uint32_t id = 0;
+
+if (!dbc_read_signal_is_derived_only(sig_name) ||
+    !Libdbc::detail::get_derived_signal_message_id(dbc_can_process.parser, "read", sig_name, id))
+    return (false);
+
+const Libdbc::Message *msg = dbc_find_message_by_id(id);
+
+if ((msg == NULL) || msg->get_signals().empty())
+    return (false);
+```
+* Verifica se `sig_name` é de fato um sinal derivado (`ASTRO_EXPR`), descobre o CAN ID (`id`) da mensagem onde essa fórmula foi declarada e obtém o ponteiro `msg` (por exemplo, no `oj403.dbc`, `id = 0x201`, contendo os sinais físicos `WheelSpeed1` e `WheelSpeed2`).
+
+#### Bloco 2: "Regra de Três" para encontrar `x` ([linhas 425-435](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L425-L435))
+A função auxiliar [`dbc_eval_derived_with_all_signals(msg, sig_name, valor, &tmp, &resultado)`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L386-L406) escreve `valor` em todos os sinais físicos da mensagem (`WheelSpeed1 = valor`, `WheelSpeed2 = valor`) e usa `read_signal()` do HAL para avaliar quanto a fórmula `ASTRO_EXPR` retorna em `resultado`.
+
+```cpp
+struct can_frame tmp;
+double f0, f1, y;
+
+if (!dbc_eval_derived_with_all_signals(msg, sig_name, 0.0, &tmp, &f0) ||
+    !dbc_eval_derived_with_all_signals(msg, sig_name, 1.0, &tmp, &f1))
+    return (false);
+
+if (fabs(f1 - f0) < 1e-12)
+    return (false);
+
+double x = (target - f0) / (f1 - f0);
+```
+* Como as expressões usuais são afins/lineares ($f(x) = a \cdot x + b$), basta avaliar dois pontos para descobrir toda a reta:
+  1. **Ponto 1 (`x = 0.0`)**: Grava `0.0` nos sinais físicos e obtém **`f0`** ($f(0) = b$).
+  2. **Ponto 2 (`x = 1.0`)**: Grava `1.0` nos sinais físicos e obtém **`f1`** ($f(1) = a + b \implies a = f_1 - f_0$).
+  3. **Regra de Três (`linha 435`)**: Para que o resultado da fórmula atinja `target`, o valor `x` a ser escrito nos sinais físicos é:
+     $$x = \frac{\text{target} - f_0}{f_1 - f_0}$$
+
+#### Bloco 3: Gravar `x` no `frame` final e tirar a "Prova Real" ([linhas 437-445](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L437-L445))
+```cpp
+if (!dbc_eval_derived_with_all_signals(msg, sig_name, x, frame, &y))
+    return (false);
+
+if (fabs(y - target) > 2e-3 + 1e-3 * fabs(target))
+    return (false);
+
+*anchor = msg->get_signals().front().name;
+
+return (true);
+```
+* **Linha 437**: Grava o `x` calculado dentro do `frame` definitivo e lê de volta o resultado da fórmula em **`y`**.
+* **Linha 440 (Prova Real)**: Confere se o valor `y` lido de volta a partir dos bytes reais do `frame` bateu com o `target` desejado (dentro da tolerância `0.002 + 0.1%`).
+  * **Se bateu**: O `frame` está pronto! Guarda o nome do primeiro sinal físico em `*anchor` (necessário para `send_message_frame()` identificar a interface CAN) e retorna **`true`**.
+  * **Se não bateu** (ex: expressão multi-byte como `SteerB0 + 256*SteerB1 + 3584*SteerB2` no `ojAstro_fullDBC.dbc`, onde gravar o mesmo `x` nos 3 bytes arredonda e gera erro alto): a prova real falha e retorna **`false`**!
+
+---
+
+## 11. Parte 7: Inicialização e Validação Antecipada em `load_and_validate_dbc()`
 
 Na função `main()` ([linha 3251](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L3247-L3252)), o carregamento do `.dbc` foi encapsulado em [`load_and_validate_dbc()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L3150-L3202), que realiza uma inspeção completa nas tabelas hash antes da simulação começar:
 
