@@ -300,37 +300,126 @@ Endereço 0x98EF00FE — Payload de 8 Bytes (64 bits):
 
 ---
 
-### 4.2. Passo a Passo da Avaliação do `if (is_gear_match)`
+### 4.2. Recapitulação das Hashes, o Diferencial do `VAL_` e o `read_can_signal_state()`
 
-Com a estrutura acima em mente, veja o que acontece linha por linha quando `is_gear_match` é verdadeiro:
+Recapitulando o que vimos até aqui:
+* A primeira hash (**`composite_to_message`**) tem como chave `tipo_sinal::sinal` (ex: `"write::gear"`) e seu valor é o **endereço onde esse sinal está**. Quando chega no barramento CAN o endereço `0x98EF00FE`, podemos afirmar que aquele pacote contém informações da marcha. Porém, essa primeira hash só informa isso: qual endereço foi cadastrado (`msg->id()`) e o tamanho total desse pacote (`msg->size()`).
+* Quando queremos **ler de fato a informação** dentro desse endereço, vamos para a segunda hash (**`composite_to_signal`**), que informa **como esse endereço foi organizado** (conforme datado pelo `.dbc`).
+* Passando a mesma chave `"write::gear"` nessa segunda hash, o valor associado não é mais um endereço, e sim uma **`struct Signal`** que armazena onde está a informação de `"Gear"` dentro dos 8 bytes.
+
+#### O Diferencial da Marcha (`Gear`) e o Campo `VAL_`
+
+Nesse caso, a marcha possui um diferencial importante. No arquivo `.dbc`, apesar de `Gear` estar no mesmo endereço `0x98EF00FE` que `ThrottleEffort`, `BrakesEffort` e `SteeringEffort`, ela foi declarada de forma separada acompanhada da linha **`VAL_`**:
+
+```dbc
+BO_ 0x98EF00FE write: 8 DRIVER
+ SG_ Gear : 56|8@1+ (1,0) [0|255] "" DRIVER
+VAL_ 0x98EF00FE Gear 16 "drive" 32 "reverse" 8 "neutral" ;
+```
+
+Isso acontece porque a [`struct Signal`](file:///home/lume/astro/include/astro/astro_dbc_parser.hpp#L13-L32) possui um campo específico para armazenar esses estados `VAL_` em formato de hash:
+
+```cpp
+std::unordered_multimap<std::string, uint32_t> value_descriptions_by_name;
+```
+
+Esse campo associa cada string de estado (`"drive"`, `"reverse"`, `"neutral"`) ao seu respectivo valor numérico (`16`, `32`, `8`). Na inicialização ([`process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L138-L148)), o HAL lê esse campo `value_descriptions_by_name` da `struct Signal` e monta o dicionário reverso `signal_to_val_map` (uma **Hash dentro de outra Hash**):
+
+```text
+signal_to_val_map (Hash Externa)
+ │
+ └── Chave: "write::gear"  (it_sig_map->first)
+      └── Valor: Mini-Hash Interna (it_sig_map->second)
+           ├── [8]  --> "neutral"
+           ├── [16] --> "drive"     <-- (it_val->first = 16, it_val->second = "drive")
+           └── [32] --> "reverse"
+```
+
+#### Como `read_can_signal_state()` extrai o byte e consulta essa Hash
+
+Quando o simulador entra no `if (is_gear_match)` e executa [`read_can_signal_state(dbc_can_process, "write", "Gear", &frame)`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L318-L335), o seguinte trecho entra em ação:
+
+```cpp
+uint64_t raw_value = unpack_can_frame(sig, frame);
+
+// =========================================================
+// A MODIFICAÇÃO ESTÁ AQUI: Garantir que a chave de busca do VAL_ também seja minúscula
+// =========================================================
+std::string composite_key = to_lowercase(msg_name) + "::" + to_lowercase(sig_name);
+
+auto it_sig_map = dbc_parser.signal_to_val_map.find(composite_key);
+
+if (it_sig_map != dbc_parser.signal_to_val_map.end())
+{
+    auto it_val = it_sig_map->second.find(raw_value);
+
+    if (it_val != it_sig_map->second.end())
+    {
+        return (it_val->second); // Retorna "drive", "neutral", etc.
+    }
+}
+```
+
+1. **`uint64_t raw_value = unpack_can_frame(sig, frame);`**:  
+   Usa a `struct Signal` (`sig`, onde `start_bit = 56` e `size = 8`) para recortar apenas o **Byte 7** do frame CAN e obter o número puro que veio na rede (ex: `raw_value = 16`).
+2. **`dbc_parser.signal_to_val_map.find("write::gear")`**:  
+   Procura a chave `"write::gear"` na hash externa (`it_sig_map`). Encontrando, `it_sig_map->second` entrega a mini-hash interna da marcha (`{8: "neutral", 16: "drive", 32: "reverse"}`).
+3. **`it_sig_map->second.find(raw_value)`**:  
+   Procura o número `16` dentro da mini-hash interna (`it_val`). Encontrando, retorna `it_val->second`, que é a string **`"drive"`**!
+
+---
+
+### 4.3. De Volta ao `process_frame_from_dbc_mode()`: Atualizando a Marcha do Veículo
+
+Agora que `read_can_signal_state()` devolveu a palavra correspondente ao número que veio na CAN (ex: `"drive"`, `"reverse"` ou `"neutral"`), o fluxo continua dentro do `if (is_gear_match)`:
+
+```cpp
+        std::string estado = astro_hal_can_interactions::read_can_signal_state(dbc_can_process, "write", "Gear", &frame);
+
+        // 1. Define o ID alvo baseado no estado (usamos -99 como valor inválido/padrão)
+        int target_gear_id = -99;
+
+        if (estado == "neutral")            target_gear_id = 0;
+        else if (estado == "reverse")       target_gear_id = -1;
+        else if (estado == "drive")         target_gear_id = astro_fmax(1, current_gear_gear_map_id);
+        else if (estado == "down")          target_gear_id = astro_fmax(0, current_gear_gear_map_id - 2);
+        else if (estado == "down accurate") target_gear_id = astro_fmax(0, current_gear_gear_map_id - 1);
+        else if (estado == "up")            target_gear_id = astro_fmin(gear_map.size() - 1, current_gear_gear_map_id + 2);
+        else if (estado == "up accurate")   target_gear_id = astro_fmin(gear_map.size() - 1, current_gear_gear_map_id + 1);
+
+        // 2. Executa a lógica de atribuição UMA ÚNICA VEZ
+        if (target_gear_id != -99)
+        {
+            auto translated_gear = gear_map.find(target_gear_id);
+            if (translated_gear != gear_map.end()) {
+                current_gear = translated_gear->second->mercedes_code;
+                current_gear_gear_map_id = target_gear_id;
+                driver_outputs.current_gear = current_gear_gear_map_id;
+            }
+        }
+```
 
 ```mermaid
 flowchart TD
     MATCH["Pacote 0x98EF00FE Confirmado<br/><b style='color:#69f0ae'>if (is_gear_match == true)</b><br/>O frame recebido contém os 8 bytes da mensagem 'write'"]
 
-    MATCH --> STATE["1. Leitura do Estado Textual da Marcha<br/><b style='color:#4fc3f7'>estado = read_can_signal_state(dbc, 'write', 'Gear', &frame)</b><br/>Usa composite_to_signal ('56|8') para ler o Byte 7 e traduz via VAL_"]
+    MATCH --> STATE["1. Leitura do Estado Textual da Marcha<br/><b style='color:#4fc3f7'>estado = read_can_signal_state(dbc, 'write', 'Gear', &frame)</b><br/>Recorta o Byte 7 via unpack_can_frame e traduz no signal_to_val_map"]
 
-    STATE --> TARGET["2. Definição do ID Alvo da Marcha<br/><b style='color:#ffb74d'>if/else (neutral -> 0, reverse -> -1, drive -> >=1)</b><br/>Converte a palavra do DBC para o índice inteiro target_gear_id"]
+    STATE --> TARGET["2. Definição do ID Alvo da Marcha<br/><b style='color:#ffb74d'>if/else (neutral -> 0, reverse -> -1, drive -> >=1)</b><br/>Converte a string retornada para o índice inteiro target_gear_id"]
 
     TARGET --> MAP["3. Busca na Tabela de Câmbio e Atribuição<br/><b style='color:#4fc3f7'>translated_gear = gear_map.find(target_gear_id)</b><br/>Atualiza current_gear (mercedes_code) e driver_outputs.current_gear"]
 ```
 
-1. **Extração e Tradução para Texto (`read_can_signal_state`):**  
-   A função [`read_can_signal_state(dbc_can_process, "write", "Gear", &frame)`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L295-L341) consulta a hash `composite_to_signal["write::gear"]`, descobre que o `Gear` começa no **bit 56 com tamanho de 8 bits** (`frame.data[7]`) e extrai o número bruto gravado ali. Em seguida, cruza esse número com a tabela `VAL_` do DBC (`VAL_ 0x98EF00FE Gear 16 "drive" 32 "reverse" 8 "neutral" ;`):
-   * Se `frame.data[7] == 8` $\to$ retorna `estado = "neutral"`.
-   * Se `frame.data[7] == 16` $\to$ retorna `estado = "drive"`.
-   * Se `frame.data[7] == 32` $\to$ retorna `estado = "reverse"`.
-
-2. **Tradução do Estado para o Índice de Marcha (`target_gear_id`):**  
+1. **Passo 1 — Definição de `target_gear_id`:**  
    O simulador numera internamente suas marchas como inteiros (`-1` = Ré, `0` = Neutro, `1` a `12` = 1ª a 12ª marcha):
    * `"neutral"` $\to$ `target_gear_id = 0`
    * `"reverse"` $\to$ `target_gear_id = -1`
    * `"drive"` $\to$ `astro_fmax(1, current_gear_gear_map_id)` (garante que engate pelo menos a 1ª marcha se estava em neutro/ré, ou mantenha a marcha positiva atual).
    * `"up"` / `"down"` / `"up accurate"` / `"down accurate"` $\to$ Sobe ou desce 1 ou 2 marchas a partir da marcha atual (usado quando o arquivo DBC é de um caminhão com câmbio sequencial, como o [`Mart.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/Mart.dbc#L14)).
 
-3. **Atualização da Transmissão no Simulador (`gear_map`):**  
+2. **Passo 2 — Atualização da Transmissão (`gear_map`):**  
    Se `target_gear_id` recebeu uma marcha válida ($\neq -99$), o código busca esse índice na tabela interna [`gear_map`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L188-L205) e atualiza:
-   * **`current_gear`**: Recebe o código hexadecimal daquela marcha (`mercedes_code`, ex: `0x38` para Ré, `0x3C` para Neutro, `0x44` para 1ª marcha), que será usado na equação física de aceleração.
+   * **`current_gear`**: Recebe o código hexadecimal daquela marcha (`mercedes_code`, ex: `0x38` para Ré, `0x3C` para Neutro, `0x44` para 1ª marcha), usado na equação física de aceleração.
    * **`current_gear_gear_map_id` e `driver_outputs.current_gear`**: Guardam o índice numérico da marcha atual (`-1`, `0`, `1`...), usado posteriormente na odometria para calcular o **RPM** do motor.
 
 ### Resumo Simulado com `ojAstro_fullDBC.dbc`:
