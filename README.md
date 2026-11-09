@@ -61,7 +61,7 @@ Payload de 8 Bytes (64 bits):
 
 Durante a inicialização, a função [`process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L95-L150) carrega o arquivo `.dbc` na estrutura [`astro_hal_can_interactions_t`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L47-L62). Para permitir buscas instantâneas em $O(1)$ e evitar colisões entre sinais de mesmo nome (como `Gear` no `write` e `Gear` no `read`), o HAL cria uma **Chave Composta** em letras minúsculas:
 
-$$\text{composite\_key} = \text{to\_lowercase}(\text{msg\_name}) + \text{"::"} + \text{to\_lowercase}(\text{sig\_name})$$
+$$\text{composite\-key} = \text{to\-lowercase}(\text{msg\-name}) + \text{"::"} + \text{to\-lowercase}(\text{sig\-name})$$
 
 ```mermaid
 flowchart TD
