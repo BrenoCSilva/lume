@@ -57,21 +57,80 @@ Payload de 8 Bytes (64 bits):
 
 ---
 
-## 3. Como o HAL Armazena o DBC em Tabelas Hash
+## 3. O Caminho do Frame: De `update_state_thread()` até as Hashes do DBC
 
-Durante a inicialização, a função [`process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L95-L150) carrega o arquivo `.dbc` na estrutura [`astro_hal_can_interactions_t`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L47-L62). Para permitir buscas instantâneas em $O(1)$ e evitar colisões entre sinais de mesmo nome (como `Gear` no `write` e `Gear` no `read`), o HAL cria uma **Chave Composta** em letras minúsculas:
+Como vimos na arquitetura geral, o `simulator_ackerman_can` possui duas vias principais: **escutar** e **enviar** para o barramento CAN.
 
-$$\text{composite\-key} = \text{to\-lowercase}(\text{msg\-name}) + \text{"::"} + \text{to\-lowercase}(\text{sig\-name})$$
+A via de escuta acontece continuamente dentro de [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007), onde `recv_frame()` fica escutando o socket e armazena o frame capturado, e [`update_state_from_can()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2960-L2966) fica responsável por passar esse frame adiante para tratamento pelo simulador (o nosso veículo virtual):
+
+```cpp
+void *
+update_state_thread(void *arg __attribute__ ((unused)))
+{
+    struct can_frame frame;
+
+    while (1)
+    {
+        if (can_sockfd != -1)
+        {
+            recv_frame(can_sockfd, &frame);
+            update_state_from_can(frame);
+        }
+    }
+
+    return (NULL);
+}
+```
+
+Dentro de `update_state_from_can(frame)`, o simulador identifica se estamos trabalhando com a comunicação via **DBC** (`dbc_can_process.valid_parser == true`) ou com o modo legado/JAUS (IDs fixos por `vehicle_id`). Sendo via DBC, ele envia o frame diretamente para [`process_frame_from_dbc_mode(frame)`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2848-L2956):
+
+```cpp
+void
+update_state_from_can(struct can_frame frame)
+{
+    if (dbc_can_process.valid_parser == true)
+    {
+        process_frame_from_dbc_mode(frame);
+        return;
+    }
+    // Caso contrário, segue para o switch (vehicle_id) legado...
+}
+```
+
+### A Primeira Verificação em `process_frame_from_dbc_mode()`
+
+Ao entrar em `process_frame_from_dbc_mode()`, como esse frame é avaliado?
+
+Primeiramente, há uma tentativa de verificar se o comando de marcha (`"Gear"`) veio dentro desse frame recém-capturado:
+
+```cpp
+bool is_gear_match = false;
+astro_hal_can_interactions::read_signal(dbc_can_process, "write", "Gear", &frame, is_gear_match);
+```
+
+Nessa chamada, passamos 4 informações essenciais:
+1. **`dbc_can_process`**: A estrutura (`astro_hal_can_interactions_t`) que, lá na inicialização do programa, leu o arquivo `.dbc` e montou as tabelas Hash na memória;
+2. **`"write"`**: O tipo/nome da mensagem no DBC que queremos verificar;
+3. **`"Gear"`**: O nome do sinal específico que queremos extrair;
+4. **`&frame`**: O pacote CAN bruto que acabou de chegar do barramento.
+
+---
+
+### O que `dbc_can_process` guardou na inicialização? As Tabelas Hash do DBC
+
+Para que `read_signal()` saiba instantaneamente se aquele `&frame` contém o `"Gear"` (ou `"ThrottleEffort"`, `"BrakesEffort"`, etc.), a estrutura `dbc_can_process` montou na inicialização ([`process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L95-L150)) **duas tabelas Hash principais** (além do dicionário de estados `VAL_`).
+
+Em todas essas hashes, a **chave de busca** é a união de `"<mensagem>::<sinal>"` em minúsculas (ex: `"write::gear"`, `"write::brakeseffort"`):
 
 ```mermaid
 flowchart TD
-    DBC["Arquivo .dbc Carregado<br/><b style='color:#4fc3f7'>process_dbc_file()</b><br/>Lê todas as linhas BO_, SG_ e VAL_ na inicialização"]
+    DBC["Inicialização do Simulador<br/><b style='color:#4fc3f7'>process_dbc_file(dbc_can_process, dbc_path)</b><br/>Lê o arquivo .dbc e popula a estrutura dbc_can_process"]
 
-    DBC --> KEY["Geração da Chave Composta Única<br/><b style='color:#ffb74d'>composite_key = msg_name::sig_name</b><br/>Exemplo: 'write::brakeseffort' e 'write::gear'"]
+    DBC --> KEY["Chave Única das Hashes<br/><b style='color:#ffb74d'>composite_key = 'write::gear' / 'write::brakeseffort'</b><br/>Une o tipo da mensagem e o nome do sinal"]
 
-    KEY --> H1["Tabela Hash 1: Endereços CAN<br/><b style='color:#4fc3f7'>composite_to_message[key]</b><br/>Guarda ponteiro para Libdbc::Message (ID e DLC)"]
-    KEY --> H2["Tabela Hash 2: Receita dos Bits<br/><b style='color:#4fc3f7'>composite_to_signal[key]</b><br/>Guarda ponteiro para Libdbc::Signal (start_bit, size, factor)"]
-    KEY --> H3["Tabela Hash 3: Dicionário de Estados<br/><b style='color:#69f0ae'>signal_to_val_map[key][raw]</b><br/>Traduz valor numérico bruto em texto (ex: 16 -> 'drive')"]
+    KEY --> H1["Hash Principal 1: Endereço da Mensagem<br/><b style='color:#4fc3f7'>composite_to_message[key]</b><br/>Guarda qual é o CAN ID esperado (ex: 0x98EF00FE)"]
+    KEY --> H2["Hash Principal 2: Receita do Sinal<br/><b style='color:#4fc3f7'>composite_to_signal[key]</b><br/>Guarda a struct Signal (start_bit, size, factor, offset)"]
+    KEY --> H3["Hash Auxiliar: Estados VAL_<br/><b style='color:#69f0ae'>signal_to_val_map[key][raw]</b><br/>Traduz valor numérico bruto em texto (ex: 16 -> 'drive')"]
 ```
 
 ### 3.1. Hash de Mensagens (`composite_to_message`)
