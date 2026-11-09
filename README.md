@@ -430,3 +430,69 @@ flowchart TD
 | **`16`** *(estando em neutro)* | `"drive"` | `1` | `0x44` (`GEAR_1`) | `1` (1ª Marcha) |
 | **`32`** | `"reverse"` | `-1` | `0x38` (`REVERSE_GEAR_1`) | `-1` (Marcha Ré) |
 
+---
+
+## 5. Leitura dos Esforços, Cálculo de $(v, \phi)$ e Encerramento da Recepção
+
+Após avaliar a marcha, a segunda metade de [`process_frame_from_dbc_mode()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2885-L2956) extrai os esforços físicos do frame e conclui o ciclo de leitura daquele pacote CAN:
+
+```cpp
+    static double throttle_effort = 0.0;
+    static double brakes_effort = 0.0;
+    static double steering_effort = 0.0;
+
+    bool is_throttle_match = false;
+    bool is_brakes_match   = false;
+    bool is_steering_match = false;
+    double temp_val = 0.0;
+
+    // 1. Extração dos 3 sinais de esforço (usando as mesmas hashes do DBC)
+    temp_val = astro_hal_can_interactions::read_signal(dbc_can_process, "write", "ThrottleEffort", &frame, is_throttle_match);
+    if (is_throttle_match) throttle_effort = temp_val / 100.0;
+
+    temp_val = astro_hal_can_interactions::read_signal(dbc_can_process, "write", "BrakesEffort", &frame, is_brakes_match);
+    if (is_brakes_match) brakes_effort = temp_val / 100.0;
+
+    temp_val = astro_hal_can_interactions::read_signal(dbc_can_process, "write", "SteeringEffort", &frame, is_steering_match);
+    if (is_steering_match) steering_effort = -temp_val / 100.0;
+
+    // 2. Se o pacote continha algum dos esforços, calcula v e phi e salva no comando alvo
+    if (is_throttle_match || is_brakes_match || is_steering_match)
+    {
+        ...
+        v = compute_v_from_throttle_and_brakes_efforts(throttle_effort - g_throttle_gap / 100.0, brakes_effort - g_brake_gap / 100.0, current_gear, delta_t, v, ...);
+        phi = compute_phi_from_steering_effort(steering_effort, phi_v, phi, delta_t, ...);
+        phi = astro_clamp(-simulator_config->max_phi, phi, simulator_config->max_phi);
+
+        set_target_v_and_target_phi(v, phi);
+        previous_timestamp = astro_get_time();
+    }
+```
+
+### Resumo das 3 Etapas Finais:
+
+1. **Extração dos Esforços (`read_signal`):**  
+   Chama o mesmo `read_signal()` para `"ThrottleEffort"`, `"BrakesEffort"` e `"SteeringEffort"`. Como esses sinais não usam estados textuais (`VAL_`), o próprio retorno numérico de `decode_signal()` já traz o percentual (0 a 100%), que é dividido por `100.0` para normalizar na faixa `[0.0, 1.0]`. *(As variáveis são `static` para reter o último esforço válido caso um DBC separe freio, acelerador e volante em endereços CAN diferentes).*
+2. **Cálculo Físico de Velocidade ($v$) e Esterçamento ($\phi$):**  
+   Se pelo menos um esforço veio no pacote, as funções [`compute_v_from_throttle_and_brakes_efforts()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2927) e [`compute_phi_from_steering_effort()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2940) simulam a resposta mecânica do caminhão durante o intervalo `delta_t`, gerando a velocidade $v$ e o ângulo das rodas $\phi$.
+3. **Armazenamento Estático e Fim da Leitura (`set_target_v_and_target_phi`):**  
+   Por fim, [`set_target_v_and_target_phi(v, phi)`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2472-L2485) grava o resultado na estrutura `static current_motion_command_vector` e aponta `simulator_config->current_motion_command_vector` para ela:
+   ```cpp
+   void set_target_v_and_target_phi(double v, double phi)
+   {
+       static astro_robot_and_trailers_motion_command_t current_motion_command_vector = {};
+       current_motion_command_vector.v = v;
+       current_motion_command_vector.phi = phi;
+       current_motion_command_vector.time = 1.0;
+
+       simulator_config->current_motion_command_vector = &current_motion_command_vector;
+       ...
+   }
+   ```
+   Graças ao qualificador **`static`**, essa variável permanece viva na memória RAM durante toda a execução do programa (não é destruída ao término da função).
+
+> [!NOTE]
+> **Encerramento do Ciclo de Escuta:**  
+> Neste ponto, **a leitura do frame CAN termina**. A `update_state_thread()` retorna imediatamente ao topo do seu `while (1)` para bloquear em `recv_frame()` aguardando o próximo pacote no barramento, enquanto a outra thread do simulador (`one_simulation_step`) consome periodicamente os valores de `v` e `phi` atualizados.
+
+
