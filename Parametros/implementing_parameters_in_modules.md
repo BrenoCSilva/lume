@@ -1,150 +1,202 @@
-# Arquitetura e Fluxo Geral do Simulator Ackerman CAN
+# Escrita e Envio de Odometria na Rede CAN (`publish_odometry`)
 
-## 1. O Papel do Simulator CAN na Pilha Autônoma (Divisão de Responsabilidades)
-
-Para compreender onde o `simulator_ackerman_can` atua, é fundamental localizar as responsabilidades de cada módulo desde o planejamento de trajetória até o barramento CAN:
-
-```mermaid
-flowchart TD
-    subgraph AltoNivel ["1. Planejamento e Segurança (Espaço Cinemático: v, phi)"]
-        MPP["Planejador de Movimento (MPP)<br/><b style='color:#4fc3f7'>model_predictive_planner</b><br/>Gera plano desejado (ex: v = 2.0 m/s, phi = 18 graus)"]
-        MPP --> OA["Desvio de Obstáculos (OA)<br/><b style='color:#4fc3f7'>obstacle_avoider</b><br/>Identifica risco de colisão e atenua o plano (ex: v = 1.85 m/s)"]
-    end
-
-    OA -->|"Envia plano validado (v, phi)"| VD
-
-    subgraph Controle ["2. Controle de Baixo Nível e Tradução DBC"]
-        VD["Controlador de Atuação (VD)<br/><b style='color:#ffb74d'>vehicle_driver</b><br/>Lê odometria atual, calcula esforços PID e empacota bytes via DBC"]
-    end
-
-    VD -->|"Escreve esforços na CAN (msg 'write')"| CAN_BUS
-    CAN_BUS -->|"Devolve odometria na CAN (msg 'read')"| VD
-
-    subgraph HardwareOuSim ["3. Barramento CAN e Simulação do Veículo"]
-        CAN_BUS["Barramento CAN Virtual / Físico<br/><b style='color:#69f0ae'>vcan0 / can0 (Frames de 8 Bytes)</b><br/>Tráfego bruto de bytes mapeados pelo arquivo .dbc"]
-        CAN_BUS -->|"Entrega comandos de esforço"| SIM["Simulador do Veículo CAN<br/><b style='color:#4fc3f7'>simulator_ackerman_can</b><br/>Substitui o caminhão real: lê esforços do VD e responde odometria"]
-        SIM -->|"Publica estado físico atualizado"| CAN_BUS
-    end
-```
-
-1. **Planejamento e Segurança ([`MPP`](file:///home/lume/astro/src/mpp/) $\to$ [`Obstacle Avoider`](file:///home/lume/astro/src/obstacle_avoider/)):**  
-   Os módulos de alto nível operam em variáveis cinemáticas $(v, \phi)$. Por exemplo, o **MPP** envia um plano desejado de $v = 2{,}0\text{ m/s}$ e $\phi = 18^\circ$; o **OA** identifica uma potencial colisão à frente e altera o plano para $v = 1{,}85\text{ m/s}$ (desacelerando), enviando esse comando para o controle de baixo nível.
-2. **Tradução em Esforços e Comunicação CAN ([`Vehicle Driver - VD`](file:///home/lume/astro/src/vehicle_driver/)):**  
-   O **VD** é o módulo que se comunica diretamente com o barramento CAN. Quando recebe o plano desejado do OA, ele simultaneamente lê do barramento CAN os valores de odometria atuais do veículo e calcula os **esforços de atuação** (pedal de acelerador, freio, torque de volante e marcha) necessários para atingir aquele plano. Para transmitir esses comandos na rede CAN, o VD consulta o arquivo `.dbc` para saber exatamente como empacotar cada informação nos 8 bytes do frame (ex: primeiros 2 bytes para o freio, próximos 2 bytes para aceleração, etc.).
-3. **O Papel do [`Simulator Ackerman CAN`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp):**  
-   Em ambiente de simulação, **não temos o caminhão físico nem o barramento real do veículo**. É aqui que entra o `simulator_ackerman_can`: ele assume o papel de **"simular o comportamento físico do veículo"** na outra ponta do barramento CAN virtual (`vcan0`). Ele faz exatamente o que o caminhão real faria:
-   * **Lê da CAN** os comandos de esforço e marcha que vieram do `vehicle_driver` (usando o `.dbc` para desempacotar os bytes);
-   * **Simula a física** resultante (inércia, aceleração, esterçamento e rotação do motor);
-   * **Envia de volta para a CAN** as suas informações de odometria atualizadas para que o `vehicle_driver` possa lê-las no próximo ciclo.
+A via de envio do `simulator_ackerman_can` é responsável por fechar a malha de controle do veículo autônomo: ela simula a telemetria do caminhão (rotação do motor, velocidade e marcha engatada) e transmite periodicamente esses dados de volta para o barramento CAN através da função [`publish_odometry()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L683-L795).
 
 ---
 
-## 2. Inicialização e as Duas Frentes do Módulo
+## 1. O Ponto de Partida: O Loop Periódico de Simulação
 
-No [`main()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L3010-L3077) do `simulator_ackerman_can`, o módulo inicializa a interface CAN, faz o parse do arquivo de definições de rede (DBC), cria uma thread dedicada para escuta de mensagens do barramento e inicia o loop de simulação física do veículo:
+Diferente da escuta (que fica bloqueada esperando frames chegarem no socket), o envio de telemetria é **orientado a tempo** (*time-driven*). Ele é disparado ciclicamente dentro do loop de pooling do simulador:
+
+```mermaid
+flowchart TD
+    TIMER["Gatilho de Clock Periódico<br/><b style='color:#ffb74d'>astro_ipc_pooling (real_time: 20 ms / 50 Hz)</b><br/>Dispara a simulação em frequência fixa contínua"]
+
+    TIMER --> STEP["Passo da Simulação<br/><b style='color:#4fc3f7'>one_simulation_step() -> simulate_car_and_publish_readings()</b><br/>Coordena o avanço da física e as publicações"]
+
+    STEP --> RECALC["Integração Cinemática Ackermann<br/><b style='color:#4fc3f7'>astro_simulator_ackerman_recalc_pos()</b><br/>Consome v e phi alvo da struct estática e calcula o deslocamento real"]
+
+    RECALC --> ODO["Publicação da Odometria CAN<br/><b style='color:#69f0ae'>publish_odometry(timestamp)</b><br/>Calcula o RPM e transmite os pacotes na rede CAN via DBC"]
+```
+
+1. **`one_simulation_step()`**: Roda no período definido por `simulator_conf.real_time` (ex: a cada $20\text{ ms}$, equivalente a $50\text{ Hz}$).
+2. **`astro_simulator_ackerman_recalc_pos()`**: Consome os alvos de velocidade $v$ e esterçamento $\phi$ (que foram gravados na estrutura estática `current_motion_command_vector` pela thread de escuta) e integra as equações cinemáticas do modelo Ackermann, atualizando a velocidade atual real `simulator_config->v` e a posição do carro no mapa.
+3. **`publish_odometry(timestamp)`**: É acionada logo em seguida para gerar e transmitir a telemetria que a ECU do veículo real transmitiria nesse mesmo instante.
+
+---
+
+## 2. A Mensagem de Telemetria no DBC (`0x8000022D read`)
+
+Conforme detalhado no [README 01](01_arquitetura_e_fluxo_geral.md#1-o-papel-do-simulator-can-na-pilha-autônoma-divisão-de-responsabilidades), o simulador envia suas informações de odometria usando as mensagens batizadas de **`read`** no arquivo `.dbc`, pois são as mensagens que o controlador autônomo ([`vehicle_driver`](file:///home/lume/astro/src/vehicle_driver/)) espera **ler** da CAN:
+
+No arquivo [`ojAstro_fullDBC.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/ojAstro_fullDBC.dbc#L38-L43):
+
+```dbc
+#################### READ #########################
+
+# marcha atual e rotação do motor
+BO_ 0x8000022D read: 8 DRIVER
+  SG_ Gear : 8|8@1+ (1,0) [0|255] "" CONTROLLER
+  SG_ RPM : 56|8@1+ (41.82,0) [0|65535] "" CONTROLLER
+VAL_ 0x8000022D Gear 59 "reverse_1" 61 "neutral" 60 "neutral" 62 "gear_1" ;
+```
+
+### O que o DBC define para essa mensagem?
+* **Endereço CAN ID `0x8000022D`**: Pacote de **8 bytes (64 bits)** estendido transmitido para o barramento.
+* **Sinal `Gear` (`8|8@1+`)**: Inicia no **bit 8 com largura de 8 bits** (ou seja, ocupa o **Byte 1** do payload).
+* **Sinal `RPM` (`56|8@1+`)**: Inicia no **bit 56 com largura de 8 bits** (ou seja, ocupa o **Byte 7** do payload), com um fator de conversão de `41.82`.
+
+```text
+Endereço 0x8000022D (Mensagem 'read') — Payload de 8 Bytes:
++---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+|    Byte 0     |    Byte 1     |    Byte 2     |    Byte 3     |    Byte 4     |    Byte 5     |    Byte 6     |    Byte 7     |
+| (Bits 0 a 7)  | (Bits 8 a 15) | (Bits 16 a 23)| (Bits 24 a 31)| (Bits 32 a 39)| (Bits 40 a 47)| (Bits 48 a 55)| (Bits 56 a 63)|
++---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+|     Livre     |     Gear      |     Livre     |     Livre     |     Livre     |     Livre     |     Livre     |      RPM      |
+|   (8 bits)    |   (8 bits)    |   (8 bits)    |   (8 bits)    |   (8 bits)    |   (8 bits)    |   (8 bits)    |   (8 bits)    |
++---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
+```
+
+---
+
+## 3. Simulação Física do Motor: O Cálculo do RPM
+
+Ao entrar no bloco DBC de [`publish_odometry()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L695-L774):
 
 ```cpp
-// Em simulator_ackerman_can_main.cpp:
-can_sockfd = init_can(argv[1]);
-read_parameters(argc, argv, &simulator_conf);
-
-if (dbc_path != NULL)
+if (dbc_can_process.valid_parser == true)
 {
-    astro_hal_can_interactions::process_dbc_file(dbc_can_process, dbc_path, argv[1]);
-    astro_hal_can_interactions::register_socket_to_interface(dbc_can_process, argv[1], can_sockfd);
-}
+    // 1. Tabela de proporções de marcha mockada no escopo
+    double current_ratio = 0.0;
 
-// Cria a thread concorrente de escuta da CAN
-pthread_create(&can_thread, NULL, update_state_thread, NULL);
+    switch (driver_outputs.current_gear)
+    {
+        case -1: current_ratio = 0.000781; break; // Ré
+        case 1:  current_ratio = 0.000781; break; // 1ª marcha
+        case 2:  current_ratio = 0.000833; break; // 2ª marcha
+        case 3:  current_ratio = 0.001250; break; // 3ª marcha
+        case 4:  current_ratio = 0.001666; break; // 4ª marcha
+        case 5:  current_ratio = 0.002083; break; // 5ª marcha
+        case 6:  current_ratio = 0.002500; break; // 6ª marcha
+        case 7:  current_ratio = 0.003399; break; // 7ª marcha
+        case 8:  current_ratio = 0.004461; break; // 8ª marcha
+        default: current_ratio = 0.0;      break; // Neutro
+    }
 
-// Inicia o loop periódico de simulação e envio de telemetria
-astro_ipc_pooling(one_simulation_step, shutdown_module);
+    // 2. Lógica base de RPM (marcha lenta padrão de 1400 RPM)
+    double base_rpm = 1400.0;
+
+    if (current_ratio > 0.000001)
+    {
+        base_rpm = astro_fmax(800, simulator_config->v / current_ratio);
+    }
+
+    // 3. Emulação estocástica (ruído e oscilação real de rotação do motor)
+    driver_outputs.rpm = 1200 + sin(astro_get_time() / 5.0) * 50.0;
+    double ttt = astro_uniform_random(0.0, 1.0);
+    if (ttt < 0.2)
+        driver_outputs.rpm += -50.0;
+    else if (ttt > 0.8)
+        driver_outputs.rpm += 50.0;
 ```
 
-Diferente de módulos puramente orientados a eventos de IPC, o simulador opera desacoplado em **duas frentes concorrentes**: a **escuta contínua de comandos** e a **simulação periódica com envio de telemetria**.
-
-| Frente | Ponto de Entrada | Modelo de Execução | Papel no Módulo |
-| :--- | :--- | :--- | :--- |
-| **Escuta CAN (Comandos)** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Bloqueia no socket CAN aguardando pacotes. Quando chegam mensagens de comando (mensagem `"write"` no DBC), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
-| **Simulação e Envio (Telemetria)** | [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793) | **Orientado a Tempo (Timer Periódico)** | Disparado ciclicamente na frequência da simulação (ex: a cada 20 ms / 50 Hz). Atualiza a odometria do carro virtual e transmite frames de volta para a rede CAN (mensagem `"read"` no DBC: RPM e marcha). |
+O simulador reproduz o comportamento de uma transmissão real:
+1. Identifica a marcha atual engatada (`driver_outputs.current_gear`) e seleciona a relação mecânica (`current_ratio`).
+2. Calcula o RPM proporcional à velocidade de translação do caminhão ($v / \text{ratio}$). Se o veículo estiver em ponto morto (`current_ratio == 0`), mantém o motor em marcha lenta.
+3. Adiciona harmônicos senoidais e variações estocásticas (`sin(...)` e `astro_uniform_random`) para que o sensor de RPM não envie um sinal perfeitamente artificial, refletindo a vibração de um motor a combustão real.
 
 ---
 
-## 3. Diagrama Macro Integrado de Fluxo
+## 4. Montagem da Fila de Envio em Lote (`SignalWriteRequest`)
 
-O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN até a atualização física e o posterior envio periódico de telemetria:
+Com o RPM calculado e a marcha atual identificada, o simulador prepara os sinais que devem ser transmitidos:
+
+```cpp
+    std::vector<astro_hal_can_interactions::SignalWriteRequest> fila_de_envio = {
+        {"read", "Gear", current_gear},
+        {"read", "RPM", driver_outputs.rpm}
+    };
+```
+
+Cada item do vetor [`SignalWriteRequest`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L68-L73) especifica:
+* **`msg_name`**: O grupo/mensagem no DBC (`"read"`);
+* **`sig_name`**: O nome do sinal (`"Gear"` ou `"RPM"`);
+* **`physical_value`**: O valor físico em ponto flutuante que desejamos transmitir (ex: `current_gear = 0x44` ou `rpm = 1250.0`).
+
+---
+
+## 5. O Empacotamento Inteligente em Lote (`build_can_frames_batch`)
+
+Aqui ocorre uma das funções mais importantes do HAL. O simulador chama:
+
+```cpp
+    auto frames_prontos = astro_hal_can_interactions::build_can_frames_batch(dbc_can_process, fila_de_envio);
+```
+
+Dentro de [`build_can_frames_batch()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L579-L627), o HAL executa o agrupamento inteligente:
 
 ```mermaid
 flowchart TD
-    CAN_IN["Barramento Físico / Virtual CAN<br/><b style='color:#69f0ae'>Entrada de Dados (Socket CAN)</b><br/>Recebe pacotes enviados pelo Vehicle Driver na rede"]
+    REQ["Fila de Envio Recebida<br/><b style='color:#4fc3f7'>fila_de_envio: {'read', 'Gear'} e {'read', 'RPM'}</b><br/>Lista de sinais avulsos que o simulador deseja transmitir"]
 
-    CAN_IN -->|"Chegada de frames CAN"| RECV
+    REQ --> MAP_CHECK["Consulta de Endereço via Hashes do DBC<br/><b style='color:#4fc3f7'>get_msg_and_sig(dbc, req.msg, req.sig)</b><br/>Descobre a qual mensagem e ID cada sinal pertence"]
 
-    subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
-        RECV["Recepção no Socket CAN<br/><b style='color:#4fc3f7'>recv_frame()</b><br/>Fica bloqueado aguardando novos pacotes da rede"]
-        RECV --> UPDATE["Roteamento de Mensagens CAN<br/><b style='color:#4fc3f7'>update_state_from_can()</b><br/>Direciona o frame recebido para o modo DBC ativo"]
-        UPDATE --> PROC_DBC["Decodificação via DBC<br/><b style='color:#4fc3f7'>process_frame_from_dbc_mode()</b><br/>Extrai Gear, ThrottleEffort, BrakesEffort e SteeringEffort"]
-        PROC_DBC --> CALC_DYN["Cálculo da Dinâmica Veicular<br/><b style='color:#4fc3f7'>compute_v_and_phi_from_efforts()</b><br/>Converte os esforços recebidos em velocidade v e ângulo phi"]
-        CALC_DYN --> SET_TARGET["Atualização do Comando Alvo<br/><b style='color:#4fc3f7'>set_target_v_and_target_phi()</b><br/>Grava v e phi alvo na estrutura de memória estática"]
-    end
+    MAP_CHECK --> GROUP["Agrupamento por Mensagem (frames_by_msg)<br/><b style='color:#ffb74d'>Ambos pertencem ao ID 0x8000022D!</b><br/>Identifica que Gear e RPM dividem o mesmo pacote de 8 bytes"]
 
-    SET_TARGET -->|"Salva na memória RAM"| MEM["Memória Compartilhada do Simulador<br/><b style='color:#ffb74d'>current_motion_command_vector</b><br/>Estrutura static permanente compartilhada entre as threads"]
+    GROUP --> CREATE["Criação de um Único Frame de 8 Bytes<br/><b style='color:#4fc3f7'>frame.can_id = 0x8000022D, dlc = 8</b><br/>Inicializa os 8 bytes zerados"]
 
-    TIMER["Gatilho Cíclico de Tempo<br/><b style='color:#ffb74d'>astro_ipc_pooling (20 ms / 50 Hz)</b><br/>Dispara periodicamente o passo de simulação física"] -->|"Ciclo de 20 ms"| SIM_STEP
-    MEM -->|"Consome v e phi alvo"| SIM_STEP
+    CREATE --> PACK1["Codificação do Gear (set_signal_in_frame)<br/><b style='color:#69f0ae'>Byte 1 (start_bit 8, size 8) <- valor de Gear</b><br/>Aplica a máscara e posiciona os bits da marcha"]
 
-    subgraph ThreadSimulacao ["2. Thread de Simulação e Envio (one_simulation_step)"]
-        SIM_STEP["Passo Central da Simulação<br/><b style='color:#4fc3f7'>simulate_car_and_publish_readings()</b><br/>Coordena o avanço físico do veículo e publicações"]
-        SIM_STEP --> RECALC["Integração Cinemática Ackermann<br/><b style='color:#4fc3f7'>astro_simulator_ackerman_recalc_pos()</b><br/>Atualiza a pose, velocidade real e esterçamento no mapa"]
-        RECALC --> PUB_ODO["Publicação de Odometria CAN<br/><b style='color:#4fc3f7'>publish_odometry()</b><br/>Calcula o RPM simulado do motor conforme a marcha atual"]
-        PUB_ODO --> BATCH["Empacotamento de Sinais DBC<br/><b style='color:#4fc3f7'>build_can_frames_batch()</b><br/>Agrupa e codifica os sinais Gear e RPM na mensagem read"]
-        BATCH --> SEND["Transmissão no Socket CAN<br/><b style='color:#4fc3f7'>send_message_frame()</b><br/>Envia os frames CAN montados pelo descritor can_sockfd"]
-    end
+    PACK1 --> PACK2["Codificação do RPM (set_signal_in_frame)<br/><b style='color:#69f0ae'>Byte 7 (start_bit 56, size 8) <- RPM / 41.82</b><br/>Converte o valor físico para binário e posiciona no Byte 7"]
 
-    SEND -->|"Transmite telemetria"| CAN_OUT["Barramento Físico / Virtual CAN<br/><b style='color:#69f0ae'>Saída de Telemetria (Socket CAN)</b><br/>Disponibiliza pacotes de odometria para a pilha autônoma"]
+    PACK2 --> OUT["Vetor Final de Frames Montados<br/><b style='color:#69f0ae'>frames_prontos (1 frame contendo Gear e RPM)</b><br/>Retorna o lote pronto para transmissão"]
 ```
 
----
+### 5.1. Agrupamento Automático de Mensagens
+Em vez de criar um frame para o `Gear` e outro para o `RPM`, o HAL utiliza o mapa `std::unordered_map<const Libdbc::Message*, BatchFrameResult> frames_by_msg`:
+* Na primeira iteração (`"Gear"`), ele busca na hash `composite_to_message["read::gear"]` e descobre que o ID é `0x8000022D`. Como esse frame ainda não existe no lote, cria um `can_frame` vazio com ID `0x8000022D` e `dlc = 8`.
+* Na segunda iteração (`"RPM"`), ele busca `composite_to_message["read::rpm"]` e descobre que o ID **também é `0x8000022D`**. O HAL reaproveita o mesmo frame já criado!
 
-## 4. Detalhamento dos Componentes Principais
+### 5.2. A Equação Inversa da Física (`set_signal_in_frame`)
+Dentro de [`set_signal_in_frame()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L453-L507), o HAL faz o caminho inverso do que vimos na leitura: ele transforma o número físico em bits brutos (*raw*):
 
-### A. Inicialização e Parsing do DBC
-No início do programa, a função [`astro_hal_can_interactions::process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L95-L150) lê o arquivo DBC passado por `--dbc_path` e constrói as tabelas hash na memória RAM:
-* **`composite_to_message`**: Mapeia chaves compostas (ex: `"write::gear"`) para o ID CAN correspondente (`0x98EF00FE`).
-* **`composite_to_signal`**: Mapeia chaves compostas para as propriedades físicas de decodificação (`start_bit`, `size`, `factor`, `offset`).
-* **`signal_to_val_map`**: Tabela de estados discretos (`VAL_`), traduzindo códigos brutos em strings legíveis (`"neutral"`, `"drive"`, `"reverse"`).
+$$\text{raw\_value} = \frac{\text{physical\_value} - \text{offset}}{\text{factor}}$$
 
-### B. Recepção e Decodificação de Comandos
-A thread [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) processa cada frame que chega:
-1. Compara o ID do frame com o ID da mensagem de atuadores registrada como `"write"` no DBC.
-2. Extrai o estado textual da marcha via [`read_can_signal_state()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L295-L341) e atualiza o estado interno da transmissão (`target_gear_id` e `gear_map`).
-3. Extrai os esforços percentuais de aceleração, freio e esterçamento.
-4. Calcula a nova velocidade desejada ($v$) e ângulo desejado ($\phi$).
-5. Chama [`set_target_v_and_target_phi()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2472-L2485), gravando os dados em uma variável declarada com **`static`**, garantindo que o comando persista válido na memória RAM para o consumo da outra thread.
-
-### C. Simulação Cinemática e Transmissão Cíclica
-No loop [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793):
-1. [`astro_simulator_ackerman_recalc_pos()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman.cpp) lê os comandos alvo da memória estática e integra o modelo cinemático Ackermann para atualizar a velocidade real `v` e o ângulo real `phi`.
-2. [`publish_odometry()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L683-L795) calcula a rotação do motor (`RPM`) em função da velocidade atual e da relação de marcha.
-3. As informações de telemetria são agrupadas no vetor de envio com a mensagem `"read"` do DBC.
-4. O HAL executa [`build_can_frames_batch()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L579-L627), inserindo os sinais de telemetria dentro do payload de 8 bytes e enviando para o socket com [`send_message_frame()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L510-L548).
+* Para o **`RPM`**, onde `factor = 41.82` e `offset = 0`:
+  $$\text{raw} = \frac{1250{,}0}{41{,}82} \approx 30$$
+* Em seguida, o HAL aplica o deslocamento para o bit correto:
+  ```cpp
+  uint64_t payload = (raw_value << sig->start_bit); // Desloca 56 bits para o Byte 7
+  ```
+* E mescla esse payload com os dados do frame sem sobrescrever o `Gear` que já estava gravado no Byte 1:
+  ```cpp
+  frame->data[i] |= static_cast<unsigned char>((payload >> (i * 8)) & 0xFF);
+  ```
 
 ---
 
-## 5. Estruturas de Memória Compartilhadas
+## 6. Transmissão no Barramento CAN (`send_message_frame`)
 
-Para permitir a comunicação entre a thread de escuta e a thread de simulação sem corrupção de dados:
+Com o vetor de frames consolidado, o simulador percorre os lotes prontos e transmite cada pacote na rede CAN:
 
-* **`simulator_config`**: Ponteiro global para a configuração e estado dinâmico do simulador (`astro_simulator_ackerman_config_t`).
-* **`current_motion_command_vector` (estático)**: Estrutura local com tempo de vida global (`static`), cujo ponteiro é atribuído a `simulator_config->current_motion_command_vector`.
-* **`driver_outputs`**: Armazena o estado atual das saídas do motorista simulado (ex: `driver_outputs.current_gear` e `driver_outputs.rpm`).
+```cpp
+    for (auto& lote : frames_prontos) 
+    {
+        astro_hal_can_interactions::send_message_frame(
+            dbc_can_process,
+            lote.anchor_msg_name,
+            lote.anchor_sig_name,
+            &lote.frame
+        );
+    }
+```
 
----
+Dentro de [`send_message_frame()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L510-L548):
+1. **Identificação da Interface de Rede:** A função consulta a hash `signal_to_interface` usando o sinal âncora (`lote.anchor_sig_name`, ex: `"read::gear"`) para descobrir em qual interface CAN aquele sinal deve trafegar (ex: `can0` ou `vcan0`).
+2. **Obtenção do Socket:** Consulta a hash `interface_to_socket` para recuperar o descritor de arquivo aberto na inicialização (`can_sockfd`).
+3. **Envio Físico:** Dispara a chamada de sistema do SocketCAN:
+   ```cpp
+   send_frame(socket_fd, frame);
+   ```
 
-## 6. Índice de Documentação Específica
-
-Para o detalhamento aprofundado de cada funcionalidade:
-
-1. **[`01_arquitetura_e_fluxo_geral.md`](01_arquitetura_e_fluxo_geral.md)**: Visão macro da arquitetura bi-thread, inicialização e fluxo integrado.
-2. **[`02_processamento_dbc_e_comandos_write.md`](02_processamento_dbc_e_comandos_write.md)**: Detalhamento das tabelas Hash do DBC, fatiamento do pacote `write` (`0x98EF00FE`), cruzamento em `read_signal()`, máquina de estados da marcha (`Gear`) e persistência com `static`.
-3. **`03_escrita_e_envio_odometria_can.md`** *(em desenvolvimento)*: Detalhamento do cálculo de RPM, empacotamento em lote (`build_can_frames_batch`) e transmissão via socket CAN.
+Nesse exato momento, o frame com ID `0x8000022D` contendo a marcha atual e o RPM simulado do motor é colocado no barramento CAN. O `vehicle_driver`, que está escutando na outra ponta, lê esse pacote para atualizar seus controladores e fechar o ciclo de condução autônoma.
