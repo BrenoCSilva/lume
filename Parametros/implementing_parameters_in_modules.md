@@ -160,7 +160,7 @@ Em vez de criar um frame para o `Gear` e outro para o `RPM`, o HAL utiliza o map
 ### 5.2. A Equação Inversa da Física (`set_signal_in_frame`)
 Dentro de [`set_signal_in_frame()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L453-L507), o HAL faz o caminho inverso do que vimos na leitura: ele transforma o número físico em bits brutos (*raw*):
 
-$$\text{raw\_value} = \frac{\text{physical\_value} - \text{offset}}{\text{factor}}$$
+$$\text{raw\-value} = \frac{\text{physical\-value} - \text{offset}}{\text{factor}}$$
 
 * Para o **`RPM`**, onde `factor = 41.82` e `offset = 0`:
   $$\text{raw} = \frac{1250{,}0}{41{,}82} \approx 30$$
