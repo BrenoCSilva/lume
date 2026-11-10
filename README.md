@@ -1,498 +1,485 @@
-# Processamento do DBC, Tabelas Hash e Comandos `write` (`process_frame_from_dbc_mode`)
+# 04 — Revisão das Mudanças: Desvinculação DBC vs. JAUS no `publish_odometry()`
 
-A função [`process_frame_from_dbc_mode()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2848-L2956) é o núcleo de recepção do simulador quando executado com um arquivo `.dbc` (parâmetro `--dbc_path`). Ela é chamada continuamente pela thread [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) para cada pacote capturado na rede CAN.
-
----
-
-## 1. Por que o Simulador lê da mensagem chamada `"write"`?
-
-Conforme detalhado na [Seção 1 da Arquitetura Geral](01_arquitetura_e_fluxo_geral.md#1-o-papel-do-simulator-can-na-pilha-autônoma-divisão-de-responsabilidades), os nomes das mensagens nos arquivos `.dbc` do projeto (como o [`ojAstro_fullDBC.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/ojAstro_fullDBC.dbc)) foram definidos a partir da **perspectiva do controlador de direção (`vehicle_driver`)**:
-
-* **`write`**: Mensagens de comando que o `vehicle_driver` **escreve** na CAN para atuar no veículo (acelerador, freio, volante, marcha).
-* **`read`**: Mensagens de sensores/telemetria que o `vehicle_driver` **lê** da CAN (velocidade das rodas, ângulo do volante, RPM, marcha engatada).
-
-> [!IMPORTANT]
-> **Perspectiva Invertida no Simulador:**  
-> Como o `simulator_ackerman_can` faz o papel do **veículo físico**, ele opera no sentido oposto ao `vehicle_driver`:
-> 1. Para **receber os comandos** que o robô enviou, o simulador faz `read_signal()` na mensagem batizada de **`"write"`**.
-> 2. Para **devolver a telemetria** simulada, o simulador empacota e transmite a mensagem batizada de **`"read"`**.
+Este documento registra a análise passo a passo das alterações feitas em [`simulator_ackerman_can_main.cpp`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp) para desvincular o envio de telemetria CAN do modo legado/JAUS (`switch (vehicle_id)`) quando um arquivo `.dbc` está carregado.
 
 ---
 
-## 2. O Caminho do Frame: De `update_state_thread()` até `process_frame_from_dbc_mode()`
+## 1. Objetivo da Refatoração
 
-Como vimos na arquitetura geral, o `simulator_ackerman_can` possui duas vias muito importantes: **escutar** e **enviar** para o barramento CAN.
+Antes dessa mudança:
+* **Na leitura (`update_state_from_can`)**: A separação já era exclusiva — ou processava via DBC (`process_frame_from_dbc_mode`) e dava `return`, ou caía no `switch (vehicle_id)`.
+* **No envio (`publish_odometry`)**: Os dois modos rodavam misturados. `Gear` e `RPM` iam pela fila do DBC, mas `send_can_frame_v_lume()` e `send_can_frame_phi()` continuavam sendo chamados fora do `if` principal, dependendo de checagens manuais do nome do arquivo (`"oj403"`, `"ojAstro_fullDBC"`) ou caindo no `switch (vehicle_id)`.
 
-A via de escuta é realizada dentro de [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007), onde `recv_frame()` escuta o barramento e armazena o frame capturado, e [`update_state_from_can()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2960-L2966) é responsável por passar adiante esse frame para tratamento pelo `simulator_can` (o nosso veículo virtual):
+O objetivo das novas mudanças é permitir que **qualquer veículo** funcione dinamicamente passando apenas o caminho do `.dbc`, sem depender de código chumbado (`hardcoded`) por veículo.
+
+---
+
+## 2. Parte 1: A Mudança em `send_can_frame_v_lume()`
+
+### Como era antes:
+Dentro de `send_can_frame_v_lume()`, havia blocos manuais verificando o nome do arquivo (`if (name == "oj403")`, `else if (name == "ojAstro_fullDBC")`) para montar os bytes do pacote `0x201` na mão. Se fosse qualquer outro `.dbc`, ele caía no `switch (vehicle_id)` do modo legado.
+
+### Como ficou agora ([linhas 494-505](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L494-L505)):
+```cpp
+if (dbc_can_process.valid_parser == true)
+{
+    // Modo DBC: Velocity/VelocityEncoder sao publicados em publish_odometry() a partir do DBC (sinal fisico ou
+    // derivado invertido). O frame legado por vehicle_id so e usado se o VelocityEncoder for derivado e nao inversivel.
+    if (!dbc_read_signal_is_derived_only("VelocityEncoder") || dbc_derived_signal_is_writable("VelocityEncoder"))
+        return;
+}
+```
+Se o modo DBC estiver ativo e o DBC souber publicar a velocidade, a função **aborta imediatamente (`return`)**, evitando o duplo acionamento (DBC + JAUS em paralelo) e delegando toda a responsabilidade para o `publish_odometry()`.
+
+---
+
+## 3. Os Dois Tipos de Sinais em um Arquivo `.dbc`
+
+Para entender a condição do `if` acima, é fundamental distinguir as **duas formas** como um sinal de leitura (`read`) pode ser declarado nos arquivos `.dbc` do Astro:
+
+### Tipo A: Sinal Físico Padrão (`SG_`)
+Exemplo no [`ojAstro_fullDBC.dbc:23`](file:///home/lume/astro/src/astro_hal/dbc_file_example/ojAstro_fullDBC.dbc#L23-L24):
+```dbc
+BO_ 0x201 read: 2 DRIVER
+ SG_ VelocityEncoder : 0|16@1+ (-0.008764419, 87.64419) [-300|300] "" CONTROLLER
+```
+* Começa com a tag **`SG_`**.
+* É cadastrado diretamente na tabela hash **`composite_to_signal`** do HAL com a chave `"read::velocityencoder"`.
+* O HAL sabe **ler e escrever** nele diretamente usando `(scale, offset)` via `build_can_frames_batch()`.
+
+### Tipo B: Sinal Derivado por Expressão (`CM_ ... ASTRO_EXPR`)
+Exemplo no [`oj403.dbc:20`](file:///home/lume/astro/src/astro_hal/dbc_file_example/oj403.dbc#L20-L24):
+```dbc
+BO_ 0x201 read: 8 CONTROLLER
+ SG_ WheelSpeed1 : 16|16@1+ (1,0) [0|65535] "" CONTROLLER
+ SG_ WheelSpeed2 : 32|16@1+ (1,0) [0|65535] "" CONTROLLER
+CM_ BO_ 0x201 "ASTRO_CONST CAR_SPEED_FACTOR = 0.0017";
+CM_ BO_ 0x201 "ASTRO_EXPR VelocityEncoder = (* 0.857 (* CAR_SPEED_FACTOR (mean WheelSpeed1 WheelSpeed2)))";
+```
+* **Não existe** `SG_ VelocityEncoder` nesse arquivo! Os sinais físicos reais nos bytes do pacote são `SG_ WheelSpeed1` e `SG_ WheelSpeed2`.
+* O `VelocityEncoder` existe apenas como uma **fórmula matemática (`ASTRO_EXPR`)** dentro de um comentário `CM_`.
+* Por não ser um `SG_`, ele **não está** na hash `composite_to_signal`, mas sim na estrutura interna de expressões derivadas do parser (`has_derived_signal`).
+* Originalmente, o HAL só sabia **ler** uma `ASTRO_EXPR` (avaliando a fórmula), mas não sabia fazer a conta inversa para **escrever** nela.
+
+---
+
+## 4. Por que `dbc_read_signal_is_derived_only()` NÃO é contraditório?
+
+Olhando a implementação de [`dbc_read_signal_is_derived_only()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L343-L361):
 
 ```cpp
-void *
-update_state_thread(void *arg __attribute__ ((unused)))
+// Retorna true se o DBC carregado define fisicamente o sinal "read::<name>" (case-insensitive).
+static bool
+dbc_has_read_signal(const char *name)
+{
+    if (!dbc_can_process.valid_parser)
+        return (false);
+
+    std::string key = astro_hal_can_interactions::to_lowercase(std::string("read::") + name);
+
+    return (dbc_can_process.composite_to_signal.count(key) > 0);
+}
+
+// Sinal "read" definido no DBC apenas como ASTRO_EXPR (derivado): o HAL so sabe le-lo, nao escreve-lo.
+static bool
+dbc_read_signal_is_derived_only(const char *name)
+{
+    return (dbc_can_process.valid_parser &&
+        !dbc_has_read_signal(name) &&
+        astro_hal_can_interactions::has_signal(dbc_can_process, "read", name));
+}
+```
+
+À primeira vista, parece contraditório exigir `!dbc_has_read_signal(name)` (ser `false`) e ao mesmo tempo `has_signal(...)` (ser `true`), já que ambos parecem consultar `composite_to_signal`.
+
+Porém, ao inspecionar [`astro_hal_can_interactions::has_signal()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L655-L681), vemos que ele consulta **dois lugares diferentes em sequência**:
+
+```cpp
+inline bool
+has_signal(const astro_hal_can_interactions_t &dbc,
+        const std::string &direction,
+        const std::string &signal_name)
+{
+    ...
+    // 1º LUGAR: Olha na hash de sinais físicos (SG_)
+    if (dbc.composite_to_signal.count(composite_key) > 0)
+    {
+        return (true);
+    }
+
+    // 2º LUGAR: Só consulta ASTRO_EXPR quando o sinal físico não existe!
+    return (Libdbc::detail::has_derived_signal(dbc.parser, direction, signal_name));
+}
+```
+
+### Fluxo passo a passo da comparação:
+
+| Função | Onde procura? | Retorno para `SG_ VelocityEncoder` (`ojAstro_fullDBC.dbc`) | Retorno para `ASTRO_EXPR VelocityEncoder` (`oj403.dbc`) |
+| :--- | :--- | :---: | :---: |
+| `dbc_has_read_signal(name)` | **Apenas no 1º Lugar** (`composite_to_signal` $\to$ `SG_`) | `true` | `false` |
+| `!dbc_has_read_signal(name)` | Inverte o resultado acima (Garante que **não é `SG_`**) | `false` | `true` |
+| `has_signal(dbc, "read", name)` | **1º Lugar (`SG_`) OU 2º Lugar (`ASTRO_EXPR`)** | `true` (achou no 1º) | `true` (achou no 2º!) |
+| **`dbc_read_signal_is_derived_only(name)`** | **NÃO está no 1º (`!SG_`) E está no 2º (`ASTRO_EXPR`)** | **`false`** | **`true`** |
+
+Portanto, a expressão `!dbc_has_read_signal(name) && has_signal(...)` significa literalmente:
+> *"Retorne `true` se, e somente se, o sinal **NÃO** for um `SG_` físico na hash `composite_to_signal`, **MAS** existir cadastrado como uma fórmula `ASTRO_EXPR` no DBC."*
+
+---
+
+## 5. Os 4 Cenários da Condição de Retorno em `send_can_frame_v_lume()`
+
+Voltando à [linha 502](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L502-L503), quando estamos com DBC ativo (`valid_parser == true`):
+```cpp
+if (!dbc_read_signal_is_derived_only("VelocityEncoder") || dbc_derived_signal_is_writable("VelocityEncoder"))
+    return;
+```
+
+Fazendo o teste de mesa da lógica booleana, temos exatamente **4 cenários possíveis**:
+
+### Cenário 1: É um sinal físico `SG_` (ex: `ojAstro_fullDBC.dbc`)
+* `dbc_has_read_signal("VelocityEncoder")` $\to$ `true`
+* Como `dbc_read_signal_is_derived_only` exige `!dbc_has_read_signal`, ela já retorna **`false`**.
+* No `if (!dbc_read_signal_is_derived_only(...))`: o `!false` vira **`true`**.
+* **Resultado:** Entra no `if`, dá **`return`** imediato e deixa o `publish_odometry()` enviar pelo DBC via `build_can_frames_batch()`.
+
+### Cenário 2: NÃO é físico, É derivativo (`ASTRO_EXPR`) e É inversível (ex: `oj403.dbc`)
+* `!dbc_has_read_signal("VelocityEncoder")` $\to$ `true`
+* `has_signal("read", "VelocityEncoder")` $\to$ `true`
+* `dbc_read_signal_is_derived_only` retorna **`true`**.
+* No `if`: a 1ª parte (`!true`) dá **`false`**, então ele avalia a 2ª parte (`|| dbc_derived_signal_is_writable`), que dá **`true`**.
+* **Resultado:** Entra no `if`, dá **`return`** imediato e deixa o `publish_odometry()` inverter a equação e enviar pelo DBC!
+
+### Cenário 3: NÃO é físico e NEM derivativo (não existe `VelocityEncoder` no `.dbc`)
+Imagine um veículo cujo `.dbc` usa apenas `SG_ Velocity` e não declara `VelocityEncoder`:
+1. `!dbc_has_read_signal("VelocityEncoder")` $\to$ `true` (não é físico).
+2. `has_signal("read", "VelocityEncoder")` $\to$ **`false`** (não existe nem como físico nem como `ASTRO_EXPR`).
+3. Em `dbc_read_signal_is_derived_only`: `true && false` resulta em **`false`**.
+4. No `if (!dbc_read_signal_is_derived_only(...))`: o `!false` vira **`true`**!
+* **Resultado:** **Também dá `return`** e **NÃO** vai para o hardcode do JAUS!
+* **Por que isso é importante?** Porque se foi carregado o `.dbc` de um veículo que não possui `VelocityEncoder` (usa apenas `Velocity`), o simulador não deve injetar um frame `0x201` legado do Astro na rede CAN.
+
+### Cenário 4 (O ÚNICO caso em que cai no hardcode mesmo com DBC):
+Para o `if` falhar nas duas pontas e deixar a execução avançar para o `switch (vehicle_id)` legado:
+1. A 1ª ponta (`!dbc_read_signal_is_derived_only`) precisa ser **`false`** $\to$ ou seja, `VelocityEncoder` **existe** no `.dbc` como sinal derivativo (`ASTRO_EXPR`).
+2. E a 2ª ponta (`dbc_derived_signal_is_writable`) também precisa ser **`false`** $\to$ ou seja, a equação `ASTRO_EXPR` é complexa/não-linear (ex: dividida em múltiplos bytes independentes) e **NÃO pode ser invertida** automaticamente.
+
+---
+
+### Tabela Verdade Resumida (Modo DBC Ativo)
+
+| Como o sinal está no `.dbc`? | `is_derived_only()` | `!is_derived_only()` | `is_writable()` | Ação em `send_can_frame_v_lume()` |
+| :--- | :---: | :---: | :---: | :--- |
+| **1. É físico (`SG_`)** | `false` | **`true`** | *(nem avalia)* | **`return`** (Envia pelo DBC em lote) |
+| **2. Não existe no `.dbc`** | `false` | **`true`** | *(nem avalia)* | **`return`** (Ignora, carro não usa esse sinal) |
+| **3. É `ASTRO_EXPR` inversível** | `true` | `false` | **`true`** | **`return`** (Inverte equação e envia pelo DBC) |
+| **4. É `ASTRO_EXPR` NÃO inversível** | `true` | `false` | `false` | **Cai no hardcode (`switch vehicle_id`)** |
+
+---
+
+## 6. Parte 2: A Velocidade na `fila_de_envio` do `publish_odometry()`
+
+Em [`publish_odometry()` (linhas 888-900)](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L888-L900), após verificar e adicionar `Gear` e `RPM`, o código prepara o envio da velocidade:
+
+```cpp
+// O vehicle_driver multiplica Velocity/VelocityEncoder por -1 quando a marcha lida e re
+// (speed_signal em vehicle_driver_dbc.cpp), entao o DBC leva a velocidade em modulo na re.
+double v_dbc = (driver_outputs.current_gear < 0) ? fabs(simulator_config->v) : simulator_config->v;
+
+if (dbc_has_read_signal("Velocity"))
+    fila_de_envio.push_back({"read", "Velocity", v_dbc});
+if (dbc_has_read_signal("VelocityEncoder"))
+    fila_de_envio.push_back({"read", "VelocityEncoder", v_dbc});
+```
+
+### 6.1 Por que usar `fabs(simulator_config->v)` na marcha ré (`current_gear < 0`)?
+
+1. **Comportamento do sensor real e do `vehicle_driver`**:
+   No veículo físico, os sensores de roda/tacógrafo medem apenas a rapidez do giro da roda, enviando **sempre valores positivos ($\ge 0$)** na rede CAN, mesmo quando o caminhão dá ré.
+   Por isso, o `vehicle_driver` ([`vehicle_driver_dbc.cpp:768-775`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_dbc.cpp#L768-L775)) olha para a marcha atual e define um multiplicador de sinal (`speed_signal`):
+   ```cpp
+   if ((current_gear_status == -1) || (current_gear_status == -2)) // Marcha Ré
+       speed_signal = -1.0;
+   else
+       speed_signal = 1.0;
+   ```
+   E ao ler a velocidade da CAN ([linhas 817](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_dbc.cpp#L817) e [864](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_dbc.cpp#L864)), multiplica por `speed_signal`:
+   ```cpp
+   double velocity_frame = speed_signal * astro_hal_can_interactions::read_signal(..., "read", "Velocity", ...);
+   ```
+
+2. **Evitando inversão dupla de sinal**:
+   Na física interna do simulador, quando o veículo dá ré, `simulator_config->v` já é **negativo** (ex: `-2.0 m/s`).
+   * Se o simulador enviasse `-2.0` na CAN, o `vehicle_driver` faria `(-1.0) * (-2.0) = +2.0 m/s` (achando que o caminhão está indo para frente!), além de causar saturação em DBCs cujos sinais de roda são `unsigned` (`[0|65535]`).
+   * Aplicando `fabs(simulator_config->v)` quando `driver_outputs.current_gear < 0`, o simulador envia `+2.0` na rede CAN, imitando o sensor real, e o `vehicle_driver` reconstrói `-2.0 m/s` corretamente.
+
+---
+
+### 6.2 Por que `Velocity` e `VelocityEncoder` recebem o mesmo valor `v_dbc`?
+
+No mundo físico (em $\text{m/s}$), ambos representam exatamente a **mesma grandeza física**: a velocidade linear do veículo. A diferença está apenas na origem física do sensor no caminhão e na codificação binária do `.dbc`:
+
+1. **Origem física (e uso no `vehicle_driver`)**:
+   * **`Velocity` (ex: ID `0x8000022C`)**: Velocímetro original da central eletrônica (ECU/tacógrafo).
+   * **`VelocityEncoder` (ex: ID `0x201`)**: Encoder externo de roda (ex: encoder "Tramontina" no Astro) instalado para maior resolução em baixas velocidades.
+   * No [`vehicle_driver_dbc.cpp`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_dbc.cpp#L812-L874), ambos atualizam a mesma variável interna `vehicle_driver_dbc.current_velocity_read`.
+
+2. **Codificação binária diferente feita pelo HAL**:
+   Embora ambos recebam `v_dbc` em $\text{m/s}$ na `fila_de_envio` (ex: `5.0 m/s`), o `build_can_frames_batch()` consulta o `.dbc` e aplica o `(scale, offset)` específico de cada um. Por exemplo, no [`ojAstro_fullDBC.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/ojAstro_fullDBC.dbc#L17-L24):
+   * **`SG_ Velocity : 48|16@1+ (0.0010850694444, 0)`** $\implies \text{raw} = \frac{5.0 - 0}{0.001085} = \mathbf{4608}$ (gravado nos bytes 6 e 7 do frame `0x8000022C`).
+   * **`SG_ VelocityEncoder : 0|16@1+ (-0.008764419, 87.64419)`** $\implies \text{raw} = \frac{5.0 - 87.644}{-0.008764} = \mathbf{9429}$ (gravado nos bytes 0 e 1 do frame `0x201`).
+
+Assim, o simulador só precisa informar a velocidade física `v_dbc` em $\text{m/s}$, e o HAL se encarrega de empacotar cada sinal com sua respectiva matemática e CAN ID!
+
+---
+
+## 7. Parte 3: O Cálculo de `phi_to_dbc_steering_angle()`
+
+Na [linha 902](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L902-L903), ao adicionar o ângulo de direção (`SteeringAngle`) na `fila_de_envio`, o código chama [`phi_to_dbc_steering_angle()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L473-L478):
+
+```cpp
+static double
+phi_to_dbc_steering_angle(double phi, double v)
+{
+    double L = simulator_config->distance_between_front_and_rear_axles;
+
+    return ((1.0 + v * v * simulator_config->understeer_coeficient2) * atan(L * tan(-phi)));
+}
+```
+
+### Por que essa fórmula existe?
+Ela é a **função inversa algébrica exata** da conta que o `vehicle_driver` faz ao ler `SteeringAngle` da rede CAN em [`vehicle_driver_dbc.cpp:883-890`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_dbc.cpp#L883-L890):
+
+```cpp
+// No vehicle_driver_dbc.cpp:
+double phi_can = astro_hal_can_interactions::read_signal(dbc_can_process_, "read", "SteeringAngle", frame, is_match);
+
+double curvature = tan(phi_can / (1.0 + v * v * config->understeer_coeficient2)) / config->distance_between_front_and_rear_axles;
+vehicle_driver_dbc.dbc_assistant.steering_angle_sensor = -atan(curvature);
+```
+
+No veículo real, o sensor da barra de direção tem sinal invertido em relação ao referencial trigonométrico do Astro e sofre efeito de subesterçamento (*understeer*, $1 + v^2 k$) proporcional à distância entre eixos ($L$).
+
+Se o simulador enviasse `simulator_config->phi` diretamente no sinal `SteeringAngle`, o `vehicle_driver` dividiria o valor por $L \approx 4.76\text{ m}$ e inverteria seu sinal. Isolando $\phi_{\text{can}}$ da equação do `vehicle_driver`:
+
+1. **Equação do `vehicle_driver`**:
+   $$\phi = -\arctan\left( \frac{\tan\left(\frac{\phi_{\text{can}}}{1 + v^2 k}\right)}{L} \right)$$
+2. **Isolando $\phi_{\text{can}}$**:
+   $$\tan(-\phi) = \frac{\tan\left(\frac{\phi_{\text{can}}}{1 + v^2 k}\right)}{L} \implies \arctan(L \cdot \tan(-\phi)) = \frac{\phi_{\text{can}}}{1 + v^2 k}$$
+   $$\phi_{\text{can}} = (1 + v^2 k) \cdot \arctan(L \cdot \tan(-\phi))$$
+
+Assim, o simulador "pré-compensa" o valor enviado na CAN para que o `vehicle_driver`, ao aplicar sua fórmula de leitura, recupere exatamente o `phi` original do simulador!
+
+---
+
+## 8. Parte 4: Por que `SafeStop` e `ManualOverride` são zerados (`0.0`)?
+
+Nas [linhas 906-909](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L906-L909) e [957-958](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L957-L958):
+
+```cpp
+// Dentro do modo DBC:
+if (dbc_has_read_signal("SafeStop"))
+    fila_de_envio.push_back({"read", "SafeStop", 0.0});
+if (dbc_has_read_signal("ManualOverride"))
+    fila_de_envio.push_back({"read", "ManualOverride", 0.0});
+...
+// Fora do modo DBC (Legado):
+if (!dbc_can_process.valid_parser)
+    send_can_frame_manual_override_and_safe_stop();
+```
+
+### 1. Significado físico no `vehicle_driver`
+Esses dois sinais representam as botoeiras de segurança do painel ([`vehicle_driver_dbc.cpp:898-940`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_dbc.cpp#L898-L940)):
+* **`SafeStop = 0.0`**: Botão de parada de emergência **liberado** (`1` acionaria freio de emergência total). Além disso, cada pacote recebido atualiza o *heartbeat* `time_override_initial = timestamp` no `vehicle_driver`.
+* **`ManualOverride = 0.0`**: Chave seletora em **Modo Autônomo** (`1` indicaria que um motorista humano assumiu o volante físico).
+
+Para que o veículo simulado possa operar em modo autônomo sem travas de emergência, ambos devem ser transmitidos periodicamente com valor **`0.0`**.
+
+### 2. Desvinculação da função legada
+Antes dessa mudança, [`send_can_frame_manual_override_and_safe_stop()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L731-L761) era chamada incondicionalmente no final de `publish_odometry()`, enviando frames zerados com CAN IDs fixos (`0x18FF01FE` ou `0x600`) via `switch (vehicle_id)`.
+Agora, com `if (!dbc_can_process.valid_parser)`, a função legada só roda no modo JAUS/legado, enquanto no modo DBC esses dois sinais vão empacotados dinamicamente na `fila_de_envio`!
+
+---
+
+## 9. Parte 5: Por que existem dois blocos de envio no `publish_odometry()` (`build_can_frames_batch` vs. `derived_signals`)?
+
+Em [`publish_odometry()` (linhas 914-949)](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L914-L949), vemos que o envio via DBC é dividido em duas etapas complementares e **mutuamente exclusivas**:
+
+```cpp
+// ETAPAS 1-3: Envio em lote dos sinais físicos (SG_)
+frames_prontos = astro_hal_can_interactions::build_can_frames_batch(dbc_can_process, fila_de_envio);
+for (auto& lote : frames_prontos)
+    astro_hal_can_interactions::send_message_frame(...);
+
+// ETAPA 4: Sinais derivados (ASTRO_EXPR): escritos por inversao da expressao lida do proprio DBC.
+struct { const char *name; double value; } derived_signals[] = {
+    {"Velocity", v_dbc},
+    {"VelocityEncoder", v_dbc},
+    {"SteeringAngle", phi_to_dbc_steering_angle(simulator_config->phi, simulator_config->v)}
+};
+
+for (auto &d : derived_signals)
 {
     struct can_frame frame;
+    std::string anchor;
 
-    while (1)
-    {
-        if (can_sockfd != -1)
-        {
-            recv_frame(can_sockfd, &frame);
-            update_state_from_can(frame);
-        }
-    }
-
-    return (NULL);
+    if (dbc_derived_signal_is_writable(d.name) && dbc_build_derived_frame(d.name, d.value, &frame, &anchor))
+        astro_hal_can_interactions::send_message_frame(dbc_can_process, "read", anchor, &frame);
 }
 ```
 
-Por sua vez, `update_state_from_can(frame)` identifica se estamos trabalhando com a comunicação via **DBC** (`dbc_can_process.valid_parser == true`) ou com o modo legado/JAUS. Sendo via DBC, ela processa esse frame chamando [`process_frame_from_dbc_mode(frame)`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2848-L2956):
+### 1. Por que `build_can_frames_batch()` não envia os sinais derivados?
+A função `build_can_frames_batch()` do HAL opera exclusivamente sobre a tabela hash **`composite_to_signal`**, que armazena apenas sinais físicos declarados com **`SG_`**.
+* Por isso, ao preencher a `fila_de_envio` (Etapa 1), cada sinal é filtrado por `if (dbc_has_read_signal(...))`.
+* Se um sinal derivado (`CM_ ... ASTRO_EXPR`) fosse colocado na `fila_de_envio`, o `build_can_frames_batch()` não o encontraria na hash `composite_to_signal` e lançaria uma exceção de erro.
+
+### 2. O que aconteceria sem a Etapa 4 (`derived_signals`)?
+Em arquivos `.dbc` como o [`oj403.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/oj403.dbc#L20-L33):
+* `VelocityEncoder` **não é `SG_`** (é uma fórmula `ASTRO_EXPR` sobre `WheelSpeed1` e `WheelSpeed2`).
+* `SteeringAngle` **não é `SG_`** (é uma fórmula `ASTRO_EXPR` sobre `SteerRaw`).
+
+Portanto, para o `oj403.dbc`, `dbc_has_read_signal("VelocityEncoder")` e `dbc_has_read_signal("SteeringAngle")` retornam **`false`**, deixando ambos de fora da `fila_de_envio`. Sem a Etapa 4, o simulador nunca enviaria esses dois sinais para o `oj403`!
+
+### 3. Exclusividade Mútua (Nenhum sinal é enviado duas vezes)
+Um sinal jamais entra nas duas etapas ao mesmo tempo:
+
+| Sinal no `.dbc` | Entra no `build_can_frames_batch()` (Etapas 1-3)? | Entra no loop `derived_signals` (Etapa 4)? |
+| :--- | :---: | :---: |
+| **`VelocityEncoder` no `ojAstro_fullDBC.dbc`** (`SG_`) | **SIM** (`dbc_has_read_signal == true`) | **NÃO** (`is_derived_only == false`) |
+| **`VelocityEncoder` no `oj403.dbc`** (`ASTRO_EXPR`) | **NÃO** (`dbc_has_read_signal == false`) | **SIM** (`is_writable == true`) |
+| **`SteeringAngle` no `oj403.dbc`** (`ASTRO_EXPR`) | **NÃO** (`dbc_has_read_signal == false`) | **SIM** (`is_writable == true`) |
+
+* **Etapas 1 a 3**: Empacotam e enviam todos os sinais **`SG_`** do `.dbc`.
+* **Etapa 4**: Inverte a equação matemática e envia todos os sinais **`ASTRO_EXPR`** do `.dbc`.
+
+---
+
+## 10. Parte 6: Como Funcionam `dbc_derived_signal_is_writable()` e `dbc_build_derived_frame()`
+
+Na Etapa 4 de [`publish_odometry()` (linhas 935-949)](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L935-L949), para cada sinal candidato (`Velocity`, `VelocityEncoder`, `SteeringAngle`), o `if` executa duas funções em sequência:
 
 ```cpp
-void
-update_state_from_can(struct can_frame frame)
+if (dbc_derived_signal_is_writable(d.name) && dbc_build_derived_frame(d.name, d.value, &frame, &anchor))
+    astro_hal_can_interactions::send_message_frame(dbc_can_process, "read", anchor, &frame);
+```
+
+1. **Primeiro pergunta (`dbc_derived_signal_is_writable`)**: *"Esse sinal existe como fórmula `ASTRO_EXPR` no `.dbc` e pode ser invertido matematicamente?"*
+2. **Se `true`, manda montar (`dbc_build_derived_frame`)**: *"Pegue o valor físico real (`d.value`) e preencha os bytes do `frame` para envio na rede CAN!"*
+
+---
+
+### 10.1 Função 1: `dbc_derived_signal_is_writable(const char *name)`
+
+Definida nas [linhas 451-466](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L451-L466):
+
+```cpp
+static bool
+dbc_derived_signal_is_writable(const char *name)
 {
-    if (dbc_can_process.valid_parser == true)
-    {
-        process_frame_from_dbc_mode(frame);
-        return;
-    }
-    // Caso contrário, segue para o tratamento legado...
+    static std::unordered_map<std::string, bool> cache;
+
+    auto it = cache.find(name);
+
+    if (it != cache.end())
+        return (it->second);
+
+    struct can_frame frame;
+    std::string anchor;
+    bool ok = dbc_build_derived_frame(name, 0.1, &frame, &anchor);
+    cache[name] = ok;
+
+    return (ok);
 }
 ```
 
-### Como `process_frame_from_dbc_mode()` inicia a avaliação do frame?
-
-Logo na primeira linha útil de `process_frame_from_dbc_mode()`, há uma tentativa de verificar se o comando de marcha (`"Gear"`) veio naquele frame:
-
-```cpp
-bool is_gear_match = false;
-astro_hal_can_interactions::read_signal(dbc_can_process, "write", "Gear", &frame, is_gear_match);
-```
-
-Nessa chamada passamos:
-1. **`dbc_can_process`**: A estrutura (`astro_hal_can_interactions_t`) que na inicialização carregou o arquivo `.dbc`;
-2. **`"write"`**: O tipo/grupo de mensagem no DBC que queremos verificar;
-3. **`"Gear"`**: O sinal específico que estamos procurando;
-4. **`&frame`**: O frame que acabou de ser capturado da rede CAN.
+#### O que ela faz passo a passo:
+1. **Tabela de memória (`cache`)**: Mantém um `static std::unordered_map<std::string, bool> cache` durante toda a execução do programa. Se o sinal `name` já foi testado antes (`it != cache.end()`), retorna imediatamente `true` ou `false` sem recalcular nada.
+2. **Teste único com corpo de prova (`0.1`)**: Na primeira vez que é chamada para um sinal, cria um `struct can_frame frame` **local e descartável** (que nunca é enviado à rede CAN) e chama `dbc_build_derived_frame(name, 0.1, &frame, &anchor)`.
+   * **Por que `0.1`?** Porque `0.1` (seja `0.1 m/s` ou `0.1 rad`) é um valor diferente de zero (evitando que bytes zerados passem por coincidência) e pequeno o suficiente para caber nos limites `[min|max]` de qualquer sensor veicular sem saturar.
+   * O resultado (`ok = true` ou `false`) é salvo em `cache[name]` para todas as consultas futuras.
 
 ---
 
-## 3. Destrinchando o Arquivo DBC e a Criação da Hash de Endereços (`composite_to_message`)
+### 10.2 Função 2: `dbc_build_derived_frame()` (Dividida em 3 Blocos)
 
-Para entender como o `dbc_can_process` descobre se o `&frame` contém o sinal `"Gear"`, vamos olhar diretamente para o trecho de comandos `WRITE` configurado no arquivo [`ojAstro_fullDBC.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/ojAstro_fullDBC.dbc#L8-L31):
+Definida nas [linhas 412-446](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L412-L446), seu objetivo é receber o nome do sinal derivado (`sig_name`, ex: `"VelocityEncoder"`) e o valor físico desejado (`target`, ex: `5.0 m/s`), descobrir qual valor bruto `x` gravar nos sinais físicos da mensagem e preencher o `frame`.
 
-```dbc
-#################### WRITE #########################
+#### Bloco 1: Localizar a mensagem no `.dbc` ([linhas 414-423](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L414-L423))
+```cpp
+uint32_t id = 0;
 
-# aceleração e freio (throttle and brake)
-BO_ 0x98EF00FE write: 8 DRIVER
- SG_ ThrottleEffort : 16|16@1+ (0.1,0) [0|100] "" DRIVER
- SG_ BrakesEffort : 0|16@1+ (0.1,0) [0|100] "" DRIVER
- SG_ SignalsByte : 48|8@1+ (1,0) [0|100] "" DRIVER
- SG_ SteeringEffort : 32|16@1- (0.1,0) [-100|100] "" DRIVER
+if (!dbc_read_signal_is_derived_only(sig_name) ||
+    !Libdbc::detail::get_derived_signal_message_id(dbc_can_process.parser, "read", sig_name, id))
+    return (false);
 
-BO_ 0x98EF00FE write: 8 DRIVER
- SG_ Gear : 56|8@1+ (1,0) [0|255] "" DRIVER
-VAL_ 0x98EF00FE Gear 16 "drive" 32 "reverse" 8 "neutral" ;
+const Libdbc::Message *msg = dbc_find_message_by_id(id);
 
-# signals 
-BO_ 0x400 write: 2 DRIVER
- SG_ Headlights : 0|5@1+ (1,0) [0|1] "" DRIVER
- SG_ TurnSignal : 5|3@1+ (1,0) [0|1] "" DRIVER
- SG_ Horn : 8|3@1+ (1,0) [0|1] "" DRIVER
- SG_ Retarder : 11|3@1+ (1,0) [0|1] "" DRIVER
-
-# engine_state and vehicle_panel 
-BO_ 0x500 write: 1 DRIVER
- SG_ Engine : 0|8@1+ (1,0) [0|1] "" DRIVER
+if ((msg == NULL) || msg->get_signals().empty())
+    return (false);
 ```
+* Verifica se `sig_name` é de fato um sinal derivado (`ASTRO_EXPR`), descobre o CAN ID (`id`) da mensagem onde essa fórmula foi declarada e obtém o ponteiro `msg` (por exemplo, no `oj403.dbc`, `id = 0x201`, contendo os sinais físicos `WheelSpeed1` e `WheelSpeed2`).
 
-### 3.1. O que significam as tags `BO_`, `SG_` e `VAL_`?
+#### Bloco 2: "Regra de Três" para encontrar `x` ([linhas 425-435](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L425-L435))
+A função auxiliar [`dbc_eval_derived_with_all_signals(msg, sig_name, valor, &tmp, &resultado)`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L386-L406) escreve `valor` em todos os sinais físicos da mensagem (`WheelSpeed1 = valor`, `WheelSpeed2 = valor`) e usa `read_signal()` do HAL para avaliar quanto a fórmula `ASTRO_EXPR` retorna em `resultado`.
 
-O arquivo `.dbc` utiliza três palavras-chave principais para estruturar os pacotes da rede CAN:
+```cpp
+struct can_frame tmp;
+double f0, f1, y;
 
-| Tag DBC | Nome / Conceito | Estrutura Sintática | O que define no trecho acima? |
-| :--- | :--- | :--- | :--- |
-| **`BO_`** | **Message** *(Bloco/Cabeçalho da Mensagem CAN)* | `BO_ <CAN_ID> <NomeMsg>: <TamanhoBytes> <Transmissor>` | Define o **endereço CAN** (ex: `0x98EF00FE`, `0x400`, `0x500`), batiza o grupo como `write` e define quantos bytes (DLC) o pacote possui (`8`, `2` ou `1` byte). |
-| **`SG_`** | **Signal** *(Sinal empacotado dentro da mensagem)* | `SG_ <NomeSinal> : <BitInicio>\|<Tamanho>@<Ordem><Sinal> (<Fator>,<Offset>) [<Min>\|<Max>] "<Unidade>" <Receptor>` | Define **quais sinais viajam dentro daquele endereço `BO_`** logo acima dele e em quais bits/bytes cada informação fica gravada. |
-| **`VAL_`** | **Value Table** *(Dicionário de estados discretos)* | `VAL_ <CAN_ID> <NomeSinal> <Num1> "<Texto1>" <Num2> "<Texto2>" ;` | Traduz números inteiros brutos de um sinal em palavras legíveis (ex: no endereço `0x98EF00FE`, para o sinal `Gear`: `16` = `"drive"`, `32` = `"reverse"`, `8` = `"neutral"`). |
+if (!dbc_eval_derived_with_all_signals(msg, sig_name, 0.0, &tmp, &f0) ||
+    !dbc_eval_derived_with_all_signals(msg, sig_name, 1.0, &tmp, &f1))
+    return (false);
+
+if (fabs(f1 - f0) < 1e-12)
+    return (false);
+
+double x = (target - f0) / (f1 - f0);
+```
+* Como as expressões usuais são afins/lineares ($f(x) = a \cdot x + b$), basta avaliar dois pontos para descobrir toda a reta:
+  1. **Ponto 1 (`x = 0.0`)**: Grava `0.0` nos sinais físicos e obtém **`f0`** ($f(0) = b$).
+  2. **Ponto 2 (`x = 1.0`)**: Grava `1.0` nos sinais físicos e obtém **`f1`** ($f(1) = a + b \implies a = f_1 - f_0$).
+  3. **Regra de Três (`linha 435`)**: Para que o resultado da fórmula atinja `target`, o valor `x` a ser escrito nos sinais físicos é:
+     $$x = \frac{\text{target} - f_0}{f_1 - f_0}$$
+
+#### Bloco 3: Gravar `x` no `frame` final e tirar a "Prova Real" ([linhas 437-445](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L437-L445))
+```cpp
+if (!dbc_eval_derived_with_all_signals(msg, sig_name, x, frame, &y))
+    return (false);
+
+if (fabs(y - target) > 2e-3 + 1e-3 * fabs(target))
+    return (false);
+
+*anchor = msg->get_signals().front().name;
+
+return (true);
+```
+* **Linha 437**: Grava o `x` calculado dentro do `frame` definitivo e lê de volta o resultado da fórmula em **`y`**.
+* **Linha 440 (Prova Real)**: Confere se o valor `y` lido de volta a partir dos bytes reais do `frame` bateu com o `target` desejado (dentro da tolerância `0.002 + 0.1%`).
+  * **Se bateu**: O `frame` está pronto! Guarda o nome do primeiro sinal físico em `*anchor` (necessário para `send_message_frame()` identificar a interface CAN) e retorna **`true`**.
+  * **Se não bateu** (ex: expressão multi-byte como `SteerB0 + 256*SteerB1 + 3584*SteerB2` no `ojAstro_fullDBC.dbc`, onde gravar o mesmo `x` nos 3 bytes arredonda e gera erro alto): a prova real falha e retorna **`false`**!
 
 ---
 
-### 3.2. Organização dos Sinais por Endereço CAN no Bloco `WRITE`
+## 11. Parte 7: Inicialização e Validação Antecipada em `load_and_validate_dbc()`
 
-Esses são todos os comandos de `write` configurados no DBC — ou seja, é o padrão que o **Vehicle Driver (VD)** segue para enviar seus comandos de atuação e como o **Simulator CAN (veículo virtual)** deve lê-los.
-
-Analisando o trecho do DBC acima, observamos que o VD escreve em **3 endereços distintos**, padronizando o envio dos seguintes sinais em cada endereço:
-
-* **Endereço `0x98EF00FE` (`write`, 8 bytes):**
-  * `SG_ ThrottleEffort` *(Esforço de aceleração)*
-  * `SG_ BrakesEffort` *(Esforço de frenagem)*
-  * `SG_ SignalsByte` *(Byte de sinais auxiliares)*
-  * `SG_ SteeringEffort` *(Esforço de esterçamento do volante)*
-  * `SG_ Gear` *(Comando de marcha)*
-* **Endereço `0x400` (`write`, 2 bytes):**
-  * `SG_ Headlights` *(Faróis)*
-  * `SG_ TurnSignal` *(Setas)*
-  * `SG_ Horn` *(Buzina)*
-  * `SG_ Retarder` *(Freio motor / Retarder)*
-* **Endereço `0x500` (`write`, 1 byte):**
-  * `SG_ Engine` *(Estado do motor)*
-
----
-
-### 3.3. A Criação da Hash de Endereços (`composite_to_message`)
-
-Quando o simulador captura um `frame` na rede CAN, centenas de pacotes de diferentes endereços estão passando pelo cabo. Para filtrar rapidamente **qual é o endereço esperado de um sinal** sem precisar varrer o arquivo DBC toda vez, o HAL cria na inicialização ([`process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L95-L150)) uma **Hash de Mensagens/Endereços** chamada `composite_to_message`.
-
-Para montar a **Chave (Key)** dessa hash, o HAL junta o nome da mensagem (`BO_`) com o nome do sinal (`SG_`) em letras minúsculas, separados por `"::"`:
-
-$$\text{Chave} = \text{"<nome\_da\_msg>::<nome\_do\_sinal>"}$$
-
-A partir do trecho `WRITE` do DBC acima, a tabela hash `composite_to_message` fica armazenada na memória RAM exatamente assim:
-
-| Chave na Hash (`composite_key`) | Valor Armazenado (`const Libdbc::Message*`) | Endereço (`msg->id()`) | Tamanho (`msg->size()`) |
-| :--- | :--- | :--- | :--- |
-| `"write::throttleeffort"` | Ponteiro para `Message (0x98EF00FE)` | **`0x98EF00FE`** | `8 bytes` |
-| `"write::brakeseffort"` | Ponteiro para `Message (0x98EF00FE)` | **`0x98EF00FE`** | `8 bytes` |
-| `"write::signalsbyte"` | Ponteiro para `Message (0x98EF00FE)` | **`0x98EF00FE`** | `8 bytes` |
-| `"write::steeringeffort"` | Ponteiro para `Message (0x98EF00FE)` | **`0x98EF00FE`** | `8 bytes` |
-| **`"write::gear"`** | Ponteiro para `Message (0x98EF00FE)` | **`0x98EF00FE`** | `8 bytes` |
-| `"write::headlights"` | Ponteiro para `Message (0x400)` | **`0x400`** | `2 bytes` |
-| `"write::turnsignal"` | Ponteiro para `Message (0x400)` | **`0x400`** | `2 bytes` |
-| `"write::horn"` | Ponteiro para `Message (0x400)` | **`0x400`** | `2 bytes` |
-| `"write::retarder"` | Ponteiro para `Message (0x400)` | **`0x400`** | `2 bytes` |
-| `"write::engine"` | Ponteiro para `Message (0x500)` | **`0x500`** | `1 byte` |
-
----
-
-### 3.4. Como `get_msg_and_sig()` e `read_signal()` Utilizam essa Hash na Prática
-
-Voltando à nossa chamada lá no simulador:
-```cpp
-astro_hal_can_interactions::read_signal(dbc_can_process, "write", "Gear", &frame, is_gear_match);
-```
-
-Dentro de [`read_signal()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L402-L430), o código invoca [`get_msg_and_sig()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L190-L213) para formar a chave e buscar o endereço na hash:
+Na função `main()` ([linha 3251](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L3247-L3252)), o carregamento do `.dbc` foi encapsulado em [`load_and_validate_dbc()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L3150-L3202), que realiza uma inspeção completa nas tabelas hash antes da simulação começar:
 
 ```cpp
-// 1. Dentro de get_msg_and_sig(dbc_parser, "write", "Gear"):
-std::string composite_key = to_lowercase(msg_name) + "::" + to_lowercase(sig_name);
-// Resultado: composite_key = "write::gear"
-
-auto it_msg = dbc_parser.composite_to_message.find("write::gear");
-auto it_sig = dbc_parser.composite_to_signal.find("write::gear");
-
-return std::make_pair(it_msg->second, it_sig->second);
-```
-
-Em seguida, `read_signal()` recebe esse resultado em `auto result` e faz o **filtro de endereço**:
-
-```cpp
-// 2. Dentro de read_signal():
-auto result = get_msg_and_sig(dbc_parser, msg_name, sig_name);
-const Libdbc::Message *msg = result.first; // Ponteiro obtido da hash composite_to_message
-
-is_msg_match = false;
-
-// Compara o endereço do frame que chegou na rede com o endereço guardado na Hash!
-if (frame->can_id == msg->id()) // Ex: frame->can_id == 0x98EF00FE ?
+if (dbc_path != NULL)
 {
-    is_msg_match = true;
-    return (decode_signal(result.second, frame->data));
+    load_and_validate_dbc(dbc_path, argv[1]);
 }
 ```
 
-```mermaid
-flowchart TD
-    CALL["Chamada no Simulator CAN<br/><b style='color:#4fc3f7'>read_signal(dbc_can_process, 'write', 'Gear', &frame, is_gear_match)</b><br/>Queremos saber se o frame recebido traz o comando de marcha"]
-
-    CALL --> GET["Formação da Chave e Busca na Hash<br/><b style='color:#4fc3f7'>get_msg_and_sig(dbc_parser, 'write', 'Gear')</b><br/>Monta a chave 'write::gear' e consulta composite_to_message"]
-
-    GET --> MSG["Endereço Esperado Identificado<br/><b style='color:#ffb74d'>msg = result.first -> msg->id() = 0x98EF00FE</b><br/>A hash informa que o sinal Gear do write mora no ID 0x98EF00FE"]
-
-    MSG --> CHECK["Validação com o Pacote do Barramento<br/><b style='color:#ffb74d'>if (frame->can_id == msg->id())</b><br/>Compara o ID do frame capturado no socket com 0x98EF00FE"]
-
-    CHECK -->|"Diferente (Ex: 0x400 ou 0x201)"| NO["Não é o pacote de Gear<br/><b style='color:#ff5252'>is_gear_match = false</b><br/>Retorna 0.0 imediatamente e ignora o bloco"]
-
-    CHECK -->|"Igual (É 0x98EF00FE!)"| YES["Endereço Confirmado!<br/><b style='color:#69f0ae'>is_gear_match = true</b><br/>Decodifica o frame e retorna ao process_frame_from_dbc_mode"]
-```
-
-Sendo o endereço que se deseja (nesse caso `0x98EF00FE`, o endereço onde está a marcha), `is_gear_match` recebe `true`, acontece a decodificação do frame através de `return (decode_signal(result.second, frame->data));` e o fluxo retorna ao `process_frame_from_dbc_mode()`.
-
----
-
-## 4. A Segunda Hash (`composite_to_signal`) e a Avaliação da Marcha (`if (is_gear_match)`)
-
-De volta ao `process_frame_from_dbc_mode()`, como `is_gear_match` agora é `true`, o código entra no bloco condicional para descobrir qual marcha foi solicitada e atualizar o veículo virtual:
-
-```cpp
-    if (is_gear_match)
-    {
-        std::string estado = astro_hal_can_interactions::read_can_signal_state(dbc_can_process, "write", "Gear", &frame);
-
-        // 1. Define o ID alvo baseado no estado (usamos -99 como valor inválido/padrão)
-        int target_gear_id = -99;
-
-        if (estado == "neutral")            target_gear_id = 0;
-        else if (estado == "reverse")       target_gear_id = -1;
-        else if (estado == "drive")         target_gear_id = astro_fmax(1, current_gear_gear_map_id);
-        else if (estado == "down")          target_gear_id = astro_fmax(0, current_gear_gear_map_id - 2);
-        else if (estado == "down accurate") target_gear_id = astro_fmax(0, current_gear_gear_map_id - 1);
-        else if (estado == "up")            target_gear_id = astro_fmin(gear_map.size() - 1, current_gear_gear_map_id + 2);
-        else if (estado == "up accurate")   target_gear_id = astro_fmin(gear_map.size() - 1, current_gear_gear_map_id + 1);
-
-        // 2. Executa a lógica de atribuição UMA ÚNICA VEZ
-        if (target_gear_id != -99)
-        {
-            auto translated_gear = gear_map.find(target_gear_id);
-            if (translated_gear != gear_map.end()) {
-                current_gear = translated_gear->second->mercedes_code;
-                current_gear_gear_map_id = target_gear_id;
-                driver_outputs.current_gear = current_gear_gear_map_id;
-            }
-        }
-        //printf("Gear: %d %d %d %s\n", current_gear, current_gear_gear_map_id, target_gear_id, estado.c_str());
-    }
-```
-
-### 4.1. Como os Sinais são Organizados nos 8 Bytes? A Hash `composite_to_signal`
-
-O DBC já nos avisou (pela primeira hash) que o endereço `0x98EF00FE` contém 5 sinais diferentes dividindo os mesmos 8 bytes: aceleração, freio, esterçamento, byte de sinais e marcha. Mas **como o código sabe exatamente quais bits pertencem à marcha ou ao acelerador?**
-
-É aqui que entra a **Segunda Hash (`composite_to_signal`)**, cujo valor é retornado em `result.second` pela função `get_msg_and_sig()`. 
-
-Enquanto a primeira hash guardava o endereço da mensagem (`BO_`), a segunda hash usa **a mesma chave composta** (`"write::throttleeffort"`, `"write::gear"`, etc.), mas guarda como valor um ponteiro para uma [`struct Libdbc::Signal`](file:///home/lume/astro/include/astro/astro_dbc_parser.hpp#L13-L32) que interpreta toda a descrição técnica à direita do sinal no DBC:
-
-```dbc
-SG_ ThrottleEffort : 16|16@1+ (0.1,0) [0|100] "" DRIVER
-SG_ Gear           : 56|8@1+  (1,0)   [0|255] "" DRIVER
-```
-
-Veja como o trecho `"16|16@1+ (0.1,0) [0|100] "" DRIVER"` é fatiado e armazenado dentro da `struct Signal` na memória:
-
-| Campo da `struct Signal` | Valor (`ThrottleEffort`) | Valor (`Gear`) | De onde veio no DBC? | O que significa? |
-| :--- | :--- | :--- | :--- | :--- |
-| **`name`** | `"ThrottleEffort"` | `"Gear"` | `SG_ <Nome>` | Nome do sinal. |
-| **`is_multiplexed`** | `false` | `false` | *(sem `M`)* | Sinal simples (não multiplexado). |
-| **`start_bit`** | **`16`** | **`56`** | **`16\|`** / **`56\|`** | Em qual bit dos 64 bits o sinal começa. |
-| **`size`** | **`16`** | **`8`** | **`\|16`** / **`\|8`** | Quantos bits de largura o sinal ocupa. |
-| **`is_bigendian`** | `false` | `false` | **`@1`** | `@1` = Little-Endian (Intel). `@0` = Big-Endian. |
-| **`is_signed`** | `false` | `false` | **`+`** | `+` = Sem sinal (positivo). `-` = Com sinal (negativo/positivo). |
-| **`factor`** | **`0.1`** | **`1.0`** | **`(0.1,`** / **`(1,`** | Fator multiplicador para obter o valor físico. |
-| **`offset`** | **`0.0`** | **`0.0`** | **`,0)`** | Soma/deslocamento para obter o valor físico. |
-| **`min` / `max`** | `0` a `100` | `0` a `255` | **`[0\|100]`** | Faixa de valores mínimo e máximo. |
-| **`unit`** | `""` | `""` | **`""`** | Unidade física do sinal. |
-| **`receivers`** | `{"DRIVER"}` | `{"DRIVER"}` | **`DRIVER`** | Módulo receptor definido no DBC. |
-| **`value_descriptions`** | *(vazio)* | `{16:"drive", 32:"reverse", 8:"neutral"}` | Linha **`VAL_`** | Estados textuais associados aos números do sinal. |
-
-Graças aos campos `start_bit` e `size` guardados nessa hash para cada sinal do endereço `0x98EF00FE`, o HAL sabe exatamente como os 8 bytes (64 bits) do pacote foram organizados pelo `vehicle_driver`:
-
-```text
-Endereço 0x98EF00FE — Payload de 8 Bytes (64 bits):
-+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
-|    Byte 0     |    Byte 1     |    Byte 2     |    Byte 3     |    Byte 4     |    Byte 5     |    Byte 6     |    Byte 7     |
-| (Bits 0 a 7)  | (Bits 8 a 15) | (Bits 16 a 23)| (Bits 24 a 31)| (Bits 32 a 39)| (Bits 40 a 47)| (Bits 48 a 55)| (Bits 56 a 63)|
-+---------------+---------------+---------------+---------------+---------------+---------------+---------------+---------------+
-|<------- BrakesEffort -------->|<------ ThrottleEffort ------->|<------ SteeringEffort ------->|  SignalsByte  |     Gear      |
-|       start_bit: 0 | 16       |      start_bit: 16 | 16       |      start_bit: 32 | 16       |  bit: 48 | 8  |  bit: 56 | 8  |
-+-------------------------------+-------------------------------+-------------------------------+---------------+---------------+
-```
-
----
-
-### 4.2. Recapitulação das Hashes, o Diferencial do `VAL_` e o `read_can_signal_state()`
-
-Recapitulando o que vimos até aqui:
-* A primeira hash (**`composite_to_message`**) tem como chave `tipo_sinal::sinal` (ex: `"write::gear"`) e seu valor é o **endereço onde esse sinal está**. Quando chega no barramento CAN o endereço `0x98EF00FE`, podemos afirmar que aquele pacote contém informações da marcha. Porém, essa primeira hash só informa isso: qual endereço foi cadastrado (`msg->id()`) e o tamanho total desse pacote (`msg->size()`).
-* Quando queremos **ler de fato a informação** dentro desse endereço, vamos para a segunda hash (**`composite_to_signal`**), que informa **como esse endereço foi organizado** (conforme datado pelo `.dbc`).
-* Passando a mesma chave `"write::gear"` nessa segunda hash, o valor associado não é mais um endereço, e sim uma **`struct Signal`** que armazena onde está a informação de `"Gear"` dentro dos 8 bytes.
-
-#### O Diferencial da Marcha (`Gear`) e o Campo `VAL_`
-
-Nesse caso, a marcha possui um diferencial importante. No arquivo `.dbc`, apesar de `Gear` estar no mesmo endereço `0x98EF00FE` que `ThrottleEffort`, `BrakesEffort` e `SteeringEffort`, ela foi declarada de forma separada acompanhada da linha **`VAL_`**:
-
-```dbc
-BO_ 0x98EF00FE write: 8 DRIVER
- SG_ Gear : 56|8@1+ (1,0) [0|255] "" DRIVER
-VAL_ 0x98EF00FE Gear 16 "drive" 32 "reverse" 8 "neutral" ;
-```
-
-Isso acontece porque a [`struct Signal`](file:///home/lume/astro/include/astro/astro_dbc_parser.hpp#L13-L32) possui um campo específico para armazenar esses estados `VAL_` em formato de hash:
-
-```cpp
-std::unordered_multimap<std::string, uint32_t> value_descriptions_by_name;
-```
-
-Esse campo associa cada string de estado (`"drive"`, `"reverse"`, `"neutral"`) ao seu respectivo valor numérico (`16`, `32`, `8`). Na inicialização ([`process_dbc_file()`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L138-L148)), o HAL lê esse campo `value_descriptions_by_name` da `struct Signal` e monta o dicionário reverso `signal_to_val_map` (uma **Hash dentro de outra Hash**):
-
-```text
-signal_to_val_map (Hash Externa)
- │
- └── Chave: "write::gear"  (it_sig_map->first)
-      └── Valor: Mini-Hash Interna (it_sig_map->second)
-           ├── [8]  --> "neutral"
-           ├── [16] --> "drive"     <-- (it_val->first = 16, it_val->second = "drive")
-           └── [32] --> "reverse"
-```
-
-#### Como `read_can_signal_state()` extrai o byte e consulta essa Hash
-
-Quando o simulador entra no `if (is_gear_match)` e executa [`read_can_signal_state(dbc_can_process, "write", "Gear", &frame)`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp#L318-L335), o seguinte trecho entra em ação:
-
-```cpp
-uint64_t raw_value = unpack_can_frame(sig, frame);
-
-// =========================================================
-// A MODIFICAÇÃO ESTÁ AQUI: Garantir que a chave de busca do VAL_ também seja minúscula
-// =========================================================
-std::string composite_key = to_lowercase(msg_name) + "::" + to_lowercase(sig_name);
-
-auto it_sig_map = dbc_parser.signal_to_val_map.find(composite_key);
-
-if (it_sig_map != dbc_parser.signal_to_val_map.end())
-{
-    auto it_val = it_sig_map->second.find(raw_value);
-
-    if (it_val != it_sig_map->second.end())
-    {
-        return (it_val->second); // Retorna "drive", "neutral", etc.
-    }
-}
-```
-
-1. **`uint64_t raw_value = unpack_can_frame(sig, frame);`**:  
-   Usa a `struct Signal` (`sig`, onde `start_bit = 56` e `size = 8`) para recortar apenas o **Byte 7** do frame CAN e obter o número puro que veio na rede (ex: `raw_value = 16`).
-2. **`dbc_parser.signal_to_val_map.find("write::gear")`**:  
-   Procura a chave `"write::gear"` na hash externa (`it_sig_map`). Encontrando, `it_sig_map->second` entrega a mini-hash interna da marcha (`{8: "neutral", 16: "drive", 32: "reverse"}`).
-3. **`it_sig_map->second.find(raw_value)`**:  
-   Procura o número `16` dentro da mini-hash interna (`it_val`). Encontrando, retorna `it_val->second`, que é a string **`"drive"`**!
-
----
-
-### 4.3. De Volta ao `process_frame_from_dbc_mode()`: Atualizando a Marcha do Veículo
-
-Agora que `read_can_signal_state()` devolveu a palavra correspondente ao número que veio na CAN (ex: `"drive"`, `"reverse"` ou `"neutral"`), o fluxo continua dentro do `if (is_gear_match)`:
-
-```cpp
-        std::string estado = astro_hal_can_interactions::read_can_signal_state(dbc_can_process, "write", "Gear", &frame);
-
-        // 1. Define o ID alvo baseado no estado (usamos -99 como valor inválido/padrão)
-        int target_gear_id = -99;
-
-        if (estado == "neutral")            target_gear_id = 0;
-        else if (estado == "reverse")       target_gear_id = -1;
-        else if (estado == "drive")         target_gear_id = astro_fmax(1, current_gear_gear_map_id);
-        else if (estado == "down")          target_gear_id = astro_fmax(0, current_gear_gear_map_id - 2);
-        else if (estado == "down accurate") target_gear_id = astro_fmax(0, current_gear_gear_map_id - 1);
-        else if (estado == "up")            target_gear_id = astro_fmin(gear_map.size() - 1, current_gear_gear_map_id + 2);
-        else if (estado == "up accurate")   target_gear_id = astro_fmin(gear_map.size() - 1, current_gear_gear_map_id + 1);
-
-        // 2. Executa a lógica de atribuição UMA ÚNICA VEZ
-        if (target_gear_id != -99)
-        {
-            auto translated_gear = gear_map.find(target_gear_id);
-            if (translated_gear != gear_map.end()) {
-                current_gear = translated_gear->second->mercedes_code;
-                current_gear_gear_map_id = target_gear_id;
-                driver_outputs.current_gear = current_gear_gear_map_id;
-            }
-        }
-```
-
-```mermaid
-flowchart TD
-    MATCH["Pacote 0x98EF00FE Confirmado<br/><b style='color:#69f0ae'>if (is_gear_match == true)</b><br/>O frame recebido contém os 8 bytes da mensagem 'write'"]
-
-    MATCH --> STATE["1. Leitura do Estado Textual da Marcha<br/><b style='color:#4fc3f7'>estado = read_can_signal_state(dbc, 'write', 'Gear', &frame)</b><br/>Recorta o Byte 7 via unpack_can_frame e traduz no signal_to_val_map"]
-
-    STATE --> TARGET["2. Definição do ID Alvo da Marcha<br/><b style='color:#ffb74d'>if/else (neutral -> 0, reverse -> -1, drive -> >=1)</b><br/>Converte a string retornada para o índice inteiro target_gear_id"]
-
-    TARGET --> MAP["3. Busca na Tabela de Câmbio e Atribuição<br/><b style='color:#4fc3f7'>translated_gear = gear_map.find(target_gear_id)</b><br/>Atualiza current_gear (mercedes_code) e driver_outputs.current_gear"]
-```
-
-1. **Passo 1 — Definição de `target_gear_id`:**  
-   O simulador numera internamente suas marchas como inteiros (`-1` = Ré, `0` = Neutro, `1` a `12` = 1ª a 12ª marcha):
-   * `"neutral"` $\to$ `target_gear_id = 0`
-   * `"reverse"` $\to$ `target_gear_id = -1`
-   * `"drive"` $\to$ `astro_fmax(1, current_gear_gear_map_id)` (garante que engate pelo menos a 1ª marcha se estava em neutro/ré, ou mantenha a marcha positiva atual).
-   * `"up"` / `"down"` / `"up accurate"` / `"down accurate"` $\to$ Sobe ou desce 1 ou 2 marchas a partir da marcha atual (usado quando o arquivo DBC é de um caminhão com câmbio sequencial, como o [`Mart.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/Mart.dbc#L14)).
-
-2. **Passo 2 — Atualização da Transmissão (`gear_map`):**  
-   Se `target_gear_id` recebeu uma marcha válida ($\neq -99$), o código busca esse índice na tabela interna [`gear_map`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L188-L205) e atualiza:
-   * **`current_gear`**: Recebe o código hexadecimal daquela marcha (`mercedes_code`, ex: `0x38` para Ré, `0x3C` para Neutro, `0x44` para 1ª marcha), usado na equação física de aceleração.
-   * **`current_gear_gear_map_id` e `driver_outputs.current_gear`**: Guardam o índice numérico da marcha atual (`-1`, `0`, `1`...), usado posteriormente na odometria para calcular o **RPM** do motor.
-
-### Resumo Simulado com `ojAstro_fullDBC.dbc`:
-
-| Valor no Byte 7 (`data[7]`) | Retorno de `read_can_signal_state` | Valor de `target_gear_id` | `current_gear` (`mercedes_code`) | `driver_outputs.current_gear` |
-| :--- | :--- | :--- | :--- | :--- |
-| **`8`** | `"neutral"` | `0` | `0x3C` (`NEUTRAL_GEAR`) | `0` (Ponto Morto) |
-| **`16`** *(estando em neutro)* | `"drive"` | `1` | `0x44` (`GEAR_1`) | `1` (1ª Marcha) |
-| **`32`** | `"reverse"` | `-1` | `0x38` (`REVERSE_GEAR_1`) | `-1` (Marcha Ré) |
-
----
-
-## 5. Leitura dos Esforços, Cálculo de $(v, \phi)$ e Encerramento da Recepção
-
-Após avaliar a marcha, a segunda metade de [`process_frame_from_dbc_mode()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2885-L2956) extrai os esforços físicos do frame e conclui o ciclo de leitura daquele pacote CAN:
-
-```cpp
-    static double throttle_effort = 0.0;
-    static double brakes_effort = 0.0;
-    static double steering_effort = 0.0;
-
-    bool is_throttle_match = false;
-    bool is_brakes_match   = false;
-    bool is_steering_match = false;
-    double temp_val = 0.0;
-
-    // 1. Extração dos 3 sinais de esforço (usando as mesmas hashes do DBC)
-    temp_val = astro_hal_can_interactions::read_signal(dbc_can_process, "write", "ThrottleEffort", &frame, is_throttle_match);
-    if (is_throttle_match) throttle_effort = temp_val / 100.0;
-
-    temp_val = astro_hal_can_interactions::read_signal(dbc_can_process, "write", "BrakesEffort", &frame, is_brakes_match);
-    if (is_brakes_match) brakes_effort = temp_val / 100.0;
-
-    temp_val = astro_hal_can_interactions::read_signal(dbc_can_process, "write", "SteeringEffort", &frame, is_steering_match);
-    if (is_steering_match) steering_effort = -temp_val / 100.0;
-
-    // 2. Se o pacote continha algum dos esforços, calcula v e phi e salva no comando alvo
-    if (is_throttle_match || is_brakes_match || is_steering_match)
-    {
-        ...
-        v = compute_v_from_throttle_and_brakes_efforts(throttle_effort - g_throttle_gap / 100.0, brakes_effort - g_brake_gap / 100.0, current_gear, delta_t, v, ...);
-        phi = compute_phi_from_steering_effort(steering_effort, phi_v, phi, delta_t, ...);
-        phi = astro_clamp(-simulator_config->max_phi, phi, simulator_config->max_phi);
-
-        set_target_v_and_target_phi(v, phi);
-        previous_timestamp = astro_get_time();
-    }
-```
-
-### Resumo das 3 Etapas Finais:
-
-1. **Extração dos Esforços (`read_signal`):**  
-   Chama o mesmo `read_signal()` para `"ThrottleEffort"`, `"BrakesEffort"` e `"SteeringEffort"`. Como esses sinais não usam estados textuais (`VAL_`), o próprio retorno numérico de `decode_signal()` já traz o percentual (0 a 100%), que é dividido por `100.0` para normalizar na faixa `[0.0, 1.0]`. *(As variáveis são `static` para reter o último esforço válido caso um DBC separe freio, acelerador e volante em endereços CAN diferentes).*
-2. **Cálculo Físico de Velocidade ($v$) e Esterçamento ($\phi$):**  
-   Se pelo menos um esforço veio no pacote, as funções [`compute_v_from_throttle_and_brakes_efforts()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2927) e [`compute_phi_from_steering_effort()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2940) simulam a resposta mecânica do caminhão durante o intervalo `delta_t`, gerando a velocidade $v$ e o ângulo das rodas $\phi$.
-3. **Armazenamento Estático e Fim da Leitura (`set_target_v_and_target_phi`):**  
-   Por fim, [`set_target_v_and_target_phi(v, phi)`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2472-L2485) grava o resultado na estrutura `static current_motion_command_vector` e aponta `simulator_config->current_motion_command_vector` para ela:
-   ```cpp
-   void set_target_v_and_target_phi(double v, double phi)
-   {
-       static astro_robot_and_trailers_motion_command_t current_motion_command_vector = {};
-       current_motion_command_vector.v = v;
-       current_motion_command_vector.phi = phi;
-       current_motion_command_vector.time = 1.0;
-
-       simulator_config->current_motion_command_vector = &current_motion_command_vector;
-       ...
-   }
-   ```
-   Graças ao qualificador **`static`**, essa variável permanece viva na memória RAM durante toda a execução do programa (não é destruída ao término da função).
-
-> [!NOTE]
-> **Encerramento do Ciclo de Escuta:**  
-> Neste ponto, **a leitura do frame CAN termina**. A `update_state_thread()` retorna imediatamente ao topo do seu `while (1)` para bloquear em `recv_frame()` aguardando o próximo pacote no barramento, enquanto a outra thread do simulador (`one_simulation_step`) consome periodicamente os valores de `v` e `phi` atualizados.
-
-
+### O que `load_and_validate_dbc()` faz passo a passo:
+
+1. **Carregamento seguro (`try / catch`)**:
+   Verifica se o arquivo `.dbc` existe e tem permissão de leitura (`access(path, R_OK)`), e executa `process_dbc_file()` e `register_socket_to_interface()` dentro de um bloco `try / catch`, encerrando com mensagem amigável caso haja erro de sintaxe no `.dbc`.
+2. **Validação dos sinais obrigatórios de comando (`write`)**:
+   Verifica com `has_signal(dbc_can_process, "write", name)` se os três sinais de esforço (`ThrottleEffort`, `BrakesEffort`, `SteeringEffort`) estão presentes no `.dbc`. Caso falte algum deles, o simulador interrompe a inicialização imediatamente com `astro_die()`, evitando que a simulação rode sem que o veículo possa se mover.
+3. **Diagnóstico antecipado dos sinais de telemetria (`read`)**:
+   Percorre a lista `{"Velocity", "VelocityEncoder", "SteeringAngle", "Gear", "RPM", "SafeStop", "ManualOverride"}` e imprime no terminal o comportamento que o simulador adotará para cada sinal:
+   * Se o sinal não existir no `.dbc`: avisa que não será publicado.
+   * Se for `ASTRO_EXPR` e for inversível (`dbc_derived_signal_is_writable(name) == true`): informa que será publicado por inversão matemática da expressão.
+   * Se for `ASTRO_EXPR` e não puder ser invertido: avisa se usará o frame legado por `vehicle_id` (caso de `VelocityEncoder` / `SteeringAngle`) ou se não será publicado.
+4. **Pré-aquecimento do Cache de Inversão (`cache`)**:
+   Ao chamar [`dbc_derived_signal_is_writable(name)`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L451-L466) durante a partida na linha 3190, o simulador já executa o teste de inversão matemática uma única vez na inicialização e grava o resultado booleano (`true`/`false`) no `static std::unordered_map<std::string, bool> cache`. Quando o loop de tempo real (`publish_odometry`) começa a rodar, a consulta a `dbc_derived_signal_is_writable()` é instantânea ($O(1)$), lendo diretamente do cache!
