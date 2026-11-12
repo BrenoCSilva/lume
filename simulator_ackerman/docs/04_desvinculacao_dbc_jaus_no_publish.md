@@ -492,3 +492,101 @@ if (dbc_path != NULL)
    * Se for `ASTRO_EXPR` e não puder ser invertido: avisa se usará o frame legado por `vehicle_id` (caso de `VelocityEncoder` / `SteeringAngle`) ou se não será publicado.
 4. **Pré-aquecimento do Cache de Inversão (`cache`)**:
    Ao chamar [`dbc_derived_signal_is_writable(name)`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L451-L466) durante a partida na linha 3190, o simulador já executa o teste de inversão matemática uma única vez na inicialização e grava o resultado booleano (`true`/`false`) no `static std::unordered_map<std::string, bool> cache`. Quando o loop de tempo real (`publish_odometry`) começa a rodar, a consulta a `dbc_derived_signal_is_writable()` é instantânea ($O(1)$), lendo diretamente do cache!
+
+---
+
+## 12. Parte 8: Correção da Realimentação Positiva e Estabilização de Ângulo (`phi_stabilization`)
+
+### 12.1 Sintoma e Diagnóstico do Erro 302 (`ASTRO_ERROR_CODE_302`)
+Durante os testes com o arquivo [`oj403.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/oj403.dbc), o simulador apresentou um comportamento anômalo:
+1. O veículo saía da pista mesmo em linha reta.
+2. O planejador de movimento (`mpp` — *Model Predictive Planner*) ficava preso disparando continuamente:
+   ```text
+   ASTRO_ERROR_REG(302, 4, "phi_stabilization")
+   ```
+3. Nos logs de envio e leitura CAN, o ângulo de direção físico convergira para o batente mecânico máximo negativo (`phi = -0.622 rad`), enquanto o alvo do PID de esforço pedia valores cada vez mais positivos (`SteerRaw` com alvo `1.197 rad`), criando um ciclo vicioso de realimentação positiva.
+
+### 12.2 Causa Raiz: Inversão de Sinal em `phi_to_dbc_steering_angle()`
+No [`oj403.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/oj403.dbc#L27), a mensagem `0x2A` define a expressão derivada de esterçamento:
+```dbc
+CM_ BO_ 0x2A "ASTRO_EXPR SteeringAngle = (/ SteerRaw 507000.0)";
+```
+Como essa expressão possui um único sinal físico linear (`SteerRaw`), `dbc_derived_signal_is_writable("SteeringAngle")` retornou `true` e o simulador passou a utilizar a função [`phi_to_dbc_steering_angle()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L513-L521) para converter o ângulo físico `phi` no alvo CAN a ser empacotado.
+
+No código legado do simulador, a função continha:
+```cpp
+// VERSÃO ANTERIOR (COM BUG):
+static double
+phi_to_dbc_steering_angle(double phi, double v)
+{
+    return ((1.0 + v * v * simulator_config->understeer_coeficient2) * atan(simulator_config->distance_between_front_and_rear_axles * tan(-phi)));
+}
+```
+
+A inclusão de `-phi` e de `atan(L * tan(-phi))` foi motivada por um equívoco ao ler [`handle_read_steering_angle_signal()`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_dbc.cpp#L883-L890) no `vehicle_driver`:
+1. O `vehicle_driver` convertia o `phi_can` lido para curvatura XGV:
+   $$\text{curvature} = \frac{\tan\left(\frac{\phi_{\text{can}}}{1 + v^2 u}\right)}{L}, \quad \text{steering\_angle\_sensor} = -\arctan(\text{curvature})$$
+2. Logo em seguida, em [`report_curvature_message_handler()`](file:///home/lume/astro/src/vehicle_driver/vehicle_driver_main.cpp#L3448-L3467), o `vehicle_driver` desfazia a conta através de sua função inversa:
+   $$\text{raw\_phi} = \text{get\_phi\_from\_curvature}(-\tan(\text{steering\_angle\_sensor})) \cdot (1 + v^2 u) \equiv +\phi_{\text{can}}$$
+   E aplicava a calibração do robô: $\text{filtered\_phi} = \text{raw\_phi} \cdot \text{robot\_phi\_multiplier} + \text{phi\_bias}$.
+
+Dessa forma:
+* Ao colocar `-phi` no simulador, o sinal de ângulo chegava invertido ao `vehicle_driver`.
+* Quando o `mpp` solicitava uma pequena correção para a direita durante a fase parada de alinhamento (`phi_stabilization`), o simulador enviava ângulo para a esquerda.
+* O PID do driver comandava mais esforço no sentido oposto para compensar, saturando o volante em `-0.622 rad`. Como o erro angular nunca zerava, o `mpp` mantinha ativo o erro `302` indefinidamente.
+
+### 12.3 Correção Definitiva
+A função foi corrigida em [`simulator_ackerman_can_main.cpp`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L509-L521) para compensar exclusivamente a escala do robô (`robot_phi_multiplier`), preservando o sinal positivo correto:
+```cpp
+// No vehicle_driver, handle_read_steering_angle_signal() aplica -atan(curvature(phi_can)) e logo em seguida
+// report_curvature_message_handler() aplica a inversa get_phi_from_curvature(-tan(...)) e multiplica por
+// robot_phi_multiplier. Portanto, para o driver recuperar o phi exato do simulador, basta dividir por robot_phi_multiplier.
+static double
+phi_to_dbc_steering_angle(double phi, double v)
+{
+	(void) v;
+
+	if (fabs(robot_phi_multiplier) > 1e-6)
+		return (phi / robot_phi_multiplier);
+
+	return (phi);
+}
+```
+
+---
+
+## 13. Parte 9: Suporte a Ponto Flutuante IEEE-754 (`SIG_VALTYPE_ : 1`) nos Esforços de Atuação
+
+### 13.1 Descrição do Problema
+No arquivo [`oj403.dbc`](file:///home/lume/astro/src/astro_hal/dbc_file_example/oj403.dbc#L37), a mensagem `0x2E` (`SteeringEffort`) é declarada com o tipo especial `SIG_VALTYPE_`:
+```dbc
+BO_ 0x2E write: 8 DRIVER
+ SG_ SteeringEffort : 0|32@1+ (1,0) [-100|100] "%" CONTROLLER
+SIG_VALTYPE_ 0x2E SteeringEffort : 1;
+```
+A diretiva `SIG_VALTYPE_ ... : 1;` estipula no padrão DBC da Vector que o campo de 32 bits codifica um número de ponto flutuante de precisão simples no padrão **IEEE-754**, e não um número inteiro sem sinal (`uint32`).
+
+Antes da correção, a rotina padrão `read_signal()` do HAL desempacotava os 32 bits como inteiro e aplicava os fatores de escala lineares. Como consequência, uma palavra binária IEEE-754 (por exemplo, `0xBF800000` correspondente a `-1.0f`) era interpretada como o inteiro `3212836864`, gerando valores absurdos de esterçamento (ex: `Steer: -6601130.24%`) que quebravam a física do simulador.
+
+### 13.2 Implementação no HAL e no Simulador
+A decodificação foi implementada no método principal [`read_signal()`](file:///home/lume/astro/src/utilities/astrohpp/astro_hal_can_interactions.hpp#L745-L756):
+```cpp
+const Libdbc::Signal *sig = result.second;
+
+// Espelha physical_to_raw(): sinais com SIG_VALTYPE_ : 1 carregam um float IEEE-754 de 32 bits,
+// nao um inteiro. Sem isso os bits do float seriam lidos como int32 (ex.: 0x2E SteeringEffort no oj403.dbc).
+if ((sig->size == 32) && Libdbc::detail::is_float32_signal(dbc_parser.parser, msg->id(), sig->name))
+{
+    const uint32_t raw_bits = static_cast<uint32_t>(unpack_can_frame(sig, frame));
+    float raw_float = 0.0f;
+    __builtin_memcpy(&raw_float, &raw_bits, sizeof(raw_float));
+
+    return (static_cast<double>(raw_float) * sig->factor + sig->offset);
+}
+```
+
+E sincronizada entre:
+* [`src/utilities/astrohpp/astro_hal_can_interactions.hpp`](file:///home/lume/astro/src/utilities/astrohpp/astro_hal_can_interactions.hpp) (código-fonte primário dos headers utilitários).
+* [`include/astro/astro_hal_can_interactions.hpp`](file:///home/lume/astro/include/astro/astro_hal_can_interactions.hpp) (cópia distribuída para inclusão global).
+
+Com essa alteração, o simulador passa a receber os esforços de direção, acelerador e freio com precisão exata tanto em DBCs inteiros quanto em DBCs com tipos IEEE-754 flutuantes.

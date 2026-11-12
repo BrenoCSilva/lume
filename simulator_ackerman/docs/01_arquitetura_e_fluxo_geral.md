@@ -131,17 +131,7 @@ No loop [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman
 
 ---
 
-## 5. Estruturas de Memória Compartilhadas
-
-Para permitir a comunicação entre a thread de escuta e a thread de simulação sem corrupção de dados:
-
-* **`simulator_config`**: Ponteiro global para a configuração e estado dinâmico do simulador (`astro_simulator_ackerman_config_t`).
-* **`current_motion_command_vector` (estático)**: Estrutura local com tempo de vida global (`static`), cujo ponteiro é atribuído a `simulator_config->current_motion_command_vector`.
-* **`driver_outputs`**: Armazena o estado atual das saídas do motorista simulado (ex: `driver_outputs.current_gear` e `driver_outputs.rpm`).
-
----
-
-## 6. Índice de Documentação Específica
+## 5. Índice de Documentação Específica
 
 Para o detalhamento aprofundado de cada funcionalidade:
 
