@@ -7,14 +7,14 @@ Para compreender onde o `simulator_ackerman_can` atua, é fundamental localizar 
 ```mermaid
 flowchart TD
     subgraph AltoNivel ["1. Planejamento e Segurança (Espaço Cinemático: v, phi)"]
-        MPP["Planejador de Movimento (MPP)<br/><b style='color:#4fc3f7'>model_predictive_planner</b><br/>Gera plano desejado (ex: v = 2.0 m/s, phi = 18 graus)"]
-        MPP --> OA["Desvio de Obstáculos (OA)<br/><b style='color:#4fc3f7'>obstacle_avoider</b><br/>Identifica risco de colisão e atenua o plano (ex: v = 1.85 m/s)"]
+        MPP["<b style='color:#4fc3f7'>model_predictive_planner</b><br/>Gera plano desejado (ex: v = 2.0 m/s, phi = 18 graus)"]
+        MPP --> OA["<b style='color:#4fc3f7'>obstacle_avoider</b><br/>Identifica risco de colisão e atenua o plano (ex: v = 1.85 m/s)"]
     end
 
     OA -->|"Envia plano validado (v, phi)"| VD
 
     subgraph Controle ["2. Controle de Baixo Nível e Tradução DBC"]
-        VD["Controlador de Atuação (VD)<br/><b style='color:#ffb74d'>vehicle_driver</b><br/>Lê odometria atual, calcula esforços PID e empacota bytes via DBC"]
+        VD["<b style='color:#ffb74d'>vehicle_driver</b><br/>Lê odometria atual, calcula esforços PID e empacota bytes via DBC"]
     end
 
     CAN_BUS[("Barramento CAN Virtual")]
