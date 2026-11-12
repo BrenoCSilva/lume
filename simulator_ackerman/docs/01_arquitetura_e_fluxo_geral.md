@@ -89,7 +89,7 @@ Diferente de módulos puramente orientados a eventos de IPC, o simulador opera d
 
 | Frente | Ponto de Entrada | Modelo de Execução | Papel no Módulo |
 | :--- | :--- | :--- | :--- |
-| **Escuta da CAN ** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Aguarda pacotes/frames da CAN. Quando esses pacotes (enviado pelo VD organizados de acordo com o "write" do .dbc), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
+| **Escuta da CAN ** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Aguarda pacotes/frames da CAN. Quando esses pacotes chegam (enviado pelo VD organizados de acordo com o "write" do .dbc), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
 | **Envia na CAN ** | [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793) | **Orientado a Tempo (Timer Periódico)** | Disparado ciclicamente na frequência da simulação (ex: a cada 20 ms / 50 Hz). Atualiza a odometria do carro virtual e transmite frames de volta para a rede CAN (mensagem `"read"` no DBC: RPM e marcha). |
 
 ---
@@ -100,9 +100,10 @@ O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN 
 
 ```mermaid
 flowchart TD
-    CAN_IN["Barramento Físico / Virtual CAN<br/><b style='color:#69f0ae'>Entrada de Dados (Socket CAN)</b><br/>Recebe pacotes enviados pelo Vehicle Driver na rede"]
+    
+    CAN_BUS[("Barramento CAN Virtual")]
 
-    CAN_IN -->|"Chegada de frames CAN"| RECV
+    CAN_IN -->|"Chegada de esforços enviado pelo VD"| RECV
 
     subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
         RECV["Recepção no Socket CAN<br/><b style='color:#4fc3f7'>recv_frame()</b><br/>Fica bloqueado aguardando novos pacotes da rede"]
@@ -111,8 +112,11 @@ flowchart TD
         PROC_DBC --> CALC_DYN["Cálculo da Dinâmica Veicular<br/><b style='color:#4fc3f7'>compute_v_and_phi_from_efforts()</b><br/>Converte os esforços recebidos em velocidade v e ângulo phi"]
         CALC_DYN --> SET_TARGET["Atualização do Comando Alvo<br/><b style='color:#4fc3f7'>set_target_v_and_target_phi()</b><br/>Grava v e phi alvo na estrutura de memória estática"]
     end
+    
+    CALC_DYN -->|"Envia odometria atual do veiculo"| CAN_IN
+   
+    CAN_BUS[("Barramento CAN Virtual")]
 
-    SET_TARGET -->|"Salva na memória RAM"| MEM["Memória Compartilhada do Simulador<br/><b style='color:#ffb74d'>current_motion_command_vector</b><br/>Estrutura static permanente compartilhada entre as threads"]
 
     TIMER["Gatilho Cíclico de Tempo<br/><b style='color:#ffb74d'>astro_ipc_pooling (20 ms / 50 Hz)</b><br/>Dispara periodicamente o passo de simulação física"] -->|"Ciclo de 20 ms"| SIM_STEP
     MEM -->|"Consome v e phi alvo"| SIM_STEP
