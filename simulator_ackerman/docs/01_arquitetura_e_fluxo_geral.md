@@ -25,8 +25,8 @@ flowchart TD
 
     VD -->|"Escreve esforços na CAN<br/>"| CAN_BUS
     CAN_BUS -->|"Devolve odometria na CAN<br/>"| VD
-    CAN_BUS -->|"Entrega comandos de esforço<br/>"| SIM
-    SIM -->|"Publica estado físico atualizado<br/>"| CAN_BUS
+    CAN_BUS -->|"Entrega comandos <br/>de esforço<br/>"| SIM
+    SIM -->|"Publica estado físico <br/>atualizado<br/>"| CAN_BUS
 
     style CAN_BUS fill:#1b5e20,stroke:#69f0ae,stroke-width:3px,color:#ffffff
 ```
