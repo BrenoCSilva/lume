@@ -21,10 +21,12 @@ flowchart TD
     CAN_BUS -->|"Devolve odometria na CAN (msg 'read')"| VD
 
     subgraph HardwareOuSim ["3. Barramento CAN e Simulação do Veículo"]
-        CAN_BUS["Barramento CAN Virtual / Físico<br/><b style='color:#69f0ae'>vcan0 / can0 (Frames de 8 Bytes)</b><br/>Tráfego bruto de bytes mapeados pelo arquivo .dbc"]
+        CAN_BUS[("Barramento CAN Virtual / Físico<br/><b style='color:#69f0ae'>vcan0 / can0 (Frames de 8 Bytes)</b><br/>Tráfego bruto de bytes mapeados pelo arquivo .dbc")]
         CAN_BUS -->|"Entrega comandos de esforço"| SIM["Simulador do Veículo CAN<br/><b style='color:#4fc3f7'>simulator_ackerman_can</b><br/>Substitui o caminhão real: lê esforços do VD e responde odometria"]
         SIM -->|"Publica estado físico atualizado"| CAN_BUS
     end
+
+    style CAN_BUS fill:#1b5e20,stroke:#69f0ae,stroke-width:3px,color:#ffffff
 ```
 
 1. **Planejamento e Segurança ([`MPP`](file:///home/lume/astro/src/mpp/) $\to$ [`Obstacle Avoider`](file:///home/lume/astro/src/obstacle_avoider/)):**  
@@ -61,12 +63,32 @@ pthread_create(&can_thread, NULL, update_state_thread, NULL);
 astro_ipc_pooling(one_simulation_step, shutdown_module);
 ```
 
+
+```cpp
+void *
+update_state_thread(void *arg __attribute__ ((unused)))
+{
+	struct can_frame frame;
+
+	while (1)
+	{
+		if (can_sockfd != -1)
+		{
+			recv_frame(can_sockfd, &frame);
+			update_state_from_can(frame);
+		}
+	}
+
+	return (NULL);
+}
+```
+
 Diferente de módulos puramente orientados a eventos de IPC, o simulador opera desacoplado em **duas frentes concorrentes**: a **escuta contínua de comandos** e a **simulação periódica com envio de telemetria**.
 
 | Frente | Ponto de Entrada | Modelo de Execução | Papel no Módulo |
 | :--- | :--- | :--- | :--- |
-| **Escuta CAN (Comandos)** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Bloqueia no socket CAN aguardando pacotes. Quando chegam mensagens de comando (mensagem `"write"` no DBC), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
-| **Simulação e Envio (Telemetria)** | [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793) | **Orientado a Tempo (Timer Periódico)** | Disparado ciclicamente na frequência da simulação (ex: a cada 20 ms / 50 Hz). Atualiza a odometria do carro virtual e transmite frames de volta para a rede CAN (mensagem `"read"` no DBC: RPM e marcha). |
+| **Escuta da CAN ** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Aguarda pacotes/frames da CAN. Quando esses pacotes (enviado pelo VD organizados de acordo com o "write" do .dbc), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
+| **Envia na CAN ** | [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793) | **Orientado a Tempo (Timer Periódico)** | Disparado ciclicamente na frequência da simulação (ex: a cada 20 ms / 50 Hz). Atualiza a odometria do carro virtual e transmite frames de volta para a rede CAN (mensagem `"read"` no DBC: RPM e marcha). |
 
 ---
 
