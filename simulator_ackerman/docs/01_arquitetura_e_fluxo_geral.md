@@ -103,7 +103,7 @@ flowchart TD
     
     CAN_BUS[("Barramento CAN Virtual")]
 
-    CAN_BUS -->|"Chegada de esforços enviado pelo VD"| RECV
+    CAN_BUS -->|"Chegada de esforços <br/enviado pelo VD"| RECV
 
     subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
         RECV["Recepção no Socket CAN<br/><b style='color:#4fc3f7'>recv_frame()</b><br/>Fica bloqueado aguardando novos pacotes da rede"]
@@ -113,7 +113,7 @@ flowchart TD
         CALC_DYN --> SET_TARGET["Atualização do Comando Alvo<br/><b style='color:#4fc3f7'>set_target_v_and_target_phi()</b><br/>Grava v e phi alvo na estrutura de memória estática"]
     end
     
-    CALC_DYN -->|"Envia odometria atual do veiculo"| CAN_BUS_2
+    CALC_DYN -->|"Envia odometria atual<br/ do veiculo"| CAN_BUS_2
    
     CAN_BUS_2[("Barramento CAN Virtual")]
 
@@ -130,6 +130,10 @@ flowchart TD
     end
 
     SEND -->|"Transmite telemetria"| CAN_OUT["Barramento Físico / Virtual CAN<br/><b style='color:#69f0ae'>Saída de Telemetria (Socket CAN)</b><br/>Disponibiliza pacotes de odometria para a pilha autônoma"]
+
+    style CAN_BUS fill:#1b5e20,stroke:#69f0ae,stroke-width:3px,color:#ffffff
+    style CAN_BUS_2 fill:#1b5e20,stroke:#69f0ae,stroke-width:3px,color:#ffffff
+
 ```
 
 ---
