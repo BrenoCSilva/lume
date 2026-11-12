@@ -7,24 +7,28 @@ Para compreender onde o `simulator_ackerman_can` atua, é fundamental localizar 
 ```mermaid
 flowchart TD
     subgraph AltoNivel ["1. Planejamento e Segurança (Espaço Cinemático: v, phi)"]
-        MPP["Planejador de Movimento (MPP)<br/><b style='color:#4fc3f7'>model_predictive_planner</b><br/>Gera plano desejado (ex: v = 2.0 m/s, phi = 18 graus)"]
-        MPP --> OA["Desvio de Obstáculos (OA)<br/><b style='color:#4fc3f7'>obstacle_avoider</b><br/>Identifica risco de colisão e atenua o plano (ex: v = 1.85 m/s)"]
+        MPP["<b style='color:#4fc3f7'>model_predictive_planner</b><br/>Gera plano desejado (ex: v = 2.0 m/s, phi = 18 graus)"]
+        MPP --> OA["<b style='color:#4fc3f7'>obstacle_avoider</b><br/>Identifica risco de colisão e atenua o plano (ex: v = 1.85 m/s)"]
     end
 
     OA -->|"Envia plano validado (v, phi)"| VD
 
     subgraph Controle ["2. Controle de Baixo Nível e Tradução DBC"]
-        VD["Controlador de Atuação (VD)<br/><b style='color:#ffb74d'>vehicle_driver</b><br/>Lê odometria atual, calcula esforços PID e empacota bytes via DBC"]
+        VD["<b style='color:#ffb74d'>vehicle_driver</b><br/>Lê odometria atual, calcula esforços PID e empacota bytes via DBC"]
     end
 
-    VD -->|"Escreve esforços na CAN (msg 'write')"| CAN_BUS
-    CAN_BUS -->|"Devolve odometria na CAN (msg 'read')"| VD
+    CAN_BUS[("Barramento CAN Virtual")]
 
-    subgraph HardwareOuSim ["3. Barramento CAN e Simulação do Veículo"]
-        CAN_BUS["Barramento CAN Virtual / Físico<br/><b style='color:#69f0ae'>vcan0 / can0 (Frames de 8 Bytes)</b><br/>Tráfego bruto de bytes mapeados pelo arquivo .dbc"]
-        CAN_BUS -->|"Entrega comandos de esforço"| SIM["Simulador do Veículo CAN<br/><b style='color:#4fc3f7'>simulator_ackerman_can</b><br/>Substitui o caminhão real: lê esforços do VD e responde odometria"]
-        SIM -->|"Publica estado físico atualizado"| CAN_BUS
+    subgraph HardwareOuSim ["3. Simulação do Veículo"]
+        SIM["<b style='color:#4fc3f7'>simulator_ackerman_can</b><br/>Substitui o caminhão real: lê esforços do VD e responde odometria"]
     end
+
+    VD -->|"Escreve esforços na CAN<br/>"| CAN_BUS
+    CAN_BUS -->|"Devolve odometria na CAN<br/>"| VD
+    CAN_BUS -->|"Entrega comandos <br/>de esforço<br/>"| SIM
+    SIM -->|"Publica estado físico <br/>atualizado<br/>"| CAN_BUS
+
+    style CAN_BUS fill:#1b5e20,stroke:#69f0ae,stroke-width:3px,color:#ffffff
 ```
 
 1. **Planejamento e Segurança ([`MPP`](file:///home/lume/astro/src/mpp/) $\to$ [`Obstacle Avoider`](file:///home/lume/astro/src/obstacle_avoider/)):**  
@@ -61,12 +65,32 @@ pthread_create(&can_thread, NULL, update_state_thread, NULL);
 astro_ipc_pooling(one_simulation_step, shutdown_module);
 ```
 
+
+```cpp
+void *
+update_state_thread(void *arg __attribute__ ((unused)))
+{
+	struct can_frame frame;
+
+	while (1)
+	{
+		if (can_sockfd != -1)
+		{
+			recv_frame(can_sockfd, &frame);
+			update_state_from_can(frame);
+		}
+	}
+
+	return (NULL);
+}
+```
+
 Diferente de módulos puramente orientados a eventos de IPC, o simulador opera desacoplado em **duas frentes concorrentes**: a **escuta contínua de comandos** e a **simulação periódica com envio de telemetria**.
 
 | Frente | Ponto de Entrada | Modelo de Execução | Papel no Módulo |
 | :--- | :--- | :--- | :--- |
-| **Escuta CAN (Comandos)** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Bloqueia no socket CAN aguardando pacotes. Quando chegam mensagens de comando (mensagem `"write"` no DBC), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
-| **Simulação e Envio (Telemetria)** | [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793) | **Orientado a Tempo (Timer Periódico)** | Disparado ciclicamente na frequência da simulação (ex: a cada 20 ms / 50 Hz). Atualiza a odometria do carro virtual e transmite frames de volta para a rede CAN (mensagem `"read"` no DBC: RPM e marcha). |
+| **Escuta da CAN ** | [`update_state_thread()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L2992-L3007) | **Orientado a Eventos (`while(1)`)** | Aguarda pacotes/frames da CAN. Quando esses pacotes chegam (enviado pelo VD organizados de acordo com o "write" do .dbc), extrai aceleração, freio, esterçamento e marcha, computando a dinâmica veicular. |
+| **Envia na CAN ** | [`one_simulation_step()`](file:///home/lume/astro/src/simulator_ackerman/simulator_ackerman_can_main.cpp#L1782-L1793) | **Orientado a Tempo (Timer Periódico)** | Disparado ciclicamente na frequência da simulação (ex: a cada 20 ms / 50 Hz). Atualiza a odometria do carro virtual e transmite frames de volta para a rede CAN (mensagem `"read"` no DBC: RPM e marcha). |
 
 ---
 
@@ -76,9 +100,10 @@ O diagrama abaixo ilustra o fluxo completo desde a chegada de comandos pela CAN 
 
 ```mermaid
 flowchart TD
-    CAN_IN["Barramento Físico / Virtual CAN<br/><b style='color:#69f0ae'>Entrada de Dados (Socket CAN)</b><br/>Recebe pacotes enviados pelo Vehicle Driver na rede"]
+    
+    CAN_BUS[("Barramento CAN Virtual")]
 
-    CAN_IN -->|"Chegada de frames CAN"| RECV
+    CAN_BUS -->|"Chegada de esforços <br/>enviado pelo VD"| RECV
 
     subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
         RECV["Recepção no Socket CAN<br/><b style='color:#4fc3f7'>recv_frame()</b><br/>Fica bloqueado aguardando novos pacotes da rede"]
@@ -87,8 +112,6 @@ flowchart TD
         PROC_DBC --> CALC_DYN["Cálculo da Dinâmica Veicular<br/><b style='color:#4fc3f7'>compute_v_and_phi_from_efforts()</b><br/>Converte os esforços recebidos em velocidade v e ângulo phi"]
         CALC_DYN --> SET_TARGET["Atualização do Comando Alvo<br/><b style='color:#4fc3f7'>set_target_v_and_target_phi()</b><br/>Grava v e phi alvo na estrutura de memória estática"]
     end
-
-    SET_TARGET -->|"Salva na memória RAM"| MEM["Memória Compartilhada do Simulador<br/><b style='color:#ffb74d'>current_motion_command_vector</b><br/>Estrutura static permanente compartilhada entre as threads"]
 
     TIMER["Gatilho Cíclico de Tempo<br/><b style='color:#ffb74d'>astro_ipc_pooling (20 ms / 50 Hz)</b><br/>Dispara periodicamente o passo de simulação física"] -->|"Ciclo de 20 ms"| SIM_STEP
     MEM -->|"Consome v e phi alvo"| SIM_STEP
@@ -101,7 +124,13 @@ flowchart TD
         BATCH --> SEND["Transmissão no Socket CAN<br/><b style='color:#4fc3f7'>send_message_frame()</b><br/>Envia os frames CAN montados pelo descritor can_sockfd"]
     end
 
-    SEND -->|"Transmite telemetria"| CAN_OUT["Barramento Físico / Virtual CAN<br/><b style='color:#69f0ae'>Saída de Telemetria (Socket CAN)</b><br/>Disponibiliza pacotes de odometria para a pilha autônoma"]
+    SEND -->|"Envia odometria atual<br/> do veiculo"| CAN_BUS_2
+   
+    CAN_BUS_2[("Barramento CAN Virtual")]
+
+    style CAN_BUS fill:#1b5e20,stroke:#69f0ae,stroke-width:3px,color:#ffffff
+    style CAN_BUS_2 fill:#1b5e20,stroke:#69f0ae,stroke-width:3px,color:#ffffff
+
 ```
 
 ---
