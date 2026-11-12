@@ -103,7 +103,7 @@ flowchart TD
     
     CAN_BUS[("Barramento CAN Virtual")]
 
-    CAN_IN -->|"Chegada de esforços enviado pelo VD"| RECV
+    CAN_BUS -->|"Chegada de esforços enviado pelo VD"| RECV
 
     subgraph ThreadEscuta ["1. Thread de Escuta (update_state_thread)"]
         RECV["Recepção no Socket CAN<br/><b style='color:#4fc3f7'>recv_frame()</b><br/>Fica bloqueado aguardando novos pacotes da rede"]
@@ -113,9 +113,9 @@ flowchart TD
         CALC_DYN --> SET_TARGET["Atualização do Comando Alvo<br/><b style='color:#4fc3f7'>set_target_v_and_target_phi()</b><br/>Grava v e phi alvo na estrutura de memória estática"]
     end
     
-    CALC_DYN -->|"Envia odometria atual do veiculo"| CAN_IN
+    CALC_DYN -->|"Envia odometria atual do veiculo"| CAN_BUS_2
    
-    CAN_BUS[("Barramento CAN Virtual")]
+    CAN_BUS_2[("Barramento CAN Virtual")]
 
 
     TIMER["Gatilho Cíclico de Tempo<br/><b style='color:#ffb74d'>astro_ipc_pooling (20 ms / 50 Hz)</b><br/>Dispara periodicamente o passo de simulação física"] -->|"Ciclo de 20 ms"| SIM_STEP
