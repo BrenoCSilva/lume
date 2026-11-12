@@ -17,7 +17,7 @@ flowchart TD
         VD["Controlador de Atuação (VD)<br/><b style='color:#ffb74d'>vehicle_driver</b><br/>Lê odometria atual, calcula esforços PID e empacota bytes via DBC"]
     end
 
-    CAN_BUS[("Barramento CAN Virtual / Físico<br/><b style='color:#69f0ae'>vcan0 / can0 (Frames de 8 Bytes)</b><br/>Tráfego bruto de bytes mapeados pelo arquivo .dbc")]
+    CAN_BUS[("Barramento CAN Virtual")]
 
     subgraph HardwareOuSim ["3. Simulação do Veículo"]
         SIM["Simulador do Veículo CAN<br/><b style='color:#4fc3f7'>simulator_ackerman_can</b><br/>Substitui o caminhão real: lê esforços do VD e responde odometria"]
