@@ -1,0 +1,306 @@
+# Guia: Limitação de Velocidade por Esterçamento ($\phi$)
+
+Este readme explica de forma prática como o **Obstacle Avoider (OA)** reage quando ocorrem limites de atuação do esterçamento do veículo para determinadas velocidades. Isso ocorre através de uma  "tabela" de calibração configurada através do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
+
+---
+
+## 1. A Tabela de Calibração ($v \times \phi$)
+
+A tabela de calibração é carregada do arquivo `.ini` (ou linha de comando) através do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
+
+### Formato de Entrada no `.ini` / Linha de Comando:
+```ini
+# Formato 1: Usando porcentagens relativas ao max_phi do veículo (ex: no seu teste)
+obstacle_avoider_v_and_max_phi_reference_points  3 1.5 100% 2.0 50% 2.77 0.20
+
+# Formato 2: Usando valores absolutos diretos em radianos
+obstacle_avoider_v_and_max_phi_reference_points  3 1.5 0.50 2.0 0.25 2.77 0.20
+```
+
+* **Quantidade de pontos no exemplo:** `3`
+* **Pontos de envelope resultantes:**
+  * **Nível 0:** Até $1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) $\to \phi_{\max} = 100\% = 0{,}500\text{ rad}$ ($28{,}6^\circ$)
+  * **Nível 1:** Até $2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) $\to \phi_{\max} = 50\% = 0{,}250\text{ rad}$ ($14{,}3^\circ$) 
+  * **Nível 2:** Até $2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) $\to \phi_{\max} = 0{,}200\text{ rad}$ ($11{,}5^\circ$) 
+
+> [!NOTE]
+> **Internamente na memória e nos logs:**  
+> Independentemente de ter sido informado como `100%` ou `0.50`, a função converte e armazena o valor **sempre em radianos** dentro da struct `v_phi_reference_point_t`.  
+
+A função onde a leitura desse parâmetro ocorre [`get_v_and_max_phi_reference_points()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L744) aceita **dois formatos** para especificar o ângulo $\phi$:
+
+1. **Porcentagem com `%`:** O valor é calculado como uma porcentagem do esterçamento máximo da cabine (`astro_robot_ackerman_config->max_phi`):
+   $$\phi = \frac{\text{porcentagem}}{100} \cdot \phi_{\text{max\-veículo}}$$
+   *Exemplo:* se o `max_phi` do caminhão for $0{,}500\text{ rad}$ ($28{,}6^\circ$), então `100%` $\to 0{,}500\text{ rad}$ e `50%` $\to 0{,}250\text{ rad}$.
+2. **Valor Direto em Radianos (sem `%`):** O valor numérico é interpretado diretamente em radianos.
+   *Exemplo:* `0.20` $\to 0{,}200\text{ rad}$ ($11{,}5^\circ$).
+
+| Velocidade Máxima ($v$) | Esterçamento Máximo ($\phi_{\max}$) | Porcentagem do Volante |
+| :--- | :--- | :---: |
+| $\le 1{,}50\text{ m/s}$ ($5{,}4\text{ km/h}$) | $\le 0{,}500\text{ rad}$ ($28{,}6^\circ$) | `100%` |
+| $\le 2{,}00\text{ m/s}$ ($7{,}2\text{ km/h}$) | $\le 0{,}250\text{ rad}$ ($14{,}3^\circ$) | `50%` |
+| $\le 2{,}77\text{ m/s}$ ($10{,}0\text{ km/h}$) | $\le 0{,}200\text{ rad}$ ($11{,}5^\circ$) | `40%` |
+
+> [!NOTE]
+>A relação é **inversamente proporcional**: quanto mais rápido o caminhão anda, menor é o ângulo com que ele pode curvar com segurança.
+
+
+---
+
+## 2. A Tabela de Calibração Interpolação Linear Contínua (Sem Degraus Bruscos)
+
+Os pontos configurados na tabela **não funcionam como degraus fixos**, mas sim como **pontos de controle de uma rampa suave (interpolação linear)**. 
+
+Se o sistema funcionasse por degraus rígidos, uma aceleração de apenas $0{,}01\text{ m/s}$ (por exemplo, de $1{,}50$ para $1{,}51\text{ m/s}$) faria o limite de esterçamento despencar bruscamente de $28{,}6^\circ$ para $14{,}3^\circ$, causando trancos violentos na direção e no freio do caminhão.
+
+Por isso, o Obstacle Avoider traça retas contínuas entre cada par de pontos:
+
+```mermaid
+xychart-beta
+    title "Envelope Contínuo de Estabilidade: phi_max(v)"
+    x-axis "Velocidade v (m/s)" ["0.00", "0.50", "1.00", "1.50 (v0)", "1.75", "2.00 (v1)", "2.38", "2.77 (v2)", "3.20"]
+    y-axis "Esterçamento Máximo Permitido (rad)" 0.0 --> 0.6
+    line [0.50, 0.50, 0.50, 0.50, 0.375, 0.25, 0.225, 0.20, 0.20]
+```
+
+* **Abaixo de $1{,}50\text{ m/s}$ ($v < v_{\min}$):** Velocidade de manobra lenta. O caminhão tem total segurança contra tombamento, então o esterçamento é liberado no limite máximo ($0{,}500\text{ rad} = 28{,}6^\circ$).
+* **Entre $1{,}50$ e $2{,}00\text{ m/s}$ (Intervalo 1):** O limite cai proporcionalmente ao longo da rampa:
+  * A $1{,}50\text{ m/s}$ ($0\%$ da rampa) $\to \phi_{\max} = 0{,}500\text{ rad}$ ($28{,}6^\circ$)
+  * A $1{,}75\text{ m/s}$ ($50\%$ da rampa) $\to \phi_{\max} = 0{,}375\text{ rad}$ ($21{,}5^\circ$)
+  * A $2{,}00\text{ m/s}$ ($100\%$ da rampa) $\to \phi_{\max} = 0{,}250\text{ rad}$ ($14{,}3^\circ$)
+* **Entre $2{,}00$ e $2{,}77\text{ m/s}$ (Intervalo 2):** O limite continua caindo suavemente de $0{,}250$ até $0{,}200\text{ rad}$ ($11{,}5^\circ$).
+* **Acima de $2{,}77\text{ m/s}$ ($v \ge v_{\max}$):** Velocidade de cruzeiro máxima. O esterçamento fica restrito ao piso seguro de $0{,}200\text{ rad}$ ($11{,}5^\circ$).
+
+#### A Fórmula da Interpolação Linear no Código:
+Dentro de [`get_max_phi_from_velocity()`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider.cpp#L545), o cálculo equivale a uma regra de três simples da posição na rampa ($t$):
+
+$$t = \frac{v_{\text{atual}} - v_0}{v_1 - v_0}$$
+
+$$\phi_{\max} = \phi_0 + t \cdot (\phi_1 - \phi_0)$$
+
+Isso garante que a transição de velocidade e volante seja **100% suave e livre de trancos operacionais** em qualquer valor decimal de velocidade enviado pelo planejador.
+
+
+> [!NOTE]
+>Na seção 4 a interpolação será apresentada através de um exemplo simulado.
+
+---
+
+## 3. O Fluxo de Decisão em 4 Etapas
+
+Para cada comando de movimento vindo do MPP, o OA executa quatro passos bem definidos:
+
+```mermaid
+flowchart TD
+    CMD["Plano do MPP é Recebido"] --> D1
+    
+    subgraph E1 ["Etapa 1: Diagnóstico de Esterçamento"]
+        D1["Busca qual é o intervalo de v na tabela"] --> D2["Retorna o phi_maximo para essa velocidade v"]
+    end
+    
+    D2 --> C1
+    
+    subgraph E2 ["Etapa 2: Avaliar se o phi_atual está no limite seguro"]
+        C1{"phi_atual > phi_max?"}
+        C1 -->|Sim| ALERTA["EXCEDEU LIMITE!<br>Necessário reduzir velocidade"]
+        C1 -->|Não| OK["SEGURO [OK]<br>Velocidade Mantida"]
+    end
+    
+    ALERTA --> T1
+    
+    subgraph E3 ["Etapa 3: Identificando v_maximo permitido"]
+        T1["Qual velocidade aguenta o phi_atual?"] --> T2["Busca na tabela:<br>Retorna v_maximo_seguro correspondente"]
+    end
+    
+    T2 --> A1
+    
+    subgraph E4 ["Etapa 4: Atuação nos Comandos"]
+        A1["Reduz v para v_maximo_seguro"] --> A2["Dilata tempo (dt)<br>(Preserva geometria da curva)"] --> A3["Publica ASTRO_ERROR_CODE_205***"]
+    end
+
+    style OK fill:#c8e6c9,stroke:#388e3c,color:#000
+    style ALERTA fill:#ffcdd2,stroke:#d32f2f,color:#000
+    style C1 fill:#fff9c4,stroke:#fbc02d,color:#000
+```
+
+> [!IMPORTANT]
+> *** O **`ASTRO_ERROR_CODE_205`** e a **publicação do plano com a velocidade limitada** só serão executados se o parâmetro `obstacle_avoider_use_hold_velocity_to_reference_phi` estiver ativado (`on` / `1`).  
+> Esse parâmetro define se o Obstacle Avoider deve **intervir fisicamente na velocidade do veículo** ou **apenas monitorar** gravando a ocorrência no buffer de auditoria (`audit`).
+
+## 4. Análise de caso simulado
+
+Abaixo analisamos exatamente os logs capturados durante a execução com o binário de teste [`src/obstacle_avoider/obstacle_avoider_test.cpp`](file:///home/lume/astro/src/obstacle_avoider/obstacle_avoider_test.cpp).
+
+---
+
+### Caso 1: Plano Inseguro ($v = 2{,}00\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
+
+O planejador envia uma intenção de andar a $7{,}2\text{ km/h}$ esterçando o volante a quase $29^\circ$.
+
+```text
+
+3 limitações de esterçamento para velocidade
+
+| Até 1.500000 m/s o limite eh 0.50 rad/28.64º | 
+| Até 2.000000 m/s o limite eh 0.25 rad/14.32º |
+| Até 2.770000 m/s o limite eh 0.20 rad/11.45º | 
+
+========================================================================================
+[OA PHI LIMIT] Avaliando Plano com 50 comandos contra tabela de referencia (3 niveis)
+========================================================================================
+
+--- Detalhes do Comando [0/50] | v_original: 2.00 m/s | phi_original: 0.500 rad (28.6°) ---
+
+  [Etapa 1] Procurando intervalo de velocidade para v = 2.00 m/s (7.2 km/h):
+    - Avaliando intervalo de v: [1.50 m/s, 2.00 m/s] -> [ENCONTRADO]
+      -> phi maximo para essa velocidade eh de: 0.250 rad (14.3°)
+
+  [Etapa 2] Comparando phi atual com limite seguro:
+    -> EXCEDEU LIMITE! (phi 0.500 rad > phi_seguro de 0.250 rad). Necessario limitar velocidade!
+
+  [Etapa 3] Calculando velocidade maxima permitida para conseguir fazer a curva de phi = 0.500 rad (28.6°):
+    -> phi_Atual (0.500 rad) >= phi_max configurado (0.500 rad).
+    -> Retornando v_minima segura da referencia: 1.50 m/s (5.4 km/h)
+
+  [Etapa 4] Atuacao do Obstacle Avoider:
+    -> Velocidade do plano: 2.00 -> 1.50 m/s (7.2 -> 5.4 km/h)
+    -> Tempo do comando compensado: 0.100 s -> 0.125 s
+
+>>> [OA Phi Limit] 50/50 comandos limitados por exceder phi de referencia <<<
+
+ASTRO_ERROR_CODE_205 - Ângulo de articulação (phi) excedeu o limite seguro para a velocidade atual. 
+Velocidade linear do veículo limitada para garantir a estabilidade do robô e dos reboques.
+```
+
+#### O que o log apresenta:
+1. **Etapa 1:** A $2{,}00\text{ m/s}$, o ângulo limite é de $0{,}250\text{ rad}$ ($14{,}3^\circ$).
+2. **Etapa 2:** O comando pede $0{,}500\text{ rad}$. Como $0{,}500 > 0{,}250$, o limite de estabilidade foi violado.
+3. **Etapa 3:** Como o caminhão **não pode mudar o traçado da curva**, o OA calcula qual a velocidade que suporta essa curva fechada de $0{,}500\text{ rad}$. A resposta é $1{,}50\text{ m/s}$.
+4. **Etapa 4:** O OA freia o caminhão para $1{,}50\text{ m/s}$ e dilata o tempo do comando de $0{,}100\text{ s}$ para $0{,}125\text{ s}$ ($dt_{\text{novo}} = dt_{\text{velho}} \cdot \left[2 - \frac{v_{\text{novo}}}{v_{\text{velho}}}\right]$). Com isso, o comprimento percorrido permanece $\Delta S = v \cdot \Delta t \approx 0{,}187\text{ m}$, contornando a curva exatamente no traçado pretendido.
+5. **Telemetria:** O sistema emite o alarme **`ASTRO_ERROR_CODE_205`** notificando os módulos de monitoramento e auditoria.
+
+---
+
+### Caso 2: Interpolação Linear Intermediária ($v = 1{,}75\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
+
+Este caso ilustra perfeitamente na prática o conceito de **interpolação linear contínua** explicado na **Seção 2** do guia. 
+
+Aqui, o planejador enviou uma velocidade intermediária ($1{,}75\text{ m/s}$), que não coincide com nenhum ponto exato da tabela, mas está no intervalo $[1{,}50\text{ m/s}, 2{,}00\text{ m/s}]$.
+
+```text
+========================================================================================
+[OA PHI LIMIT] Avaliando Plano com 400 comandos contra tabela de referencia (3 niveis)
+========================================================================================
+
+--- Detalhes do Comando [0/400] | v_original: 1.75 m/s | phi_original: 0.500 rad (28.6°) ---
+
+  [Etapa 1] Procurando intervalo de velocidade para v = 1.75 m/s (6.3 km/h):
+    - Avaliando intervalo de v: [1.50 m/s, 2.00 m/s] -> [ENCONTRADO]
+      -> phi maximo para essa velocidade eh de: 0.375 rad (21.5°)
+
+  [Etapa 2] Comparando phi atual com limite seguro:
+    -> EXCEDEU LIMITE! (phi 0.500 rad > phi_seguro de 0.375 rad). Necessario limitar velocidade!
+
+  [Etapa 3] Calculando velocidade maxima permitida para conseguir fazer a curva de phi = 0.500 rad (28.6°):
+    -> phi_Atual (0.500 rad) >= phi_max configurado (0.500 rad).
+    -> Retornando v_minima segura da referencia: 1.50 m/s (5.4 km/h)
+
+  [Etapa 4] Atuacao do Obstacle Avoider:
+    -> Velocidade do plano: 1.75 -> 1.50 m/s (6.3 -> 5.4 km/h)
+    -> Tempo do comando compensado: 0.098 s -> 0.112 s
+
+>>> [OA Phi Limit] 50/400 comandos limitados por exceder phi de referencia <<<
+
+ASTRO_ERROR_CODE_205 - Ângulo de articulação (phi) excedeu o limite seguro para a velocidade atual. Velocidade linear do veículo limitada para garantir a estabilidade do robô e dos reboques. Esses limites vem do parâmetro `obstacle_avoider_v_and_max_phi_reference_points`.
+```
+
+#### Justificativa matemática com base na Seção 2:
+1. **Posição na Rampa ($t$):**  
+   $$t = \frac{v - v_0}{v_1 - v_0} = \frac{1{,}75 - 1{,}50}{2{,}00 - 1{,}50} = \frac{0{,}25}{0{,}50} = 0{,}50 \quad (50\%\text{ da rampa})$$
+   A velocidade de $1{,}75\text{ m/s}$ está exatamente na metade do caminho entre $1{,}50\text{ m/s}$ e $2{,}00\text{ m/s}$.
+
+2. **Cálculo do $\phi_{\max}$ na Etapa 1:**  
+   $$\phi_{\max} = \phi_0 + t \cdot (\phi_1 - \phi_0) = 0{,}500 + 0{,}50 \cdot (0{,}250 - 0{,}500) = \mathbf{0{,}375\text{ rad}}\ (21{,}5^\circ)$$
+   O algoritmo não aplica nenhum "degrau": ele traça a reta e calcula com precisão que para $1{,}75\text{ m/s}$ o limite seguro é exatamente $0{,}375\text{ rad}$.
+
+3. **Por que a velocidade caiu para $1{,}50\text{ m/s}$ na Etapa 3?**  
+   Como o plano pedia $\phi = 0{,}500\text{ rad}$ ($28{,}6^\circ$) e a **Regra de Ouro** proíbe abrir a curva, o OA busca qual a velocidade máxima segura para contornar uma curva fechada com $\phi = 0{,}500\text{ rad}$. Como visto na tabela da Seção 2, $0{,}500\text{ rad}$ só é admitido a até $1{,}50\text{ m/s}$. Logo, a velocidade é reduzida para $1{,}50\text{ m/s}$.
+
+---
+
+### Caso 3: Plano no Limite Seguro ($v = 1{,}50\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
+
+No ciclo seguinte, o plano em execução já opera na velocidade reduzida:
+
+```text
+========================================================================================
+[OA PHI LIMIT] Avaliando Plano com 46 comandos contra tabela de referencia (3 niveis)
+========================================================================================
+
+--- Detalhes do Comando [0/46] | v_original: 1.50 m/s | phi_original: 0.500 rad (28.6°) ---
+
+  [Etapa 1] Procurando intervalo de velocidade para v = 1.50 m/s (5.4 km/h):
+    - Avaliando intervalo de v: [1.50 m/s, 2.00 m/s] -> [ENCONTRADO]
+      -> phi maximo para essa velocidade eh de: 0.500 rad (28.6°)
+
+  [Etapa 2] Comparando phi atual com limite seguro:
+    -> SEGURO [OK] (phi 0.500 rad <= max_phi 0.500 rad). Velocidade original mantida.
+```
+
+#### O que o log nos ensina:
+* Para $v = 1{,}50\text{ m/s}$, a tabela permite até $\phi = 0{,}500\text{ rad}$.
+* Como $\phi_{\text{atual}} \le \phi_{\max}$, a condição é declarada como **`SEGURO [OK]`**.
+* A velocidade é mantida e nenhum alarme é disparado.
+
+---
+
+### Caso 4: Manobra em Baixa Velocidade ($v = 0{,}81\text{ m/s}$ e $\phi = 0{,}500\text{ rad}$)
+
+O caminhão está quase parado ou manobrando abaixo do menor piso de velocidade configurado ($0{,}81 < 1{,}50\text{ m/s}$):
+
+```text
+========================================================================================
+[OA PHI LIMIT] Avaliando Plano com 47 comandos contra tabela de referencia (3 niveis)
+========================================================================================
+
+--- Detalhes do Comando [0/47] | v_original: 0.81 m/s | phi_original: 0.500 rad (28.6°) ---
+
+  [Etapa 1] Procurando intervalo de velocidade para v = 0.81 m/s (2.9 km/h):
+    - Avaliando intervalo de v: [1.50 m/s, 2.00 m/s] -> (fora)
+    - Avaliando intervalo de v: [2.00 m/s, 2.77 m/s] -> (fora)
+    -> v_current (0.81 m/s) < v_min configurado (1.50 m/s). Retorna phi_maximo: 0.500 rad (28.6°)
+
+  [Etapa 2] Comparando phi atual com limite seguro:
+    -> SEGURO [OK] (phi 0.000 rad <= max_phi 0.500 rad). Velocidade original mantida.
+```
+
+#### O que o log nos ensina:
+* O algoritmo varre todos os intervalos de velocidade e percebe que a velocidade está abaixo do mínimo da tabela.
+* **Comportamento seguro:** Em velocidades muito baixas, não há risco de capotamento por aceleração centrípeta. Portanto, o OA libera o **esterçamento máximo** ($0{,}500\text{ rad} = 28{,}6^\circ$) para permitir manobras fechadas de pátio ou ré.
+
+---
+
+## 5. Como Executar e Reproduzir o Teste
+
+Para rodar esse teste em ambiente de desenvolvimento local com o IPC ativo:
+
+### Terminal 1: Iniciar o Obstacle Avoider com a tabela ativa
+```bash
+cd ~/astro/bin
+./obstacle_avoider \
+  -obstacle_avoider_use_hold_velocity_to_reference_phi on \
+  -obstacle_avoider_v_and_max_phi_reference_points "3 1.5 0.5 2.0 0.25 2.77 0.20"
+```
+
+### Terminal 2: Injetar a trajetória de teste
+```bash
+cd ~/astro/bin
+
+#  Teste com interpolação intermediária (v = 1.75 m/s, phi = 0.500 rad):
+./obstacle_avoider_test 1.75 0.500
+
+# Teste em alta velocidade (v = 2.50 m/s, phi = 0.350 rad):
+./obstacle_avoider_test 2.50 0.350
+```
+
+No Terminal 1, você verá o fluxo em 4 etapas detalhando a intervenção no primeiro comando que viola o limite e mantendo o resumo consolidado dos 50 comandos atenuados.
