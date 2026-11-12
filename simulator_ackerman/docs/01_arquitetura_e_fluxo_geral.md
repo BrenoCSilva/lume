@@ -19,9 +19,9 @@ flowchart TD
 
     VD -->|"Escreve esforços na CAN (msg 'write')"| CAN_BUS
     CAN_BUS -->|"Devolve odometria na CAN (msg 'read')"| VD
+    CAN_BUS[("Barramento CAN Virtual)]
 
     subgraph HardwareOuSim ["3. Barramento CAN e Simulação do Veículo"]
-        CAN_BUS[("Barramento CAN Virtual / Físico<br/><b style='color:#69f0ae'>vcan0 / can0 (Frames de 8 Bytes)</b><br/>Tráfego bruto de bytes mapeados pelo arquivo .dbc")]
         CAN_BUS -->|"Entrega comandos de esforço"| SIM["Simulador do Veículo CAN<br/><b style='color:#4fc3f7'>simulator_ackerman_can</b><br/>Substitui o caminhão real: lê esforços do VD e responde odometria"]
         SIM -->|"Publica estado físico atualizado"| CAN_BUS
     end
