@@ -1,147 +1,219 @@
-# 1. Estrutura e Organização de um Módulo
+# 1. Seu primeiro módulo: conectando ao IPC
 
-Um módulo vive em uma pasta própria dentro de [`src/`](file:///home/lume/astro/src). O módulo que **publica** é [`src/vehicle_sim/`](file:///home/lume/astro/src/vehicle_sim), e o que **assina** é [`src/vehicle_sim_monitor/`](file:///home/lume/astro/src/vehicle_sim_monitor):
+Neste capítulo você vai criar o módulo `vehicle_sim` e fazê-lo se conectar ao ASTRO. Ele ainda não vai enviar nada. O objetivo é entender o mínimo da comunicação por IPC. Nos capítulos seguintes o módulo vai crescendo, e você pode digitar cada trecho conforme ele aparece.
 
-```text
-src/vehicle_sim/
-├── Makefile                        # como compilar e o que publicar em bin/, lib/ e include/
-├── vehicle_sim_messages.h          # definição da mensagem (struct, nome, formato)
-├── vehicle_sim_interface.h         # API de IPC da mensagem (define/subscribe/publish)
-├── vehicle_sim_interface.cpp       # implementação dessa API  → vira libvehicle_sim_interface.a
-└── vehicle_sim_main.cpp            # executável publicador
+## 1.1 O que é IPC no ASTRO
 
-src/vehicle_sim_monitor/
-├── Makefile                        # faz link com -lvehicle_sim_interface
-└── vehicle_sim_monitor_main.cpp    # executável assinante (handler da mensagem)
+O ASTRO é formado por vários programas independentes, os **módulos** (localização, planejamento, sensores...). Cada módulo é um executável separado. Eles não chamam funções uns dos outros, e a conversa entre eles passa por um programa no meio, a **`central`**:
+
+```mermaid
+flowchart LR
+    A["módulo A"] <--> C(("central"))
+    B["módulo B"] <--> C
+    D["módulo C"] <--> C
 ```
 
-O `vehicle_sim_monitor` **não tem** `_messages.h` nem `_interface`: ele usa os do `vehicle_sim`, que já foram copiados para `include/astro/` e `lib/` no build do publicador.
+A `central` é um servidor. Todo módulo precisa **se conectar** a ela ao iniciar. Se ela não estiver no ar, o módulo não consegue fazer nada.
 
-> [!IMPORTANT]
-> **Resumo:**
-> * `_main.cpp`: tem a função `main`, a inicialização, os **handlers** das mensagens recebidas e os **publicadores**. Um por executável.
-> * `_messages.h`: só define a mensagem (struct, `_NAME`, `_FMT`).
-> * `_interface.cpp/.h`: funções de definir, assinar e publicar a mensagem, para que **qualquer módulo** use a mensagem sem repetir código. Compilado como biblioteca.
-> * `Makefile`: diz ao sistema de build o que compilar e o que copiar para as pastas públicas.
+Neste capítulo vamos apenas criar um módulo e conectá-lo à `central`.
 
----
+## 1.2 Preparando o ambiente
 
-## 1. Responsabilidade de cada arquivo
+O `Makefile` do ASTRO precisa saber onde está a raiz do projeto:
 
-| Arquivo | Responsabilidade | Quem o usa |
-|---|---|---|
-| `<modulo>_main.cpp` | `main()`, inicialização do IPC, leitura de parâmetros, handlers, publicadores, `shutdown` | Só o próprio executável |
-| `<modulo>_messages.h` | Struct da mensagem e as macros `..._NAME` e `..._FMT` | Qualquer módulo que use a mensagem |
-| `<modulo>_interface.h/.cpp` | `define_messages`, `subscribe_..._message`, `unsubscribe_..._message`, `publish_..._message` | Qualquer módulo que use a mensagem |
-| `<modulo>.cpp` (opcional) | Lógica própria do módulo, quando o `_main.cpp` ficar grande | O próprio módulo |
-| `Makefile` | Fontes, bibliotecas, alvos e arquivos públicos | Sistema de build |
+```bash
+export ASTRO_HOME=/home/lume/astro
+```
 
-> [!NOTE]
-> Regra do [README do `simple_module_example`](file:///home/lume/astro/src/simple_module_example/README): se o módulo só consome mensagens de outros, **não precisa** de `_messages.h` nem de `_interface`. Bibliotecas que não geram executável são **sharedlibs**, não módulos, e ficam em `sharedlib/`.
+Sem isso o `make` aborta com `ASTRO_HOME environment variable not set`.
 
----
+## 1.3 Criando a pasta do módulo
 
-## 2. Convenções de nome
+Todo módulo mora em uma pasta dentro de `src/`:
 
-| Item | Padrão | Exemplo |
-|---|---|---|
-| Pasta | `snake_case`, nome do módulo | `vehicle_sim` |
-| Struct da mensagem | `astro_<modulo>_<mensagem>_message` | `astro_vehicle_sim_pose_message` |
-| Nome da mensagem (IPC) | `astro_<modulo>_<mensagem>` | `"astro_vehicle_sim_pose"` |
-| Macros | `ASTRO_<MODULO>_<MENSAGEM>_MESSAGE_NAME` e `..._FMT` | `ASTRO_VEHICLE_SIM_POSE_MESSAGE_FMT` |
-| Funções de interface | `astro_<modulo>_<ação>_<mensagem>_message` | `astro_vehicle_sim_publish_pose_message` |
-| Parâmetro do `.ini` | `<modulo>_<parametro>` | `vehicle_sim_period_ms` |
+```bash
+mkdir $ASTRO_HOME/src/vehicle_sim
+cd $ASTRO_HOME/src/vehicle_sim
+```
 
-Todo `_messages.h` deve ter `extern "C"` (como em [`vehicle_sim_messages.h`](file:///home/lume/astro/src/vehicle_sim/vehicle_sim_messages.h)), pois a biblioteca IPC é em C. Toda mensagem **deve** ter os campos `double timestamp` e `char *host`. Escreva **unidade e referencial** de cada campo nos comentários da struct.
+## 1.4 O primeiro `main`
 
----
+Crie o arquivo `vehicle_sim_main.cpp`. Ele é o ponto de entrada do módulo:
 
-## 3. O `Makefile`
+```cpp
+#include <astro/astro.h>
 
-Arquivo real do [`vehicle_sim`](file:///home/lume/astro/src/vehicle_sim/Makefile) (o dono da mensagem):
+int
+main(int argc, char **argv)
+{
+	astro_ipc_initialize(argc, argv);
+
+	printf("vehicle_sim: conectado a central.\n");
+
+	astro_ipc_dispatch();
+
+	return 0;
+}
+```
+
+Linha a linha:
+
+| Linha | O que faz |
+|---|---|
+| `#include <astro/astro.h>` | Traz as funções do ASTRO, incluindo as de IPC |
+| `astro_ipc_initialize(argc, argv)` | **Conecta o módulo à `central`.** É sempre a primeira coisa do `main`. Se não conseguir conectar, o programa termina com erro |
+| `astro_ipc_dispatch()` | **Mantém o módulo vivo, esperando mensagens.** Ela não retorna: o módulo fica aqui parado, e é aqui que, mais adiante, os *handlers* das mensagens recebidas serão chamados |
+
+## 1.5 Encerrando com educação
+
+Quando você apertar Ctrl+C, o módulo deve avisar a `central` que está saindo. Para isso, acrescente uma função e registre-a no `main`:
+
+```cpp
+#include <astro/astro.h>
+
+static void
+shutdown_module(int signo)
+{
+	if (signo == SIGINT)
+	{
+		astro_ipc_disconnect();
+		printf("vehicle_sim: desconectado.\n");
+		exit(0);
+	}
+}
+
+int
+main(int argc, char **argv)
+{
+	astro_ipc_initialize(argc, argv);
+	signal(SIGINT, shutdown_module);
+
+	printf("vehicle_sim: conectado a central.\n");
+
+	astro_ipc_dispatch();
+
+	return 0;
+}
+```
+
+O que mudou:
+
+* `signal(SIGINT, shutdown_module)` pede ao sistema operacional que chame `shutdown_module` quando o Ctrl+C for pressionado (sinal `SIGINT`).
+* `astro_ipc_disconnect()` se desconecta da `central` de forma limpa.
+
+## 1.6 O `Makefile`
+
+Crie o arquivo `Makefile` na mesma pasta:
 
 ```makefile
 include ../Makefile.conf
 
 MODULE_NAME = VEHICLE SIM
-MODULE_COMMENT = Modulo de exemplo/template: simula um veiculo e publica a mensagem astro_vehicle_sim_pose
+MODULE_COMMENT = Modulo de exemplo: simula um veiculo e publica sua pose
 
-LFLAGS += -lvehicle_sim_interface -lparam_interface -lipc -lglobal -lpthread -lm
+LFLAGS += -lglobal -lipc -lpthread
 
-SOURCES = vehicle_sim_main.cpp vehicle_sim_interface.cpp
+SOURCES = vehicle_sim_main.cpp
 
-PUBLIC_INCLUDES = vehicle_sim_messages.h vehicle_sim_interface.h
-PUBLIC_LIBRARIES = libvehicle_sim_interface.a
 PUBLIC_BINARIES = vehicle_sim
-
-TARGETS = libvehicle_sim_interface.a vehicle_sim
-
-libvehicle_sim_interface.a: vehicle_sim_interface.o
+TARGETS = vehicle_sim
 
 vehicle_sim: vehicle_sim_main.o
 
 include ../Makefile.rules
 ```
 
-E o do [`vehicle_sim_monitor`](file:///home/lume/astro/src/vehicle_sim_monitor/Makefile) (apenas consumidor, sem `PUBLIC_INCLUDES` nem `PUBLIC_LIBRARIES`):
-
-```makefile
-include ../Makefile.conf
-
-MODULE_NAME = VEHICLE SIM MONITOR
-MODULE_COMMENT = Modulo de exemplo: assina a mensagem publicada pelo vehicle_sim e alerta por velocidade
-
-LFLAGS += -lvehicle_sim_interface -lparam_interface -lipc -lglobal -lpthread
-
-SOURCES = vehicle_sim_monitor_main.cpp
-
-PUBLIC_BINARIES = vehicle_sim_monitor
-TARGETS = vehicle_sim_monitor
-
-vehicle_sim_monitor: vehicle_sim_monitor_main.o
-
-include ../Makefile.rules
-```
-
-| Variável | Significado |
+| Linha | Significado |
 |---|---|
-| `MODULE_NAME` / `MODULE_COMMENT` | Identificação exibida no build |
-| `LFLAGS` | Bibliotecas de link. O mínimo para IPC é `-lparam_interface -lipc -lglobal -lpthread`; um consumidor acrescenta a interface do módulo dono da mensagem (`-lvehicle_sim_interface`); `-lm` só é necessário se usar funções matemáticas, como o `sin` e o `cos` do simulador |
-| `SOURCES` | Todos os `.c`/`.cpp` do módulo |
-| `PUBLIC_INCLUDES` | Headers copiados para `include/astro/`; por isso os módulos usam `#include <astro/vehicle_sim_messages.h>` |
-| `PUBLIC_LIBRARIES` | Bibliotecas copiadas para `lib/` |
-| `PUBLIC_BINARIES` | Executáveis copiados para `bin/` |
+| `include ../Makefile.conf` e `../Makefile.rules` | Regras de build comuns a todos os módulos. Ficam no começo e no fim |
+| `MODULE_NAME`, `MODULE_COMMENT` | Nome e descrição mostrados no build |
+| `LFLAGS` | Bibliotecas usadas: `libglobal` e `libipc` (o IPC) e `libpthread` |
+| `SOURCES` | Os arquivos `.cpp` do módulo |
+| `PUBLIC_BINARIES` | O executável será copiado para `$ASTRO_HOME/bin/` |
 | `TARGETS` | O que o `make` constrói |
-| `alvo: arquivo.o` | Liga cada alvo ao seu objeto |
+| `vehicle_sim: vehicle_sim_main.o` | Liga o executável ao seu arquivo objeto |
 
 > [!WARNING]
-> **`-lpthread` é obrigatório.** Sem ele o link falha com `undefined reference to pthread_mutexattr_init` vindo da `libipc.a`. Isto aconteceu na construção do exemplo.
+> **A ordem das bibliotecas importa.** `-lglobal` precisa vir **antes** de `-lipc`. Na ordem inversa o link falha com `undefined reference to IPC_perror`.
+> **`-lpthread` é obrigatório**, porque a `libipc` usa *threads*.
 
----
-
-## 4. Compilando
+## 1.7 Compilando
 
 ```bash
-export ASTRO_HOME=/home/lume/astro
-cd $ASTRO_HOME/src/vehicle_sim && make           # primeiro o dono da mensagem
-cd $ASTRO_HOME/src/vehicle_sim_monitor && make   # depois o consumidor
+cd $ASTRO_HOME/src/vehicle_sim
+make
 ```
 
-> [!NOTE]
-> A ordem importa quando se compila **um módulo isolado**: o consumidor precisa que `libvehicle_sim_interface.a` e `vehicle_sim_messages.h` já estejam em `lib/` e `include/astro/`. No build completo da `src/` as fases 1 (bibliotecas) e 2 (executáveis) resolvem isso sozinhas.
-
-Saída real (resumida):
+Se tudo estiver certo, a última linha será:
 
 ```text
----- Compiling vehicle_sim_interface.cpp to vehicle_sim_interface.o (g++)
----- Archiving vehicle_sim_interface.o into libvehicle_sim_interface.a
----- Copying libvehicle_sim_interface.a to /home/lume/astro/lib
----- Linking vehicle_sim_main.o to vehicle_sim (g++)
----- Copying vehicle_sim to /home/lume/astro/bin
 [SUCCESS] Module VEHICLE SIM built with hash: ...
 ```
 
-> [!NOTE]
-> Os `.o`, `.a` e `include/*` não são versionados, mas os binários recém-copiados em `bin/` aparecem como não rastreados no `git status`.
+O executável `vehicle_sim` foi copiado para `$ASTRO_HOME/bin/`.
 
-**Próximo capítulo:** configurar a conexão com a `central` e a leitura de parâmetros (`02_configuracao_ipc.md`).
+## 1.8 Executando
+
+### Sem a `central`: o erro mais comum
+
+Vá para a pasta `bin/` e rode o módulo **sem** a `central` no ar:
+
+```bash
+cd $ASTRO_HOME/bin
+./vehicle_sim
+```
+
+```text
+ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
+
+Could not connect to central.
+
+Did you remember to start central?
+Did you remember to set your CENTRALHOST variable? It is currently not set.
+```
+
+O módulo termina, porque não há onde se conectar. É a confirmação de que `astro_ipc_initialize` faz o que dissemos.
+
+### Com a `central`
+
+Em **outro terminal**, inicie a `central` e deixe-a rodando:
+
+```bash
+cd $ASTRO_HOME/bin
+./central
+```
+
+```text
+central running...
+```
+
+No terminal do módulo:
+
+```bash
+./vehicle_sim
+```
+
+```text
+ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
+
+vehicle_sim: conectado a central.
+```
+
+O módulo fica parado em `astro_ipc_dispatch()`, esperando mensagens (que ainda não existem). Aperte **Ctrl+C**:
+
+```text
+vehicle_sim: desconectado.
+```
+
+> [!TIP]
+> Se a `central` acusar `unable to bind TCP/IP socket for listening` ao iniciar, a porta ainda está presa por uma execução anterior que acabou de ser encerrada. Espere alguns segundos e tente de novo.
+
+## 1.9 Checkpoint
+
+Neste ponto você tem:
+
+- [x] uma pasta `src/vehicle_sim/` com `Makefile` e `vehicle_sim_main.cpp`;
+- [x] um módulo que se conecta à `central` e se desconecta com Ctrl+C;
+- [x] a noção de que **todo módulo começa com `astro_ipc_initialize`** e **fica esperando em `astro_ipc_dispatch`**.
+
+**Próximo capítulo:** vamos dar algo para o módulo dizer: definir a mensagem de pose do veículo e publicá-la.
