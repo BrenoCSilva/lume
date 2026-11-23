@@ -123,19 +123,8 @@ O executável `vehicle_sim` foi copiado para `$ASTRO_HOME/bin/`.
 
 Vá para a pasta `bin/` e rode o módulo **sem** a `central` no ar:
 
-```bash
-cd $ASTRO_HOME/bin
-./vehicle_sim
-```
 
-```text
-ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
-
-Could not connect to central.
-
-Did you remember to start central?
-Did you remember to set your CENTRALHOST variable? It is currently not set.
-```
+![Módulo sem a central no ar](img/01_execucao_sem_central.png)
 
 O módulo termina, porque não há onde se conectar. É a confirmação de que `astro_ipc_initialize` faz o que dissemos.
 
@@ -143,28 +132,7 @@ O módulo termina, porque não há onde se conectar. É a confirmação de que `
 
 Em **outro terminal**, inicie a `central` e deixe-a rodando:
 
-```bash
-cd $ASTRO_HOME/bin
-./central
-```
-
-```text
-central running...
-```
-
-No terminal do módulo:
-
-```bash
-./vehicle_sim
-```
-
-```text
-ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
-
-vehicle_sim: conectado a central.
-```
-
-![Execução do vehicle_sim](img/01_execucao_vehicle_sim.png)
+![Central à esquerda e vehicle_sim à direita](img/01_execucao_com_central.png)
 
 O módulo fica parado em `astro_ipc_dispatch()`, esperando mensagens (que ainda não existem). Aperte **Ctrl+C** para encerrá-lo: o programa simplesmente morre, sem dizer nada. Isso funciona, mas é um encerramento "seco". Na próxima seção vamos melhorá-lo.
 
