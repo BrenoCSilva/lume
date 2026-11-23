@@ -1,121 +1,94 @@
-# 1. Estrutura e Organização de um Módulo
+# Manual: Criando um Novo Módulo no ASTRO
 
-Um módulo vive em uma pasta própria dentro de [`src/`](file:///home/lume/astro/src). O módulo de exemplo é [`src/hello_module/`](file:///home/lume/astro/src/hello_module):
-
-```text
-src/hello_module/
-├── Makefile                        # como compilar e o que publicar em bin/, lib/ e include/
-├── hello_module_messages.h         # definição da mensagem (struct, nome, formato)
-├── hello_module_interface.h        # API de IPC da mensagem (define/subscribe/publish)
-├── hello_module_interface.cpp      # implementação dessa API  → vira libhello_module_interface.a
-├── hello_module_main.cpp           # executável publicador
-└── hello_module_listener_main.cpp  # executável assinante
-```
+Este manual ensina, passo a passo, a criar um módulo novo no ASTRO que se comunica com os demais por **IPC** (*Inter-Process Communication*). O conteúdo usa como exemplo condutor dois módulos, [`vehicle_sim`](file:///home/lume/astro/src/vehicle_sim) (publica) e [`vehicle_sim_monitor`](file:///home/lume/astro/src/vehicle_sim_monitor) (assina), que **compilam e foram testados**: as saídas mostradas nos capítulos são saídas reais.
 
 > [!IMPORTANT]
 > **Resumo:**
-> * `_main.cpp`: tem a função `main`, a inicialização, os **handlers** das mensagens recebidas e os **publicadores**. Um por executável.
-> * `_messages.h`: só define a mensagem (struct, `_NAME`, `_FMT`).
-> * `_interface.cpp/.h`: funções de definir, assinar e publicar a mensagem, para que **qualquer módulo** use a mensagem sem repetir código. Compilado como biblioteca.
-> * `Makefile`: dizer ao sistema de build o que compilar e o que copiar para as pastas públicas.
+> * Cada módulo do ASTRO é um **processo independente** (um executável em `bin/`). Eles não chamam funções uns dos outros; trocam **mensagens** por meio de um processo central.
+> * Quem envia uma mensagem **publica** (*publish*); quem quer recebê-la **assina** (*subscribe*) e registra um *handler* (callback) que o IPC chama a cada chegada.
+> * Um módulo novo precisa de: um `Makefile`, um `_main.cpp` (inicialização, handlers e publicadores) e, se definir mensagens próprias, um `_messages.h` e um `_interface.cpp/.h`.
+> * Para rodar é preciso ter `central` e `param_daemon` ativos, e todo parâmetro lido pelo módulo precisa existir no `.ini` do robô.
 
 ---
 
-## 1. Responsabilidade de cada arquivo
+## 1. Como os módulos conversam
 
-| Arquivo | Responsabilidade | Quem o usa |
-|---|---|---|
-| `<modulo>_main.cpp` | `main()`, inicialização do IPC, leitura de parâmetros, handlers, publicadores, `shutdown` | Só o próprio executável |
-| `<modulo>_messages.h` | Struct da mensagem e as macros `..._NAME` e `..._FMT` | Qualquer módulo que use a mensagem |
-| `<modulo>_interface.h/.cpp` | `define_messages`, `subscribe_message`, `unsubscribe_message`, `publish_message` | Qualquer módulo que use a mensagem |
-| `<modulo>.cpp` (opcional) | Lógica própria do módulo, quando o `_main.cpp` ficar grande | O próprio módulo |
-| `Makefile` | Fontes, bibliotecas, alvos e arquivos públicos | Sistema de build |
-
-> [!NOTE]
-> Regra do [README do `simple_module_example`](file:///home/lume/astro/src/simple_module_example/README): se o módulo só consome mensagens de outros, **não precisa** de `_messages.h` nem de `_interface`. Bibliotecas que não geram executável são **sharedlibs**, não módulos, e ficam em `sharedlib/`.
-
----
-
-## 2. Convenções de nome
-
-| Item | Padrão | Exemplo |
-|---|---|---|
-| Pasta | `snake_case`, nome do módulo | `hello_module` |
-| Struct da mensagem | `astro_<modulo>_message` | `astro_hello_module_message` |
-| Nome da mensagem (IPC) | string igual ao nome da struct | `"astro_hello_module_message"` |
-| Macros | `ASTRO_<MODULO>_MESSAGE_NAME` e `..._FMT` | `ASTRO_HELLO_MODULE_MESSAGE_FMT` |
-| Funções de interface | `astro_<modulo>_<ação>_message` | `astro_hello_module_publish_message` |
-| Parâmetro do `.ini` | `<modulo>_<parametro>` | `hello_module_period_ms` |
-
-Todo `_messages.h` deve ter `extern "C"` (como em [`hello_module_messages.h`](file:///home/lume/astro/src/hello_module/hello_module_messages.h)), pois a biblioteca IPC é em C. Toda mensagem **deve** ter os campos `double timestamp` e `char *host`.
-
----
-
-## 3. O `Makefile`
-
-Arquivo real do [`hello_module`](file:///home/lume/astro/src/hello_module/Makefile):
-
-```makefile
-include ../Makefile.conf
-
-MODULE_NAME = HELLO MODULE
-MODULE_COMMENT = Modulo de exemplo/template: publica e assina uma mensagem IPC
-
-LFLAGS += -lhello_module_interface -lparam_interface -lipc -lglobal -lpthread
-
-SOURCES = hello_module_main.cpp hello_module_listener_main.cpp hello_module_interface.cpp
-
-PUBLIC_INCLUDES = hello_module_messages.h hello_module_interface.h
-PUBLIC_LIBRARIES = libhello_module_interface.a
-PUBLIC_BINARIES = hello_module hello_module_listener
-
-TARGETS = libhello_module_interface.a hello_module hello_module_listener
-
-libhello_module_interface.a: hello_module_interface.o
-
-hello_module: hello_module_main.o
-
-hello_module_listener: hello_module_listener_main.o
-
-include ../Makefile.rules
+```mermaid
+flowchart LR
+    PUB["vehicle_sim<br/>(publicador)"] -- "IPC_publishData" --> CEN(("central"))
+    CEN -- "entrega a mensagem" --> SUB["vehicle_sim_monitor<br/>(assinante)"]
+    PD["param_daemon<br/>(lê o .ini)"] -. "parâmetros na inicialização" .-> PUB
+    PD -.-> SUB
 ```
 
-| Variável | Significado |
+| Processo | Papel |
 |---|---|
-| `MODULE_NAME` / `MODULE_COMMENT` | Identificação exibida no build |
-| `LFLAGS` | Bibliotecas de link. O mínimo para IPC é `-lparam_interface -lipc -lglobal -lpthread` |
-| `SOURCES` | Todos os `.c`/`.cpp` do módulo |
-| `PUBLIC_INCLUDES` | Headers copiados para `include/astro/`; por isso os módulos usam `#include <astro/hello_module_messages.h>` |
-| `PUBLIC_LIBRARIES` | Bibliotecas copiadas para `lib/` |
-| `PUBLIC_BINARIES` | Executáveis copiados para `bin/` |
-| `TARGETS` | O que o `make` constrói |
-| `alvo: arquivo.o` | Liga cada alvo ao seu objeto |
+| `central` | Servidor IPC. Registra as mensagens definidas e distribui cada publicação aos assinantes. Deve estar no ar antes de qualquer módulo. |
+| `param_daemon` | Lê o arquivo `.ini` do robô e responde aos módulos que pedem seus parâmetros. |
+| Seu módulo | Conecta-se à `central`, define/publica/assina mensagens e lê parâmetros. |
 
-> [!WARNING]
-> **`-lpthread` é obrigatório.** Sem ele o link falha com `undefined reference to pthread_mutexattr_init` vindo da `libipc.a`. Isto aconteceu na construção do exemplo.
+Os módulos compartilham apenas **o nome e o formato da mensagem**. Quem publica não sabe quem assina, e vice-versa.
 
 ---
 
-## 4. Compilando
+## 2. Pré-requisitos
+
+1. Repositório do ASTRO compilado (as bibliotecas `libipc`, `libglobal` e `libparam_interface` em `lib/`, e os executáveis `central` e `param_daemon` em `bin/`).
+2. A variável de ambiente `ASTRO_HOME` apontando para a raiz do ASTRO. Sem ela o `Makefile` aborta com `ASTRO_HOME environment variable not set`:
 
 ```bash
 export ASTRO_HOME=/home/lume/astro
-cd $ASTRO_HOME/src/hello_module
-make
 ```
 
-Saída real (resumida):
+---
+
+## 3. Mapa do manual
+
+| Capítulo | Assunto |
+|---|---|
+| [`01_estrutura_de_um_modulo.md`](01_estrutura_de_um_modulo.md) | Arquivos, responsabilidades, convenções e `Makefile` |
+| `02_configuracao_ipc.md` | Conexão com a central, parâmetros e encerramento |
+| `03_criacao_de_mensagens.md` | Struct, nome e formato da mensagem |
+| `04_subscribe.md` | Assinatura e handlers |
+| `05_publish.md` | Publicação |
+| `06_integracao_e_validacao.md` | Executar e validar a comunicação |
+| `07_boas_praticas.md` | Padrões e erros comuns |
+| `08_template_de_modulo.md` | Esqueleto reutilizável |
+
+---
+
+## 4. Os módulos de exemplo
+
+O exemplo usa **dois módulos**, como acontece no ASTRO real: um dono da mensagem, que publica, e um consumidor, que assina.
+
+| Módulo | Pasta | O que faz |
+|---|---|---|
+| `vehicle_sim` | [`src/vehicle_sim/`](file:///home/lume/astro/src/vehicle_sim) | **Dono da mensagem** `astro_vehicle_sim_pose`. Simula um veículo em movimento, publica sua pose e velocidade a cada 1 s e disponibiliza `_messages.h` e `libvehicle_sim_interface.a` para os outros módulos. |
+| `vehicle_sim_monitor` | [`src/vehicle_sim_monitor/`](file:///home/lume/astro/src/vehicle_sim_monitor) | **Consumidor**: faz link com a interface do `vehicle_sim`, assina a mensagem, imprime a pose e **alerta** quando a velocidade passa de um limite lido do `.ini`. Só tem `_main.cpp` e `Makefile`. |
+
+A mensagem `astro_vehicle_sim_pose` é uma versão enxuta da mensagem real de localização do ASTRO (`astro_localize_ackerman_globalpos`, que também tem posição, `v`, `timestamp` e `host`):
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `x`, `y` | `double` | Posição no referencial global (m) |
+| `theta` | `double` | Orientação (rad) |
+| `v` | `double` | Velocidade linear (m/s) |
+| `timestamp`, `host` | `double`, `char *` | Obrigatórios em toda mensagem |
+
+> [!NOTE]
+> Os dados são **simulados**: o `vehicle_sim` faz o veículo andar numa curva suave com a velocidade oscilando entre 1 e 3 m/s, e calcula a posição a partir dela. Não é uma fonte real do ASTRO.
+
+Saída real da execução dos dois juntos (limite de velocidade em 2,5 m/s):
 
 ```text
----- Compiling hello_module_interface.cpp to hello_module_interface.o (g++)
----- Archiving hello_module_interface.o into libhello_module_interface.a
----- Copying libhello_module_interface.a to /home/lume/astro/lib
----- Linking hello_module_main.o to hello_module (g++)
----- Copying hello_module to /home/lume/astro/bin
-[SUCCESS] Module HELLO MODULE built with hash: ...
+vehicle_sim: publicou x=2.83 y=0.28 theta=0.10 v=2.84
+vehicle_sim: publicou x=5.68 y=0.86 theta=0.20 v=2.91
+vehicle_sim: publicou x=7.72 y=1.49 theta=0.30 v=2.14
+...
+vehicle_sim_monitor: x=2.83 y=0.28 theta=0.10 v=2.84 (de vehicle_sim@lume-M, t=1795463342.478)
+vehicle_sim_monitor: ALERTA velocidade 2.84 m/s acima do limite 2.50 m/s
+vehicle_sim_monitor: x=7.72 y=1.49 theta=0.30 v=2.14 (de vehicle_sim@lume-M, t=1795463344.480)
 ```
 
 > [!NOTE]
-> Os `.o`, `.a`, `include/*` e os binários em `bin/` não são versionados, mas os binários recém-copiados em `bin/` aparecem como não rastreados no `git status` (adicione-os ao `.gitignore` do módulo se for o caso).
-
-**Próximo capítulo:** configurar a conexão com a `central` e a leitura de parâmetros (`02_configuracao_ipc.md`).
+> O repositório já tem outros exemplos: [`src/simple_module_example`](file:///home/lume/astro/src/simple_module_example) (em C, só publish/subscribe) e [`src/skeleton_package`](file:///home/lume/astro/src/skeleton_package) (padrão sensor/filter com interface Qt). Este manual usa **C++**, linguagem da maioria dos módulos atuais (a API de IPC é a mesma).
