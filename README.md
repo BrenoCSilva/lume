@@ -64,44 +64,7 @@ Linha a linha:
 | `astro_ipc_initialize(argc, argv)` | **Conecta o módulo à `central`.** É sempre a primeira coisa do `main`. Se não conseguir conectar, o programa termina com erro |
 | `astro_ipc_dispatch()` | **Mantém o módulo vivo, esperando mensagens.** Ela não retorna: o módulo fica aqui parado, e é aqui que, mais adiante, os *handlers* das mensagens recebidas serão chamados |
 
-## 1.5 Encerrando com educação
-
-Quando você apertar Ctrl+C, o módulo deve avisar a `central` que está saindo. Para isso, acrescente uma função e registre-a no `main`:
-
-```cpp
-#include <astro/astro.h>
-
-static void
-shutdown_module(int signo)
-{
-	if (signo == SIGINT)
-	{
-		astro_ipc_disconnect();
-		printf("vehicle_sim: desconectado.\n");
-		exit(0);
-	}
-}
-
-int
-main(int argc, char **argv)
-{
-	astro_ipc_initialize(argc, argv);
-	signal(SIGINT, shutdown_module);
-
-	printf("vehicle_sim: conectado a central.\n");
-
-	astro_ipc_dispatch();
-
-	return 0;
-}
-```
-
-O que mudou:
-
-* `signal(SIGINT, shutdown_module)` pede ao sistema operacional que chame `shutdown_module` quando o Ctrl+C for pressionado (sinal `SIGINT`).
-* `astro_ipc_disconnect()` se desconecta da `central` de forma limpa.
-
-## 1.6 O `Makefile`
+## 1.5 O `Makefile`
 
 Crie o arquivo `Makefile` na mesma pasta:
 
@@ -137,7 +100,7 @@ include ../Makefile.rules
 > **A ordem das bibliotecas importa.** `-lglobal` precisa vir **antes** de `-lipc`. Na ordem inversa o link falha com `undefined reference to IPC_perror`.
 > **`-lpthread` é obrigatório**, porque a `libipc` usa *threads*.
 
-## 1.7 Compilando
+## 1.6 Compilando
 
 ```bash
 cd $ASTRO_HOME/src/vehicle_sim
@@ -152,7 +115,9 @@ Se tudo estiver certo, a última linha será:
 
 O executável `vehicle_sim` foi copiado para `$ASTRO_HOME/bin/`.
 
-## 1.8 Executando
+![Compilação do vehicle_sim](img/01_compilacao_vehicle_sim.png)
+
+## 1.7 Executando
 
 ### Sem a `central`: o erro mais comum
 
@@ -199,14 +164,67 @@ ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
 vehicle_sim: conectado a central.
 ```
 
-O módulo fica parado em `astro_ipc_dispatch()`, esperando mensagens (que ainda não existem). Aperte **Ctrl+C**:
+![Execução do vehicle_sim](img/01_execucao_vehicle_sim.png)
 
-```text
-vehicle_sim: desconectado.
-```
+O módulo fica parado em `astro_ipc_dispatch()`, esperando mensagens (que ainda não existem). Aperte **Ctrl+C** para encerrá-lo: o programa simplesmente morre, sem dizer nada. Isso funciona, mas é um encerramento "seco". Na próxima seção vamos melhorá-lo.
 
 > [!TIP]
 > Se a `central` acusar `unable to bind TCP/IP socket for listening` ao iniciar, a porta ainda está presa por uma execução anterior que acabou de ser encerrada. Espere alguns segundos e tente de novo.
+
+## 1.8 Encerrando com educação
+
+Na execução anterior, o Ctrl+C derrubou o módulo de uma vez: ele não teve chance de fazer nada antes de sair. Isso é um problema à medida que o módulo ganha responsabilidades, como fechar arquivos, liberar recursos ou parar um equipamento. Todo módulo do ASTRO trata o Ctrl+C para ter um **ponto de saída controlado**, onde ele:
+
+1. se desconecta da `central` de forma explícita;
+2. executa qualquer limpeza necessária (por enquanto, só uma mensagem);
+3. termina.
+
+Acrescente uma função e registre-a no `main`:
+
+```cpp
+#include <astro/astro.h>
+
+static void
+shutdown_module(int signo)
+{
+	if (signo == SIGINT)
+	{
+		astro_ipc_disconnect();
+		printf("vehicle_sim: desconectado.\n");
+		exit(0);
+	}
+}
+
+int
+main(int argc, char **argv)
+{
+	astro_ipc_initialize(argc, argv);
+	signal(SIGINT, shutdown_module);
+
+	printf("vehicle_sim: conectado a central.\n");
+
+	astro_ipc_dispatch();
+
+	return 0;
+}
+```
+
+O que mudou:
+
+* `signal(SIGINT, shutdown_module)` pede ao sistema operacional que chame `shutdown_module` quando o Ctrl+C for pressionado (sinal `SIGINT`).
+* `astro_ipc_disconnect()` se desconecta da `central` de forma limpa.
+* `exit(0)` encerra o programa depois da limpeza.
+
+Compile de novo (`make`), execute e aperte Ctrl+C:
+
+```text
+ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
+
+vehicle_sim: conectado a central.
+vehicle_sim: desconectado.
+```
+
+Agora a saída mostra o ponto de encerramento controlado. Nos próximos capítulos é nele que entrará a limpeza do que o módulo abrir.
 
 ## 1.9 Checkpoint
 
