@@ -27,21 +27,6 @@ O ASTRO resolve isso do mesmo jeito para todos os módulos: quem **oferece** có
 | Os **headers** (declarações) | `$ASTRO_HOME/include/astro/` | `PUBLIC_INCLUDES` | `#include <astro/nome.h>` |
 | O **código compilado**, em uma **biblioteca** (`.a`) | `$ASTRO_HOME/lib/` | `PUBLIC_LIBRARIES` | `-lnome` no `LFLAGS` |
 
-### O header e a biblioteca são duas metades
-
-Para um programa usar uma função que está em outro módulo, são necessárias **duas coisas**, e elas acontecem em **momentos diferentes** da construção do programa:
-
-| Momento | O que o programa precisa | Quem fornece |
-|---|---|---|
-| **Compilar** (cada `.cpp` vira um `.o`) | Saber que a função **existe** e como ela é chamada: a **declaração** | O **header** |
-| **Link** (os `.o` são juntados em um executável) | O **código** da função, já compilado | A **biblioteca** (`.a`) |
-
-O header é como o **índice** de um livro: diz que o capítulo existe e em que página, mas não traz o conteúdo. A biblioteca é o **conteúdo**. O compilador se contenta com o índice (por isso o `#include` basta para compilar), mas o link precisa do conteúdo, e é aí que entra a biblioteca.
-
-Uma biblioteca `.a` é só um pacote de arquivos `.o` já compilados. Escrever `-lnome` no `LFLAGS` diz ao link: "junte ao meu executável o código que está em `libnome.a`", e ele a procura na pasta `lib/`.
-
-Por isso o dono da interface publica **as duas metades**: `PUBLIC_INCLUDES` publica o índice, e `PUBLIC_LIBRARIES` publica o conteúdo.
-
 Você já usa esse mecanismo desde o capítulo 1, sem ter prestado atenção: `#include <astro/astro.h>` pega um header publicado em `include/astro/`, e `-lglobal` e `-lipc` pegam bibliotecas publicadas em `lib/`. O `Makefile` do módulo `global` publica o `astro.h` e a `libglobal.a` usando exatamente essas mesmas variáveis. Agora o `vehicle_simulator` vai fazer o mesmo com a sua interface.
 
 ## 3.2 Acrescentando a função de assinar à interface
@@ -123,11 +108,11 @@ O que mudou, e por quê:
 | Linha | Motivo |
 |---|---|
 | `PUBLIC_INCLUDES` | Copia os dois headers para `include/astro/`, para outros módulos poderem fazer `#include <astro/...>` |
-| `PUBLIC_LIBRARIES` | Copia a biblioteca da interface (o código compilado das funções) para `lib/`, para outros módulos poderem juntá-lo ao seu executável no link |
+| `PUBLIC_LIBRARIES` | Copia a biblioteca da interface para `lib/`, para outros módulos poderem fazer o link |
 | `TARGETS` com `libvehicle_simulator_interface.a` | Faz o `make` construir a biblioteca |
 | `libvehicle_simulator_interface.a: ...interface.o` | Diz de que arquivo objeto a biblioteca é feita |
 | `vehicle_simulator: vehicle_simulator_main.o` | O executável agora só precisa do objeto do `main`: o código da interface vem da biblioteca |
-| `-lvehicle_simulator_interface` em `LFLAGS` | Pede ao link que junte ao executável o código dessa biblioteca, **como qualquer outro módulo fará**: o `vehicle_simulator` é o primeiro usuário da sua própria interface |
+| `-lvehicle_simulator_interface` em `LFLAGS` | Por isso o executável faz link com ela, **como qualquer outro módulo fará**: o `vehicle_simulator` é o primeiro usuário da sua própria interface |
 
 Compile:
 
@@ -278,7 +263,7 @@ vehicle_simulator_monitor: vehicle_simulator_monitor_main.o
 include ../Makefile.rules
 ```
 
-É o `Makefile` do capítulo 1 com **uma biblioteca a mais** no `LFLAGS`: a `-lvehicle_simulator_interface`, que traz o **código** das funções da interface (o link precisa dele, como vimos na 3.1). O header, para compilar, vem de `include/astro/`, publicado na seção 3.3. O monitor **não tem** `PUBLIC_INCLUDES` nem `PUBLIC_LIBRARIES`, porque ele não oferece nada a ninguém: só consome.
+É o `Makefile` do capítulo 1 com **uma biblioteca a mais** no `LFLAGS`: a `-lvehicle_simulator_interface`, a mesma lista de bibliotecas que o `vehicle_simulator` usa, por isso ele pode chamar as funções da interface. O header vem de `include/astro/`, publicado na seção 3.3. O monitor **não tem** `PUBLIC_INCLUDES` nem `PUBLIC_LIBRARIES`, porque ele não oferece nada a ninguém: só consome.
 
 Compile:
 
@@ -296,19 +281,6 @@ vehicle_simulator_monitor_main.cpp:2:10: fatal error: astro/vehicle_simulator_in
 ```
 
 A solução é voltar à seção 3.3: rodar o `make` no `vehicle_simulator` com o `PUBLIC_INCLUDES` configurado.
-
-### Se esquecer o `-lvehicle_simulator_interface`
-
-Se o header estiver publicado, mas o `-lvehicle_simulator_interface` faltar no `LFLAGS`, o monitor **compila**, e o erro aparece só no **link**:
-
-```text
----- Compiling vehicle_simulator_monitor_main.cpp to vehicle_simulator_monitor_main.o (g++)
----- Linking vehicle_simulator_monitor_main.o to vehicle_simulator_monitor (g++)
-vehicle_simulator_monitor_main.cpp:(.text.startup.main+0x1c): undefined reference to `astro_vehicle_simulator_subscribe_pose_message'
-collect2: error: ld returned 1 exit status
-```
-
-É exatamente a diferença entre as duas metades: o **header** deixou o compilador saber que a função existe, mas faltou o **código** dela no link. O `undefined reference` quer dizer isso: "sei que existe, mas não encontrei o código". A solução é acrescentar o `-lvehicle_simulator_interface` ao `LFLAGS`.
 
 ## 3.6 Executando os dois módulos
 
