@@ -121,7 +121,7 @@ IPC_defineMsg(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, IPC_VARIABLE_LENGTH, AS
 IPC_publishData(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, &message);
 ```
 
-Repare que **as duas chamadas precisam do nome da mensagem** (e a primeira, também do formato). Além disso, cada uma deve ser seguida de uma verificação de erro.
+Repare que **as duas chamadas precisam do nome da mensagem** (e a primeira, também do formato).
 
 ### A segunda separação: o arquivo de interface
 
@@ -150,11 +150,6 @@ astro_<modulo>_<ação>_<mensagem>_message
 |---|---|
 | `astro_vehicle_simulator_define_pose_message` | Define a mensagem na `central` |
 | `astro_vehicle_simulator_publish_pose_message` | Publica a mensagem |
-
-A ação pode ainda ser `subscribe` ou `unsubscribe`, que virão com o assinante.
-
-> [!NOTE]
-> A **definição** da mensagem aparece de formas diferentes nos módulos do projeto: em alguns é feita dentro da função de publicação, na primeira chamada; em outros há uma função de definição única para todas as mensagens do módulo (`..._define_messages`); e em outros, uma função por mensagem, como aqui. Escolhemos **uma função por mensagem, chamada explicitamente**, porque deixa claro no `main` o momento em que a mensagem é definida.
 
 ### O header da interface
 
