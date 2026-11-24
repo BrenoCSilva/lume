@@ -78,7 +78,73 @@ Dentro do próprio módulo, os `include` da interface usavam aspas porque os arq
 
 ### O `Makefile`
 
-Atualize o `Makefile` do `vehicle_simulator`:
+O `Makefile` do `vehicle_simulator` evolui em três passos. O ponto de partida é o do capítulo 2:
+
+```makefile
+include ../Makefile.conf
+
+MODULE_NAME = VEHICLE SIMULATOR
+MODULE_COMMENT = Modulo de exemplo: simula um veiculo e publica sua pose
+
+LFLAGS += -lglobal -lipc -lpthread
+
+SOURCES = vehicle_simulator_main.cpp vehicle_simulator_interface.cpp
+
+PUBLIC_BINARIES = vehicle_simulator
+TARGETS = vehicle_simulator
+
+vehicle_simulator: vehicle_simulator_main.o vehicle_simulator_interface.o
+
+include ../Makefile.rules
+```
+
+#### Passo 1: publicar os headers
+
+Para o monitor conseguir **compilar**, os headers precisam estar no caminho comum. Acrescente:
+
+```makefile
+PUBLIC_INCLUDES = vehicle_simulator_messages.h vehicle_simulator_interface.h
+```
+
+O `make` passa a **copiar** esses dois arquivos para `$ASTRO_HOME/include/astro/`. Com isso, o `#include <astro/vehicle_simulator_interface.h>` do monitor funciona.
+
+Mas falta metade do caminho. Para o **link**, o monitor precisa do código da interface, e ele está no `vehicle_simulator_interface.o`, que fica na pasta do `vehicle_simulator`, fora do alcance do monitor. Só com os headers publicados, o monitor compila e não consegue ser montado.
+
+#### Passo 2: empacotar a interface em uma biblioteca
+
+A solução é empacotar esse objeto em uma **biblioteca** e publicá-la, também em um lugar comum. São três linhas:
+
+```makefile
+libvehicle_simulator_interface.a: vehicle_simulator_interface.o
+
+TARGETS = libvehicle_simulator_interface.a vehicle_simulator
+
+PUBLIC_LIBRARIES = libvehicle_simulator_interface.a
+```
+
+Cada uma tem um papel diferente:
+
+| Linha | O que faz |
+|---|---|
+| `libvehicle_simulator_interface.a: vehicle_simulator_interface.o` | **Como** se faz a biblioteca: empacotando o `vehicle_simulator_interface.o`. Só ele entra na biblioteca: o `vehicle_simulator_main.o` fica de fora porque tem a função `main`, que é do executável |
+| `TARGETS = libvehicle_simulator_interface.a ...` | **O que** o `make` deve construir. Sem a biblioteca na lista, a regra acima existiria, mas ninguém a executaria |
+| `PUBLIC_LIBRARIES = libvehicle_simulator_interface.a` | **Copia** a biblioteca já construída para `$ASTRO_HOME/lib/`, onde os outros módulos a encontram |
+
+Repare que o `vehicle_simulator_interface.cpp` **continua no `SOURCES`**: é por estar lá que ele é compilado em `vehicle_simulator_interface.o`, que é o que a biblioteca empacota.
+
+#### Passo 3: o executável passa a usar a biblioteca
+
+Agora a interface do `vehicle_simulator` está disponível como biblioteca, para qualquer módulo, inclusive para ele mesmo. O próprio executável não precisa mais listar o `interface.o` no seu alvo: basta pedir a biblioteca no `LFLAGS`.
+
+```makefile
+LFLAGS += -lvehicle_simulator_interface -lglobal -lipc -lpthread
+
+vehicle_simulator: vehicle_simulator_main.o
+```
+
+O executável é montado só com o `main.o`, e o código da interface vem da biblioteca, pelo `-lvehicle_simulator_interface`. É o mesmo caminho que o monitor vai seguir. O `vehicle_simulator` é o primeiro usuário da sua própria interface.
+
+#### O `Makefile` completo
 
 ```makefile
 include ../Makefile.conf
@@ -103,34 +169,36 @@ vehicle_simulator: vehicle_simulator_main.o
 include ../Makefile.rules
 ```
 
-O que mudou, e por quê:
+#### Resumo das variáveis
 
-| Linha | Motivo |
+| Variável ou regra | Papel |
 |---|---|
-| `PUBLIC_INCLUDES` | Copia os dois headers para `include/astro/`, para outros módulos poderem fazer `#include <astro/...>` |
-| `PUBLIC_LIBRARIES` | Copia a biblioteca da interface para `lib/`, para outros módulos poderem fazer o link |
-| `TARGETS` com `libvehicle_simulator_interface.a` | Faz o `make` construir a biblioteca |
-| `libvehicle_simulator_interface.a: ...interface.o` | Diz de que arquivo objeto a biblioteca é feita |
-| `vehicle_simulator: vehicle_simulator_main.o` | O executável agora só precisa do objeto do `main`: o código da interface vem da biblioteca |
-| `-lvehicle_simulator_interface` em `LFLAGS` | Por isso o executável faz link com ela, **como qualquer outro módulo fará**: o `vehicle_simulator` é o primeiro usuário da sua própria interface |
+| `SOURCES` | Os `.cpp` a **compilar** |
+| `libX.a: ...o` e `executável: ...o` | **Como** montar cada alvo, a partir de quais objetos |
+| `TARGETS` | **O que construir**: as bibliotecas e os executáveis |
+| `PUBLIC_INCLUDES`, `PUBLIC_LIBRARIES`, `PUBLIC_BINARIES` | O que **copiar** para `include/astro/`, `lib/` e `bin/` depois de construído |
+| `LFLAGS` com `-lX` | Pede ao link o código da biblioteca `libX.a` |
 
-Compile:
+As variáveis `PUBLIC_*` só **copiam** o que já foi construído. Quem garante que foi construído é o `TARGETS`.
+
+### Compilando: as duas fases do `make`
 
 ```bash
 cd $ASTRO_HOME/src/vehicle_simulator
 make
 ```
 
-```text
----- Copying vehicle_simulator_messages.h to /home/lume/astro/include/astro
----- Copying vehicle_simulator_interface.h to /home/lume/astro/include/astro
----- Compiling vehicle_simulator_interface.cpp to vehicle_simulator_interface.o (g++)
----- Archiving vehicle_simulator_interface.o into libvehicle_simulator_interface.a (gcc-ar-9 cr)
----- Copying libvehicle_simulator_interface.a to /home/lume/astro/lib
----- Compiling vehicle_simulator_main.cpp to vehicle_simulator_main.o (g++)
----- Linking vehicle_simulator_main.o to vehicle_simulator (g++)
-[SUCCESS] Module VEHICLE SIMULATOR built with hash: ...
-```
+![Compilação do vehicle_simulator com a interface publicada](img/03_compilacao_interface_publicada.png)
+
+A saída mostra o `make` em **duas fases**, e elas seguem o que o `Makefile` declara:
+
+| Fase | O que acontece na saída | De onde vem |
+|---|---|---|
+| Antes da fase 1 | `Copying ...messages.h` e `Copying ...interface.h` para `include/astro` | `PUBLIC_INCLUDES` |
+| **Fase 1: bibliotecas** | `Compiling ...interface.cpp`, `Archiving ...interface.o into libvehicle_simulator_interface.a`, `Copying libvehicle_simulator_interface.a to .../lib` | Os alvos que são bibliotecas (`TARGETS`) e `PUBLIC_LIBRARIES` |
+| **Fase 2: executáveis** | `Compiling ...main.cpp`, `Linking ...main.o to vehicle_simulator`, `Copying vehicle_simulator to .../bin` | Os alvos que são executáveis (`TARGETS`) e `PUBLIC_BINARIES` |
+
+O ASTRO reconhece uma biblioteca pelo nome (termina em `.a` ou começa com `lib`) e a constrói na **fase 1**, antes de qualquer executável. Por isso, no build completo do ASTRO, quando o monitor é montado na fase 2, a `libvehicle_simulator_interface.a` já está em `lib/`.
 
 Os arquivos publicados estão agora nos lugares comuns:
 
@@ -144,8 +212,6 @@ ls $ASTRO_HOME/lib/libvehicle_simulator_interface.a
 /home/lume/astro/include/astro/vehicle_simulator_messages.h
 /home/lume/astro/lib/libvehicle_simulator_interface.a
 ```
-
-(FOTO AQUI DE: o `make` do `vehicle_simulator` com as linhas `Copying`, `Archiving` e o `[SUCCESS]`, seguido do `ls` dos arquivos publicados.)
 
 > [!WARNING]
 > **Os headers são copiados, não ligados.** O que fica em `include/astro/` é uma **cópia** do arquivo da pasta do módulo. Se você alterar a struct ou o formato em `vehicle_simulator_messages.h`, rode `make` no `vehicle_simulator` **de novo** para atualizar a cópia, e recompile também os módulos que usam a mensagem. Caso contrário, quem assina e quem publica passam a ter structs diferentes e os dados chegam corrompidos, sem nenhum aviso.
