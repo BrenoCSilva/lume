@@ -1,13 +1,16 @@
-# 2. Definindo e publicando uma mensagem
+# 2. Criando a mensagem e sua interface
 
 No capítulo anterior o `vehicle_simulator` se conectou à `central`, mas não tinha nada a dizer. Agora vamos dar a ele uma mensagem: a **pose do veículo** (posição, orientação e velocidade). Ao fim deste capítulo o módulo publicará essa mensagem uma vez por segundo.
 
 Os valores serão fixos por enquanto. O veículo só começa a se mover em um capítulo posterior.
 
-O capítulo tem dois movimentos:
+O trabalho é dividido em arquivos desde o início, como nos módulos do ASTRO:
 
-1. **Primeiro escrevemos tudo direto no `main`** (seções 2.2 a 2.6), para entender cada chamada de IPC sem nenhum intermediário.
-2. **Depois organizamos o código no padrão do ASTRO** (seção 2.7): as funções de definir e publicar a mensagem vão para um arquivo de **interface**, que é como os módulos do projeto expõem suas mensagens. É nesse formato que o código fica ao fim do capítulo.
+| Arquivo | Responsabilidade |
+|---|---|
+| `vehicle_simulator_messages.h` | **Descreve** a mensagem: struct, nome e formato |
+| `vehicle_simulator_interface.h/.cpp` | **Funções** para definir, publicar e assinar a mensagem |
+| `vehicle_simulator_main.cpp` | **Lógica do módulo**: usa as funções da interface |
 
 ## 2.1 Mensagem, publicador e assinante
 
@@ -25,8 +28,8 @@ O publicador não sabe quem está assinando, e pode haver zero, um ou vários as
 Para publicar, o módulo precisa de três coisas, que veremos nesta ordem:
 
 1. **Descrever a mensagem**: a struct em C e o nome e o formato que a `central` vai conhecer.
-2. **Defini-la na `central`**: avisar a `central` que essa mensagem existe.
-3. **Publicá-la**: preencher uma struct e enviar.
+2. **Criar a interface da mensagem**: as funções que definem, publicam e assinam essa mensagem.
+3. **Usar a interface no `main`**: preencher os dados e publicar.
 
 ## 2.2 Descrevendo a mensagem
 
@@ -89,7 +92,7 @@ Outros tipos que você vai encontrar: `int` é `int`, e `char *` é sempre `stri
 
 ### Os campos `timestamp` e `host`
 
-**Toda mensagem do ASTRO tem `double timestamp` e `char *host`**, sempre no fim da struct. O `timestamp` registra quando a mensagem foi criada, e o `host` guarda o computador de origem. Quem recebe usa esses campos para saber a idade do dado e de onde ele veio. Você não os inventa: há funções do ASTRO que os fornecem (`astro_get_time()` e `astro_get_host()`), como veremos ao publicar.
+**Toda mensagem do ASTRO tem `double timestamp` e `char *host`**, sempre no fim da struct. O `timestamp` registra quando a mensagem foi criada, e o `host` guarda o computador de origem. Quem recebe usa esses campos para saber a idade do dado e de onde ele veio. Quem preenche esses campos é a função de publicação, como veremos na interface.
 
 ### Por que o `extern "C"`
 
@@ -99,187 +102,29 @@ O módulo é em C++, mas a biblioteca de IPC é em C. O `extern "C"` garante que
 
 Repare que cada campo tem a **unidade** e o **referencial** no comentário (m, rad, m/s, referencial global). Dois módulos podem interpretar `v` de formas diferentes (m/s ou km/h?) e o compilador não sabe. Documente isso sempre na struct.
 
-## 2.3 Definindo a mensagem na central
+## 2.3 A interface da mensagem
 
-A `central` só entrega mensagens que ela conhece. Por isso, **antes de publicar**, o módulo precisa **defini-la**. Edite o `vehicle_simulator_main.cpp`: inclua o header e acrescente a função:
+O `_messages.h` só **descreve** a mensagem. Para usá-la, alguém precisa chamar `IPC_defineMsg`, `IPC_publishData`, `astro_subscribe_message`... sempre com o mesmo nome, o mesmo formato e a mesma verificação de erro. Se cada módulo fizesse isso por conta própria, bastaria um erro de digitação no nome ou no formato para criar uma mensagem incompatível, sem nenhum aviso.
 
-```cpp
-#include <astro/astro.h>
-#include "vehicle_simulator_messages.h"
+A solução do ASTRO é um arquivo de **interface**: o módulo dono da mensagem oferece **funções prontas** para defini-la, publicá-la e assiná-la. Quem precisa da mensagem só chama essas funções, sem conhecer nome nem formato.
 
-static void
-define_messages(void)
-{
-	IPC_RETURN_TYPE err;
+### O padrão dos nomes
 
-	err = IPC_defineMsg(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, IPC_VARIABLE_LENGTH, ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_FMT);
-	astro_test_ipc_exit(err, "Could not define", ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME);
-}
-```
-
-| Trecho | O que faz |
-|---|---|
-| `IPC_defineMsg(nome, tamanho, formato)` | Registra a mensagem na `central`, com seu nome e formato |
-| `IPC_VARIABLE_LENGTH` | Indica que o tamanho da mensagem pode variar. É o valor usado nas mensagens do ASTRO, pois campos `string` têm tamanho livre. Use-o sempre |
-| `IPC_RETURN_TYPE err` | O resultado da chamada: se deu certo ou não |
-| `astro_test_ipc_exit(err, texto, nome)` | Verifica o resultado. Se houve erro, imprime o `texto` junto com o nome da mensagem e **encerra o módulo** |
-
-A verificação de erro depois de cada chamada de IPC é um padrão do ASTRO. Falhar na definição de uma mensagem é grave, então o módulo termina.
-
-> [!NOTE]
-> Estamos escrevendo `define_messages()` dentro do `main` apenas para o primeiro contato. Na seção 2.7 esta função vai para a **interface** do módulo, que é onde ela fica no ASTRO.
-
-Chame `define_messages()` no `main`, logo depois de conectar e antes de qualquer publicação:
-
-```cpp
-	astro_ipc_initialize(argc, argv);
-	signal(SIGINT, shutdown_module);
-
-	define_messages();
-```
-
-## 2.4 Publicando uma pose
-
-Agora a função que monta uma mensagem e a publica. Acrescente-a ao `vehicle_simulator_main.cpp`:
-
-```cpp
-static void
-publish_pose(void)
-{
-	IPC_RETURN_TYPE err;
-	astro_vehicle_simulator_pose_message message;
-
-	message.x = 0.0;
-	message.y = 0.0;
-	message.theta = 0.0;
-	message.v = 2.0;
-	message.timestamp = astro_get_time();
-	message.host = astro_get_host();
-
-	err = IPC_publishData(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, &message);
-	astro_test_ipc_exit(err, "Could not publish", ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME);
-
-	printf("vehicle_simulator: publicou x=%.2f y=%.2f theta=%.2f v=%.2f\n", message.x, message.y, message.theta, message.v);
-}
-```
-
-A função faz três coisas:
-
-1. **Preenche a struct.** Os campos `x`, `y`, `theta` e `v` recebem valores fixos (o veículo está parado na origem, com `v = 2.0`). O `timestamp` e o `host` vêm das funções do ASTRO: `astro_get_time()` devolve o instante atual, e `astro_get_host()` devolve o nome desta máquina.
-2. **Publica.** `IPC_publishData(nome, &message)` envia a struct para a `central`, que a distribui aos assinantes.
-3. **Verifica o erro**, como na definição.
-
-O `printf` serve para você acompanhar no terminal o que está sendo enviado.
-
-> [!NOTE]
-> **Nome da mensagem e struct têm que combinar.** A chamada usa o nome `ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME` junto com um ponteiro para `astro_vehicle_simulator_pose_message`. A `central` confia que a struct tem o formato definido. Passar a struct de outra mensagem compila, mas corrompe os dados.
-
-## 2.5 Publicando periodicamente
-
-Falta chamar `publish_pose()` repetidamente. O ASTRO tem um **timer periódico** do IPC, que chama uma função a cada intervalo de tempo. Acrescente ao `main`, depois do `define_messages()`:
-
-```cpp
-	astro_ipc_addPeriodicTimer(1.0, (TIMER_HANDLER_TYPE) publish_pose, NULL);
-```
-
-| Argumento | Significado |
-|---|---|
-| `1.0` | Intervalo entre as chamadas, **em segundos** |
-| `(TIMER_HANDLER_TYPE) publish_pose` | A função a ser chamada |
-| `NULL` | Dado extra opcional para a função (não usamos) |
-
-O timer é disparado pelo `astro_ipc_dispatch()` que já está no fim do `main`: é lá que o módulo "vive" e responde a eventos, sejam mensagens recebidas ou timers.
-
-O `main` completo fica assim:
-
-```cpp
-int
-main(int argc, char **argv)
-{
-	astro_ipc_initialize(argc, argv);
-	signal(SIGINT, shutdown_module);
-
-	define_messages();
-
-	astro_ipc_addPeriodicTimer(1.0, (TIMER_HANDLER_TYPE) publish_pose, NULL);
-
-	astro_ipc_dispatch();
-
-	return 0;
-}
-```
-
-A ordem é importante: conectar, definir as mensagens, só então registrar o timer que publica, e por último entrar no `dispatch`.
-
-## 2.6 Compilando e executando
-
-O `Makefile` do capítulo anterior continua o mesmo: o header é incluído localmente e não precisa de nenhuma linha nova.
-
-```bash
-cd $ASTRO_HOME/src/vehicle_simulator
-make
-```
-
-Com a `central` rodando em outro terminal, execute:
-
-```bash
-cd $ASTRO_HOME/bin
-./vehicle_simulator
-```
+Os nomes das funções da interface seguem o padrão:
 
 ```text
-ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
-
-vehicle_simulator: publicou x=0.00 y=0.00 theta=0.00 v=2.00
-vehicle_simulator: publicou x=0.00 y=0.00 theta=0.00 v=2.00
-vehicle_simulator: publicou x=0.00 y=0.00 theta=0.00 v=2.00
+astro_<modulo>_<ação>_<mensagem>_message
 ```
-
-Uma linha por segundo. Ctrl+C encerra o módulo normalmente.
-
-> [!NOTE]
-> O `printf` só mostra que o módulo **enviou**. Ainda não temos como saber se alguém **recebeu**, e não é problema: como vimos, o publicador não depende de haver assinantes. O módulo que vai receber será criado no próximo capítulo.
-
-### O erro mais comum: esquecer de definir a mensagem
-
-Para ver o que acontece, comente a linha `define_messages();` no `main`, recompile e execute com uma `central` recém-iniciada:
-
-```text
-ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
-
-IPC_ERROR : Could not publish : message astro_vehicle_simulator_pose
-          : IPC message not defined
-This is a fatal error. Exiting.
-```
-
-O módulo termina na primeira publicação, porque a `central` não conhece a mensagem. Foi para isso que colocamos o `astro_test_ipc_exit`: o erro aparece com o nome da mensagem e o módulo não segue em frente com um estado inconsistente. Desfaça o comentário antes de continuar.
-
-> [!TIP]
-> A `central` lembra as mensagens que já foram definidas enquanto estiver no ar. Se outro módulo já a definiu, a publicação sem `define_messages()` pode "funcionar" por acaso, e o erro só apareceria numa `central` nova. Defina sempre a mensagem no módulo que a publica.
-
-## 2.7 Organizando em uma interface
-
-O módulo já publica, mas o código está do jeito "de estudo": definir e publicar a mensagem acontece dentro do `main`, repetindo o nome, o formato e a verificação de erro. Isso tem um problema: **quem for assinar a mensagem em outro módulo precisaria repetir esses mesmos detalhes** (o nome, o formato e o tamanho da struct), e qualquer erro de digitação gera uma mensagem incompatível sem aviso.
-
-No ASTRO isso se resolve com um arquivo de **interface**: o módulo dono da mensagem oferece, junto com o `_messages.h`, **funções prontas** para definir, publicar e assinar essa mensagem. Os outros módulos só chamam essas funções. É o desenho de módulos como o `task_manager`, com `task_manager_messages.h` e `task_manager_interface.h/.c`.
-
-| Arquivo | Conteúdo |
-|---|---|
-| `vehicle_simulator_messages.h` | A struct, o nome e o formato (já temos) |
-| `vehicle_simulator_interface.h` | As declarações das funções da mensagem |
-| `vehicle_simulator_interface.cpp` | A implementação, que vira a biblioteca `libvehicle_simulator_interface.a` |
-
-### As três funções por mensagem
-
-Para cada mensagem, a interface tem três funções, com nomes que seguem um padrão:
 
 | Função | O que faz |
 |---|---|
-| `astro_vehicle_simulator_pose_define_message()` | Define a mensagem na `central` |
-| `astro_vehicle_simulator_publish_pose_message(&message)` | Publica uma mensagem |
-| `astro_vehicle_simulator_subscribe_pose_message(...)` | Assina a mensagem (será usada no próximo capítulo) |
+| `astro_vehicle_simulator_define_pose_message` | Define a mensagem na `central` |
+| `astro_vehicle_simulator_publish_pose_message` | Publica a mensagem |
+| `astro_vehicle_simulator_subscribe_pose_message` | Assina a mensagem (será usada no próximo capítulo) |
+| `astro_vehicle_simulator_unsubscribe_pose_message` | Cancela a assinatura |
 
-O padrão dos nomes é `astro_<modulo>_<ação>_<mensagem>_message`, com a mensagem entre o módulo e a ação no caso do `define`, como no `task_manager` (`astro_task_manager_programming_functionality_define_message`).
+> [!NOTE]
+> A **definição** da mensagem aparece de formas diferentes nos módulos do projeto: em alguns é feita dentro da função de publicação, na primeira chamada; em outros há uma função de definição única para todas as mensagens do módulo (`..._define_messages`); e em outros, uma função por mensagem, como aqui. Escolhemos **uma função por mensagem, chamada explicitamente**, porque deixa claro no `main` o momento em que a mensagem é definida.
 
 ### O header da interface
 
@@ -298,14 +143,17 @@ extern "C"
 #endif
 
 void
-astro_vehicle_simulator_pose_define_message(void);
+astro_vehicle_simulator_define_pose_message(void);
+
+void
+astro_vehicle_simulator_publish_pose_message(astro_vehicle_simulator_pose_message *message, double timestamp);
 
 void
 astro_vehicle_simulator_subscribe_pose_message(astro_vehicle_simulator_pose_message *message,
 		astro_handler_t handler, astro_subscribe_t subscribe_how);
 
 void
-astro_vehicle_simulator_publish_pose_message(astro_vehicle_simulator_pose_message *message);
+astro_vehicle_simulator_unsubscribe_pose_message(astro_handler_t handler);
 
 #ifdef __cplusplus
 }
@@ -314,23 +162,35 @@ astro_vehicle_simulator_publish_pose_message(astro_vehicle_simulator_pose_messag
 #endif
 ```
 
-O header inclui o `<astro/vehicle_simulator_messages.h>` com `<astro/...>`: é o caminho em que o header público fica depois do `make`, como veremos no `Makefile`. O `extern "C"` aparece de novo, pelo mesmo motivo de antes.
+O header inclui `<astro/vehicle_simulator_messages.h>` com `<astro/...>`: é o caminho em que o header fica **publicado** depois do `make` (veremos na seção 2.4).
 
 ### A implementação
 
-Crie o `vehicle_simulator_interface.cpp`. Repare que **o conteúdo das duas primeiras funções você já escreveu**: é o que estava no `main`, só mudou de arquivo.
+Crie o `vehicle_simulator_interface.cpp`:
 
 ```cpp
 #include <astro/astro.h>
 #include <astro/vehicle_simulator_interface.h>
 
 void
-astro_vehicle_simulator_pose_define_message(void)
+astro_vehicle_simulator_define_pose_message(void)
 {
 	IPC_RETURN_TYPE err;
 
 	err = IPC_defineMsg(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, IPC_VARIABLE_LENGTH, ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_FMT);
 	astro_test_ipc_exit(err, "Could not define", ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME);
+}
+
+void
+astro_vehicle_simulator_publish_pose_message(astro_vehicle_simulator_pose_message *message, double timestamp)
+{
+	IPC_RETURN_TYPE err;
+
+	message->timestamp = timestamp;
+	message->host = astro_get_host();
+
+	err = IPC_publishData(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, message);
+	astro_test_ipc_exit(err, "Could not publish", ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME);
 }
 
 void
@@ -342,78 +202,45 @@ astro_vehicle_simulator_subscribe_pose_message(astro_vehicle_simulator_pose_mess
 }
 
 void
-astro_vehicle_simulator_publish_pose_message(astro_vehicle_simulator_pose_message *message)
+astro_vehicle_simulator_unsubscribe_pose_message(astro_handler_t handler)
 {
-	IPC_RETURN_TYPE err;
-
-	err = IPC_publishData(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, message);
-	astro_test_ipc_exit(err, "Could not publish", ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME);
+	astro_unsubscribe_message(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, handler);
 }
 ```
 
-A função `subscribe` é nova: ela só **embala a chamada** `astro_subscribe_message`, preenchendo o nome, o formato e o tamanho da struct. Quem assina não precisa saber desses detalhes. No próximo capítulo você a usará.
+Vamos às funções, uma a uma.
 
-### O `main` fica mais enxuto
+#### Definir a mensagem
 
-No `vehicle_simulator_main.cpp`, **apague** a função `define_messages()` e a chamada direta a `IPC_publishData`. O arquivo passa a usar a interface:
+A `central` só entrega mensagens que ela conhece, então a mensagem precisa ser **definida** antes de ser publicada.
 
-```cpp
-#include <astro/astro.h>
-#include <astro/vehicle_simulator_interface.h>
+| Trecho | O que faz |
+|---|---|
+| `IPC_defineMsg(nome, tamanho, formato)` | Registra a mensagem na `central`, com seu nome e formato |
+| `IPC_VARIABLE_LENGTH` | Indica que o tamanho da mensagem pode variar. É o valor usado nas mensagens do ASTRO, pois campos `string` têm tamanho livre. Use-o sempre |
+| `IPC_RETURN_TYPE err` | O resultado da chamada: se deu certo ou não |
+| `astro_test_ipc_exit(err, texto, nome)` | Verifica o resultado. Se houve erro, imprime o `texto` junto com o nome da mensagem e **encerra o módulo** |
 
-static void
-publish_pose(void)
-{
-	astro_vehicle_simulator_pose_message message;
+A verificação de erro depois de cada chamada de IPC é um padrão do ASTRO. Falhar na definição de uma mensagem é grave, então o módulo termina.
 
-	message.x = 0.0;
-	message.y = 0.0;
-	message.theta = 0.0;
-	message.v = 2.0;
-	message.timestamp = astro_get_time();
-	message.host = astro_get_host();
+#### Publicar a mensagem
 
-	astro_vehicle_simulator_publish_pose_message(&message);
+A função recebe a struct com os dados e o instante da publicação, e faz três coisas:
 
-	printf("vehicle_simulator: publicou x=%.2f y=%.2f theta=%.2f v=%.2f\n", message.x, message.y, message.theta, message.v);
-}
+1. **Preenche `timestamp` e `host`**: `message->timestamp = timestamp;` e `message->host = astro_get_host();`. O `astro_get_host()` devolve o nome do módulo e da máquina. Como o preenchimento está **dentro da interface**, quem publica não precisa lembrar desses campos obrigatórios, e eles saem sempre do mesmo jeito.
+2. **Publica**: `IPC_publishData(nome, message)` envia a struct para a `central`, que a distribui aos assinantes.
+3. **Verifica o erro**, como na definição.
 
-static void
-shutdown_module(int signo)
-{
-	if (signo == SIGINT)
-	{
-		astro_ipc_disconnect();
-		printf("vehicle_simulator: desconectado.\n");
-		exit(0);
-	}
-}
+> [!NOTE]
+> **Nome da mensagem e struct têm que combinar.** A chamada usa o nome `ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME` junto com um ponteiro para `astro_vehicle_simulator_pose_message`. A `central` confia que a struct tem o formato definido. Passar a struct de outra mensagem compila, mas corrompe os dados. Ter o nome e a struct dentro da mesma função de interface é justamente o que evita esse erro.
 
-int
-main(int argc, char **argv)
-{
-	astro_ipc_initialize(argc, argv);
-	signal(SIGINT, shutdown_module);
+#### Assinar e cancelar a assinatura
 
-	astro_vehicle_simulator_pose_define_message();
+A função `subscribe` apenas **embala** a chamada `astro_subscribe_message`, preenchendo o nome, o formato e o tamanho da struct. Quem assina só informa o *handler* e a política de entrega, e o resto fica escondido. O próximo capítulo explica cada argumento ao usar a função. A `unsubscribe` faz o contrário: remove o *handler* da assinatura.
 
-	astro_ipc_addPeriodicTimer(1.0, (TIMER_HANDLER_TYPE) publish_pose, NULL);
+## 2.4 Publicando a interface pelo `Makefile`
 
-	astro_ipc_dispatch();
-
-	return 0;
-}
-```
-
-O que mudou no `main`:
-
-* O include passa a ser `<astro/vehicle_simulator_interface.h>`, que já traz o `_messages.h`.
-* `publish_pose()` só **preenche a struct** e chama `astro_vehicle_simulator_publish_pose_message`. A verificação de erro ficou dentro da interface.
-* O `main` chama `astro_vehicle_simulator_pose_define_message()` no lugar do `define_messages()` antigo.
-
-### O `Makefile`
-
-Agora o módulo produz uma **biblioteca** além do executável, e publica os headers e a biblioteca para outros módulos usarem. Atualize o `Makefile`:
+O módulo agora produz uma **biblioteca** (a interface) além do executável, e precisa **publicar** os headers e a biblioteca para outros módulos usarem. Atualize o `Makefile`:
 
 ```makefile
 include ../Makefile.conf
@@ -438,17 +265,18 @@ vehicle_simulator: vehicle_simulator_main.o
 include ../Makefile.rules
 ```
 
-O que foi acrescentado:
+O que foi acrescentado em relação ao capítulo 1:
 
 | Linha | Significado |
 |---|---|
 | `-lvehicle_simulator_interface` em `LFLAGS` | O executável faz link com a própria biblioteca de interface. Deve vir **antes** de `-lglobal -lipc` (mesma regra de ordem do capítulo 1) |
 | `SOURCES` com `vehicle_simulator_interface.cpp` | O novo arquivo faz parte do módulo |
-| `PUBLIC_INCLUDES` | Os dois headers são **copiados** para `$ASTRO_HOME/include/astro/`, por isso `#include <astro/vehicle_simulator_interface.h>` funciona em qualquer módulo |
+| `PUBLIC_INCLUDES` | Os dois headers são **copiados** para `$ASTRO_HOME/include/astro/`. É por isso que `#include <astro/vehicle_simulator_interface.h>` funciona em qualquer módulo |
 | `PUBLIC_LIBRARIES` | A biblioteca é copiada para `$ASTRO_HOME/lib/`, onde qualquer módulo pode fazer link com ela |
-| `libvehicle_simulator_interface.a: ...o` | Constrói a biblioteca a partir do arquivo objeto da interface |
+| `libvehicle_simulator_interface.a: ...o` | Constrói a biblioteca a partir do objeto da interface |
+| `TARGETS` com a biblioteca | O `make` passa a construí-la também |
 
-### Compilando e executando
+Compile:
 
 ```bash
 cd $ASTRO_HOME/src/vehicle_simulator
@@ -464,7 +292,98 @@ ls $ASTRO_HOME/lib/libvehicle_simulator_interface.a
 
 (FOTO AQUI DE: o `make` do `vehicle_simulator` com a compilação do `vehicle_simulator_interface.cpp` e a criação da biblioteca, seguido do `ls` dos arquivos públicos.)
 
-Execute com a `central` no ar:
+> [!WARNING]
+> **Os headers são copiados, não ligados.** O que fica em `include/astro/` é uma **cópia** do arquivo da pasta do módulo. Se você alterar a struct ou o formato em `vehicle_simulator_messages.h`, rode `make` no `vehicle_simulator` **de novo** para atualizar a cópia, e recompile também os módulos que usam a mensagem. Caso contrário, quem assina e quem publica passam a ter structs diferentes e os dados chegam corrompidos, sem nenhum aviso.
+
+## 2.5 Usando a interface no `main`
+
+Agora o `main` só precisa chamar a interface. Edite o `vehicle_simulator_main.cpp`:
+
+```cpp
+#include <astro/astro.h>
+#include <astro/vehicle_simulator_interface.h>
+
+static void
+publish_pose(void)
+{
+	astro_vehicle_simulator_pose_message message;
+
+	message.x = 0.0;
+	message.y = 0.0;
+	message.theta = 0.0;
+	message.v = 2.0;
+
+	astro_vehicle_simulator_publish_pose_message(&message, astro_get_time());
+
+	printf("vehicle_simulator: publicou x=%.2f y=%.2f theta=%.2f v=%.2f\n", message.x, message.y, message.theta, message.v);
+}
+
+static void
+shutdown_module(int signo)
+{
+	if (signo == SIGINT)
+	{
+		astro_ipc_disconnect();
+		printf("vehicle_simulator: desconectado.\n");
+		exit(0);
+	}
+}
+
+int
+main(int argc, char **argv)
+{
+	astro_ipc_initialize(argc, argv);
+	signal(SIGINT, shutdown_module);
+
+	astro_vehicle_simulator_define_pose_message();
+
+	astro_ipc_addPeriodicTimer(1.0, (TIMER_HANDLER_TYPE) publish_pose, NULL);
+
+	astro_ipc_dispatch();
+
+	return 0;
+}
+```
+
+A função `shutdown_module` é a mesma do capítulo 1. O que há de novo:
+
+### `publish_pose()`
+
+Preenche **só os dados do veículo**: `x`, `y`, `theta` e `v`, com valores fixos (o veículo está parado na origem, com `v = 2.0`). Em seguida chama a função de publicação, passando o instante atual com `astro_get_time()`. O `timestamp` e o `host` são preenchidos por dentro da interface. O `printf` serve para você acompanhar no terminal o que está sendo enviado.
+
+### O `main`
+
+A ordem é importante:
+
+1. **Conectar** à `central` e registrar o tratamento do Ctrl+C (como no capítulo 1);
+2. **Definir a mensagem** com `astro_vehicle_simulator_define_pose_message()`, **antes de qualquer publicação**;
+3. **Registrar o timer** que vai publicar;
+4. **Entrar no `dispatch`**.
+
+### O timer periódico
+
+Falta chamar `publish_pose()` repetidamente. O ASTRO tem um **timer periódico** do IPC, que chama uma função a cada intervalo de tempo:
+
+```cpp
+astro_ipc_addPeriodicTimer(1.0, (TIMER_HANDLER_TYPE) publish_pose, NULL);
+```
+
+| Argumento | Significado |
+|---|---|
+| `1.0` | Intervalo entre as chamadas, **em segundos** |
+| `(TIMER_HANDLER_TYPE) publish_pose` | A função a ser chamada |
+| `NULL` | Dado extra opcional para a função (não usamos) |
+
+O timer é disparado pelo `astro_ipc_dispatch()` que já está no fim do `main`: é lá que o módulo "vive" e responde a eventos, sejam mensagens recebidas ou timers.
+
+## 2.6 Compilando e executando
+
+```bash
+cd $ASTRO_HOME/src/vehicle_simulator
+make
+```
+
+Com a `central` rodando em outro terminal, execute:
 
 ```bash
 cd $ASTRO_HOME/bin
@@ -479,19 +398,38 @@ vehicle_simulator: publicou x=0.00 y=0.00 theta=0.00 v=2.00
 vehicle_simulator: publicou x=0.00 y=0.00 theta=0.00 v=2.00
 ```
 
-A saída é **idêntica** à de antes: reorganizamos o código sem mudar o comportamento. Isso é um **refatoramento**, e o ganho aparece no próximo capítulo.
+(FOTO AQUI DE: a `central` em um terminal e o `vehicle_simulator` publicando no outro.)
 
-> [!WARNING]
-> **Os headers são copiados, não ligados.** O que fica em `include/astro/` é uma **cópia** do arquivo da pasta do módulo. Se você alterar a struct ou o formato em `vehicle_simulator_messages.h`, rode `make` no `vehicle_simulator` **de novo** para atualizar a cópia, e recompile também os módulos que usam a mensagem. Caso contrário, quem assina e quem publica passam a ter structs diferentes e os dados chegam corrompidos, sem nenhum aviso.
+Uma linha por segundo. Ctrl+C encerra o módulo normalmente.
 
-## 2.8 Checkpoint
+> [!NOTE]
+> O `printf` só mostra que o módulo **enviou**. Ainda não temos como saber se alguém **recebeu**, e não é problema: como vimos, o publicador não depende de haver assinantes. O módulo que vai receber será criado no próximo capítulo.
+
+### O erro mais comum: esquecer de definir a mensagem
+
+Para ver o que acontece, comente a linha `astro_vehicle_simulator_define_pose_message();` no `main`, recompile e execute com uma `central` recém-iniciada:
+
+```text
+ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
+
+IPC_ERROR : Could not publish : message astro_vehicle_simulator_pose
+          : IPC message not defined
+This is a fatal error. Exiting.
+```
+
+O módulo termina na primeira publicação, porque a `central` não conhece a mensagem. Foi para isso que colocamos o `astro_test_ipc_exit`: o erro aparece com o nome da mensagem e o módulo não segue em frente com um estado inconsistente. Desfaça o comentário antes de continuar.
+
+> [!TIP]
+> A `central` lembra as mensagens que já foram definidas enquanto estiver no ar. Se outro módulo já a definiu, a publicação sem a definição pode "funcionar" por acaso, e o erro só apareceria numa `central` nova. Defina sempre a mensagem no módulo que a publica.
+
+## 2.7 Checkpoint
 
 Neste ponto você tem:
 
 - [x] `vehicle_simulator_messages.h` com a struct, o nome e o formato da mensagem de pose;
-- [x] `vehicle_simulator_interface.h/.cpp` com as três funções da mensagem (`define`, `publish` e `subscribe`), no padrão dos módulos do ASTRO;
+- [x] `vehicle_simulator_interface.h/.cpp` com as funções da mensagem (`define`, `publish`, `subscribe` e `unsubscribe`), no padrão `astro_<modulo>_<ação>_<mensagem>_message`;
 - [x] um `Makefile` que publica os headers e a biblioteca `libvehicle_simulator_interface.a` para outros módulos;
-- [x] um `main` que só usa a interface: define a mensagem uma vez, e publica a pose a cada segundo com um timer periódico;
-- [x] a noção de que **struct e formato devem espelhar um ao outro**, e de que toda chamada de IPC tem seu resultado verificado (agora dentro da interface).
+- [x] um `main` que só usa a interface: define a mensagem uma vez e publica a pose a cada segundo, com um timer periódico;
+- [x] a noção de que **struct e formato devem espelhar um ao outro**, e de que toda chamada de IPC tem seu resultado verificado, agora dentro da interface.
 
 **Próximo capítulo:** vamos criar um segundo módulo, o `vehicle_simulator_monitor`, que **assina** essa mensagem usando `astro_vehicle_simulator_subscribe_pose_message` e a imprime na tela.
