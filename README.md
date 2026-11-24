@@ -160,7 +160,7 @@ Crie o `vehicle_simulator_interface.h`:
 #define ASTRO_VEHICLE_SIMULATOR_INTERFACE_H
 
 #include <astro/astro.h>
-#include <astro/vehicle_simulator_messages.h>
+#include "vehicle_simulator_messages.h"
 
 #ifdef __cplusplus
 extern "C"
@@ -180,7 +180,7 @@ astro_vehicle_simulator_publish_pose_message(astro_vehicle_simulator_pose_messag
 #endif
 ```
 
-O header inclui `<astro/vehicle_simulator_messages.h>` com `<astro/...>`: é o caminho em que o header fica **publicado** depois do `make` (veremos na seção 2.4).
+O header inclui o `vehicle_simulator_messages.h` da própria pasta, por isso o `include` usa aspas (`"..."`), enquanto os headers do ASTRO usam `<astro/...>`.
 
 ### A implementação
 
@@ -188,7 +188,7 @@ Crie o `vehicle_simulator_interface.cpp`:
 
 ```cpp
 #include <astro/astro.h>
-#include <astro/vehicle_simulator_interface.h>
+#include "vehicle_simulator_interface.h"
 
 void
 astro_vehicle_simulator_define_pose_message(void)
@@ -238,9 +238,9 @@ A função recebe a struct com os dados e o instante da publicação, e faz trê
 > [!NOTE]
 > **Nome da mensagem e struct têm que combinar.** A chamada usa o nome `ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME` junto com um ponteiro para `astro_vehicle_simulator_pose_message`. A `central` confia que a struct tem o formato definido. Passar a struct de outra mensagem compila, mas corrompe os dados. Ter o nome e a struct dentro da mesma função de interface é justamente o que evita esse erro.
 
-## 2.4 Publicando a interface pelo `Makefile`
+## 2.4 Compilando a interface
 
-O módulo agora produz uma **biblioteca** (a interface) além do executável, e precisa **publicar** os headers e a biblioteca para outros módulos usarem. Atualize o `Makefile`:
+O módulo agora tem **dois** arquivos `.cpp`: o `main` e a interface. O `Makefile` precisa conhecer o novo arquivo e montar o executável com os dois. Atualize o `Makefile`:
 
 ```makefile
 include ../Makefile.conf
@@ -248,33 +248,24 @@ include ../Makefile.conf
 MODULE_NAME = VEHICLE SIMULATOR
 MODULE_COMMENT = Modulo de exemplo: simula um veiculo e publica sua pose
 
-LFLAGS += -lvehicle_simulator_interface -lglobal -lipc -lpthread
+LFLAGS += -lglobal -lipc -lpthread
 
 SOURCES = vehicle_simulator_main.cpp vehicle_simulator_interface.cpp
 
-PUBLIC_INCLUDES = vehicle_simulator_messages.h vehicle_simulator_interface.h
-PUBLIC_LIBRARIES = libvehicle_simulator_interface.a
 PUBLIC_BINARIES = vehicle_simulator
+TARGETS = vehicle_simulator
 
-TARGETS = libvehicle_simulator_interface.a vehicle_simulator
-
-libvehicle_simulator_interface.a: vehicle_simulator_interface.o
-
-vehicle_simulator: vehicle_simulator_main.o
+vehicle_simulator: vehicle_simulator_main.o vehicle_simulator_interface.o
 
 include ../Makefile.rules
 ```
 
-O que foi acrescentado em relação ao capítulo 1:
+Só duas linhas mudaram em relação ao capítulo 1:
 
 | Linha | Significado |
 |---|---|
-| `-lvehicle_simulator_interface` em `LFLAGS` | O executável faz link com a própria biblioteca de interface. Deve vir **antes** de `-lglobal -lipc` (mesma regra de ordem do capítulo 1) |
-| `SOURCES` com `vehicle_simulator_interface.cpp` | O novo arquivo faz parte do módulo |
-| `PUBLIC_INCLUDES` | Os dois headers são **copiados** para `$ASTRO_HOME/include/astro/`. É por isso que `#include <astro/vehicle_simulator_interface.h>` funciona em qualquer módulo |
-| `PUBLIC_LIBRARIES` | A biblioteca é copiada para `$ASTRO_HOME/lib/`, onde qualquer módulo pode fazer link com ela |
-| `libvehicle_simulator_interface.a: ...o` | Constrói a biblioteca a partir do objeto da interface |
-| `TARGETS` com a biblioteca | O `make` passa a construí-la também |
+| `SOURCES` com `vehicle_simulator_interface.cpp` | O novo arquivo passa a fazer parte do módulo e será compilado |
+| `vehicle_simulator: ...main.o ...interface.o` | O executável é montado a partir dos **dois** arquivos objeto |
 
 Compile:
 
@@ -283,17 +274,7 @@ cd $ASTRO_HOME/src/vehicle_simulator
 make
 ```
 
-Confira que os arquivos foram publicados:
-
-```bash
-ls $ASTRO_HOME/include/astro/vehicle_simulator_*
-ls $ASTRO_HOME/lib/libvehicle_simulator_interface.a
-```
-
-(FOTO AQUI DE: o `make` do `vehicle_simulator` com a compilação do `vehicle_simulator_interface.cpp` e a criação da biblioteca, seguido do `ls` dos arquivos públicos.)
-
-> [!WARNING]
-> **Os headers são copiados, não ligados.** O que fica em `include/astro/` é uma **cópia** do arquivo da pasta do módulo. Se você alterar a struct ou o formato em `vehicle_simulator_messages.h`, rode `make` no `vehicle_simulator` **de novo** para atualizar a cópia, e recompile também os módulos que usam a mensagem. Caso contrário, quem assina e quem publica passam a ter structs diferentes e os dados chegam corrompidos, sem nenhum aviso.
+(FOTO AQUI DE: o `make` do `vehicle_simulator` compilando os dois arquivos, `vehicle_simulator_main.cpp` e `vehicle_simulator_interface.cpp`, e fazendo o link.)
 
 ## 2.5 Usando a interface no `main`
 
@@ -301,7 +282,7 @@ Agora o `main` só precisa chamar a interface. Edite o `vehicle_simulator_main.c
 
 ```cpp
 #include <astro/astro.h>
-#include <astro/vehicle_simulator_interface.h>
+#include "vehicle_simulator_interface.h"
 
 static void
 publish_pose(void)
@@ -428,7 +409,7 @@ Neste ponto você tem:
 
 - [x] `vehicle_simulator_messages.h` com a struct, o nome e o formato da mensagem de pose;
 - [x] `vehicle_simulator_interface.h/.cpp` com as funções `define` e `publish` da mensagem, no padrão `astro_<modulo>_<ação>_<mensagem>_message`;
-- [x] um `Makefile` que publica os headers e a biblioteca `libvehicle_simulator_interface.a` para outros módulos;
+- [x] um `Makefile` que compila a interface junto com o `main` e monta o executável com os dois;
 - [x] um `main` que só usa a interface: define a mensagem uma vez e publica a pose a cada segundo, com um timer periódico;
 - [x] a noção de que **struct e formato devem espelhar um ao outro**, e de que toda chamada de IPC tem seu resultado verificado, agora dentro da interface.
 
