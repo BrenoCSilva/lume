@@ -102,13 +102,41 @@ O módulo é em C++, mas a biblioteca de IPC é em C. O `extern "C"` garante que
 
 Repare que cada campo tem a **unidade** e o **referencial** no comentário (m, rad, m/s, referencial global). Dois módulos podem interpretar `v` de formas diferentes (m/s ou km/h?) e o compilador não sabe. Documente isso sempre na struct.
 
-## 2.3 A interface da mensagem
+## 2.3 Publicando pelo IPC: a interface da mensagem
 
-O `_messages.h` só **descreve** a mensagem. Para usá-la, alguém precisa chamar `IPC_defineMsg`, `IPC_publishData`, `astro_subscribe_message`... sempre com o mesmo nome, o mesmo formato e a mesma verificação de erro. Se cada módulo fizesse isso por conta própria, bastaria um erro de digitação no nome ou no formato para criar uma mensagem incompatível, sem nenhum aviso.
+Na seção anterior demos o primeiro passo: **descrevemos a mensagem** (struct, nome e formato) em um arquivo próprio, o `_messages.h`, como é o padrão do ASTRO. Mas uma descrição, sozinha, não leva dado nenhum a lugar nenhum. É só a forma do pacote.
 
-A solução do ASTRO é um arquivo de **interface**: o módulo dono da mensagem oferece **funções prontas** para trabalhar com ela. Quem precisa da mensagem só chama essas funções, sem conhecer nome nem formato.
+Quem leva o pacote de um módulo a outro é o **IPC**, por meio da `central`. Para o módulo que **publica**, ele oferece dois mecanismos principais:
 
-Uma interface completa tem funções para **definir**, **publicar** e **assinar** a mensagem. Neste capítulo só precisamos das duas primeiras, porque o módulo apenas publica. A função de assinar será acrescentada no próximo capítulo, quando o módulo que assina existir.
+| Mecanismo | O que faz | Quando |
+|---|---|---|
+| `IPC_defineMsg` | Avisa a `central` de que existe uma mensagem com determinado **nome** e **formato** | Uma vez, antes de publicar |
+| `IPC_publishData` | Envia uma struct preenchida para a `central`, que a entrega a quem estiver assinando | A cada publicação |
+
+Em código, os dois se parecem com isto (só para você ver a forma, ainda não vamos digitá-los):
+
+```cpp
+IPC_defineMsg(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, IPC_VARIABLE_LENGTH, ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_FMT);
+
+IPC_publishData(ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_NAME, &message);
+```
+
+Repare que **as duas chamadas precisam do nome da mensagem** (e a primeira, também do formato). Além disso, cada uma deve ser seguida de uma verificação de erro.
+
+### A segunda separação: o arquivo de interface
+
+Fica a pergunta: **onde escrevemos essas chamadas?** Se fossem direto no `main`, ele misturaria a lógica do módulo com os detalhes do IPC, e a mensagem seria "usada" em vários lugares, sempre repetindo o nome e o formato.
+
+O ASTRO resolve isso com uma segunda separação de arquivos, a **interface** da mensagem: um par `_interface.h/.cpp` com **funções que encapsulam as chamadas do IPC** para aquela mensagem. O `main` não chama `IPC_defineMsg` nem `IPC_publishData`: chama as funções da interface.
+
+| Arquivo | Responsabilidade |
+|---|---|
+| `vehicle_simulator_messages.h` | **Descreve** a mensagem (feito na 2.2) |
+| `vehicle_simulator_interface.h/.cpp` | **Chama o IPC** para essa mensagem: define e publica |
+| `vehicle_simulator_main.cpp` | **Lógica do módulo**: preenche os dados e usa a interface |
+
+> [!NOTE]
+> Uma interface completa também terá a função de **assinar** a mensagem, usada por outros módulos. Ela será acrescentada no próximo capítulo, quando existir um módulo que assina. Por enquanto, só precisamos de **definir** e **publicar**.
 
 ### O padrão dos nomes
 
