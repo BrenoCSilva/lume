@@ -1,107 +1,147 @@
-# Manual: Criando um Novo Módulo no ASTRO
+# 1. Estrutura e Organização de um Módulo
 
-Este manual ensina, passo a passo, a criar um módulo novo no ASTRO que se comunica com os demais por **IPC** (*Inter-Process Communication*). Você constrói, junto com o texto, um par de módulos de exemplo, [`vehicle_simulator`](file:///home/lume/astro/src/vehicle_simulator) (publica) e [`vehicle_simulator_monitor`](file:///home/lume/astro/src/vehicle_simulator_monitor) (assina), e no final recebe um **template** para começar os seus. O código mostrado nos capítulos **compila e foi testado**, e as saídas são saídas reais.
+Um módulo vive em uma pasta própria dentro de [`src/`](file:///home/lume/astro/src). O módulo que **publica** é [`src/vehicle_simulator/`](file:///home/lume/astro/src/vehicle_simulator), e o que **assina** é [`src/vehicle_simulator_monitor/`](file:///home/lume/astro/src/vehicle_simulator_monitor):
+
+```text
+src/vehicle_simulator/
+├── Makefile                        # como compilar e o que publicar em bin/, lib/ e include/
+├── vehicle_simulator_messages.h          # definição da mensagem (struct, nome, formato)
+├── vehicle_simulator_interface.h         # API de IPC da mensagem (define/subscribe/publish)
+├── vehicle_simulator_interface.cpp       # implementação dessa API  → vira libvehicle_simulator_interface.a
+└── vehicle_simulator_main.cpp            # executável publicador
+
+src/vehicle_simulator_monitor/
+├── Makefile                        # faz link com -lvehicle_simulator_interface
+└── vehicle_simulator_monitor_main.cpp    # executável assinante (handler da mensagem)
+```
+
+O `vehicle_simulator_monitor` **não tem** `_messages.h` nem `_interface`: ele usa os do `vehicle_simulator`, que já foram copiados para `include/astro/` e `lib/` no build do publicador.
 
 > [!IMPORTANT]
 > **Resumo:**
-> * Cada módulo do ASTRO é um **processo independente** (um executável em `bin/`). Eles não chamam funções uns dos outros; trocam **mensagens** por meio de um processo central, a `central`.
-> * Quem envia uma mensagem **publica** (*publish*); quem quer recebê-la **assina** (*subscribe*) e registra um *handler* (callback) que o IPC chama a cada chegada.
-> * Uma mensagem é descrita em um `_messages.h`, e as funções que a definem, publicam e assinam ficam em um `_interface.cpp/.h`. A lógica do módulo fica no `_main.cpp`.
-> * Os valores configuráveis de um módulo vêm de um arquivo `.ini`, servidos pelo `param_daemon`.
-> * No sistema real, os módulos sobem juntos, descritos em um arquivo de processos, pelo `proccontrol`.
+> * `_main.cpp`: tem a função `main`, a inicialização, os **handlers** das mensagens recebidas e os **publicadores**. Um por executável.
+> * `_messages.h`: só define a mensagem (struct, `_NAME`, `_FMT`).
+> * `_interface.cpp/.h`: funções de definir, assinar e publicar a mensagem, para que **qualquer módulo** use a mensagem sem repetir código. Compilado como biblioteca.
+> * `Makefile`: diz ao sistema de build o que compilar e o que copiar para as pastas públicas.
 
 ---
 
-## 1. Como os módulos conversam
+## 1. Responsabilidade de cada arquivo
 
-```mermaid
-flowchart LR
-    PUB["vehicle_simulator<br/>(publicador)"] -- "IPC_publishData" --> CEN(("central"))
-    CEN -- "entrega a mensagem" --> SUB["vehicle_simulator_monitor<br/>(assinante)"]
-    PD["param_daemon<br/>(lê o .ini)"] -. "parâmetros na inicialização" .-> PUB
-    PD -.-> SUB
+| Arquivo | Responsabilidade | Quem o usa |
+|---|---|---|
+| `<modulo>_main.cpp` | `main()`, inicialização do IPC, leitura de parâmetros, handlers, publicadores, `shutdown` | Só o próprio executável |
+| `<modulo>_messages.h` | Struct da mensagem e as macros `..._NAME` e `..._FMT` | Qualquer módulo que use a mensagem |
+| `<modulo>_interface.h/.cpp` | `define_messages`, `subscribe_..._message`, `unsubscribe_..._message`, `publish_..._message` | Qualquer módulo que use a mensagem |
+| `<modulo>.cpp` (opcional) | Lógica própria do módulo, quando o `_main.cpp` ficar grande | O próprio módulo |
+| `Makefile` | Fontes, bibliotecas, alvos e arquivos públicos | Sistema de build |
+
+> [!NOTE]
+> Regra do [README do `simple_module_example`](file:///home/lume/astro/src/simple_module_example/README): se o módulo só consome mensagens de outros, **não precisa** de `_messages.h` nem de `_interface`. Bibliotecas que não geram executável são **sharedlibs**, não módulos, e ficam em `sharedlib/`.
+
+---
+
+## 2. Convenções de nome
+
+| Item | Padrão | Exemplo |
+|---|---|---|
+| Pasta | `snake_case`, nome do módulo | `vehicle_simulator` |
+| Struct da mensagem | `astro_<modulo>_<mensagem>_message` | `astro_vehicle_simulator_pose_message` |
+| Nome da mensagem (IPC) | `astro_<modulo>_<mensagem>` | `"astro_vehicle_simulator_pose"` |
+| Macros | `ASTRO_<MODULO>_<MENSAGEM>_MESSAGE_NAME` e `..._FMT` | `ASTRO_VEHICLE_SIMULATOR_POSE_MESSAGE_FMT` |
+| Funções de interface | `astro_<modulo>_<ação>_<mensagem>_message` | `astro_vehicle_simulator_publish_pose_message` |
+| Parâmetro do `.ini` | `<modulo>_<parametro>` | `vehicle_simulator_period_ms` |
+
+Todo `_messages.h` deve ter `extern "C"` (como em [`vehicle_simulator_messages.h`](file:///home/lume/astro/src/vehicle_simulator/vehicle_simulator_messages.h)), pois a biblioteca IPC é em C. Toda mensagem **deve** ter os campos `double timestamp` e `char *host`. Escreva **unidade e referencial** de cada campo nos comentários da struct.
+
+---
+
+## 3. O `Makefile`
+
+Arquivo real do [`vehicle_simulator`](file:///home/lume/astro/src/vehicle_simulator/Makefile) (o dono da mensagem):
+
+```makefile
+include ../Makefile.conf
+
+MODULE_NAME = VEHICLE SIMULATOR
+MODULE_COMMENT = Modulo de exemplo/template: simula um veiculo e publica a mensagem astro_vehicle_simulator_pose
+
+LFLAGS += -lvehicle_simulator_interface -lparam_interface -lipc -lglobal -lpthread -lm
+
+SOURCES = vehicle_simulator_main.cpp vehicle_simulator_interface.cpp
+
+PUBLIC_INCLUDES = vehicle_simulator_messages.h vehicle_simulator_interface.h
+PUBLIC_LIBRARIES = libvehicle_simulator_interface.a
+PUBLIC_BINARIES = vehicle_simulator
+
+TARGETS = libvehicle_simulator_interface.a vehicle_simulator
+
+libvehicle_simulator_interface.a: vehicle_simulator_interface.o
+
+vehicle_simulator: vehicle_simulator_main.o
+
+include ../Makefile.rules
 ```
 
-| Processo | Papel |
-|---|---|
-| `central` | Servidor IPC. Registra as mensagens definidas e distribui cada publicação aos assinantes. Deve estar no ar antes de qualquer módulo |
-| `param_daemon` | Lê o arquivo `.ini` e responde aos módulos que pedem seus parâmetros |
-| Seu módulo | Conecta-se à `central`, define, publica e assina mensagens, e lê parâmetros |
+E o do [`vehicle_simulator_monitor`](file:///home/lume/astro/src/vehicle_simulator_monitor/Makefile) (apenas consumidor, sem `PUBLIC_INCLUDES` nem `PUBLIC_LIBRARIES`):
 
-Os módulos compartilham apenas **o nome e o formato da mensagem**. Quem publica não sabe quem assina, e vice-versa.
+```makefile
+include ../Makefile.conf
+
+MODULE_NAME = VEHICLE SIMULATOR MONITOR
+MODULE_COMMENT = Modulo de exemplo: assina a mensagem publicada pelo vehicle_simulator e alerta por velocidade
+
+LFLAGS += -lvehicle_simulator_interface -lparam_interface -lipc -lglobal -lpthread
+
+SOURCES = vehicle_simulator_monitor_main.cpp
+
+PUBLIC_BINARIES = vehicle_simulator_monitor
+TARGETS = vehicle_simulator_monitor
+
+vehicle_simulator_monitor: vehicle_simulator_monitor_main.o
+
+include ../Makefile.rules
+```
+
+| Variável | Significado |
+|---|---|
+| `MODULE_NAME` / `MODULE_COMMENT` | Identificação exibida no build |
+| `LFLAGS` | Bibliotecas de link. O mínimo para IPC é `-lparam_interface -lipc -lglobal -lpthread`; um consumidor acrescenta a interface do módulo dono da mensagem (`-lvehicle_simulator_interface`); `-lm` só é necessário se usar funções matemáticas, como o `sin` e o `cos` do simulador |
+| `SOURCES` | Todos os `.c`/`.cpp` do módulo |
+| `PUBLIC_INCLUDES` | Headers copiados para `include/astro/`; por isso os módulos usam `#include <astro/vehicle_simulator_messages.h>` |
+| `PUBLIC_LIBRARIES` | Bibliotecas copiadas para `lib/` |
+| `PUBLIC_BINARIES` | Executáveis copiados para `bin/` |
+| `TARGETS` | O que o `make` constrói |
+| `alvo: arquivo.o` | Liga cada alvo ao seu objeto |
+
+> [!WARNING]
+> **`-lpthread` é obrigatório.** Sem ele o link falha com `undefined reference to pthread_mutexattr_init` vindo da `libipc.a`. Isto aconteceu na construção do exemplo.
 
 ---
 
-## 2. Pré-requisitos
-
-1. Repositório do ASTRO compilado: as bibliotecas `libipc`, `libglobal` e `libparam_interface` em `lib/`, e os executáveis `central` e `param_daemon` em `bin/`.
-2. A variável de ambiente `ASTRO_HOME` apontando para a raiz do ASTRO. Sem ela o `Makefile` aborta com `ASTRO_HOME environment variable not set`:
+## 4. Compilando
 
 ```bash
 export ASTRO_HOME=/home/lume/astro
+cd $ASTRO_HOME/src/vehicle_simulator && make           # primeiro o dono da mensagem
+cd $ASTRO_HOME/src/vehicle_simulator_monitor && make   # depois o consumidor
 ```
 
----
-
-## 3. Como ler este manual
-
-O manual é **cumulativo**: cada capítulo parte do código do anterior e acrescenta uma peça. Para aproveitar mais:
-
-* **Digite o código junto.** Os trechos aparecem na ordem em que são explicados, e cada passo pode ser compilado e executado.
-* **Confira o checkpoint** no fim de cada capítulo: ele lista o que você deve ter a essa altura.
-* Quando algo falhar, os erros reais que encontramos estão explicados nos próprios capítulos e reunidos na **tabela do capítulo 7**.
-
----
-
-## 4. Mapa do manual
-
-| Capítulo | Assunto |
-|---|---|
-| [1. Seu primeiro módulo](01_primeiro_modulo_conectando_ao_ipc.md) | Conectar à `central`, `dispatch` e encerrar com Ctrl+C |
-| [2. A mensagem e sua interface](02_definindo_e_publicando_a_mensagem.md) | A mensagem (struct, nome, formato), a interface com `define` e `publish`, e a publicação periódica |
-| [3. Assinando a mensagem](03_assinando_a_mensagem.md) | O segundo módulo, o `subscribe` e o handler, e como um módulo oferece sua interface a outros |
-| [4. Movendo o veículo](04_movendo_o_veiculo.md) | O simulador passa a calcular a pose em passos |
-| [5. Parâmetros do `.ini`](05_parametros_do_ini.md) | O `param_daemon`, a leitura de parâmetros e o alerta de velocidade configurável no monitor |
-| [6. Integração com o ASTRO](06_integracao_com_o_astro.md) | O arquivo de processos, o `proccontrol` e a inclusão no build completo |
-| [7. Boas práticas e erros comuns](07_boas_praticas.md) | Os cuidados reunidos, e a tabela de erros comuns |
-| [8. O template](08_template_de_modulo.md) | O esqueleto de módulo pronto para copiar, e como criar um módulo novo a partir dele |
-
----
-
-## 5. Os módulos de exemplo
-
-O exemplo usa **dois módulos**, como acontece no ASTRO real: um dono da mensagem, que publica, e um consumidor, que assina.
-
-| Módulo | Pasta | O que faz |
-|---|---|---|
-| `vehicle_simulator` | [`src/vehicle_simulator/`](file:///home/lume/astro/src/vehicle_simulator) | **Dono da mensagem** `astro_vehicle_simulator_pose`. Simula um veículo em movimento, publica sua pose e velocidade e oferece a interface da mensagem aos outros módulos |
-| `vehicle_simulator_monitor` | [`src/vehicle_simulator_monitor/`](file:///home/lume/astro/src/vehicle_simulator_monitor) | **Consumidor**: assina a mensagem, imprime a pose e **alerta** quando a velocidade passa de um limite lido do `.ini` |
-
-A mensagem `astro_vehicle_simulator_pose` é uma versão enxuta da mensagem real de localização do ASTRO (`astro_localize_ackerman_globalpos`, que também tem posição, `v`, `timestamp` e `host`):
-
-| Campo | Tipo | Significado |
-|---|---|---|
-| `x`, `y` | `double` | Posição no referencial global (m) |
-| `theta` | `double` | Orientação (rad) |
-| `v` | `double` | Velocidade linear (m/s) |
-| `timestamp`, `host` | `double`, `char *` | Obrigatórios em toda mensagem |
-
 > [!NOTE]
-> Os dados são **simulados**: o `vehicle_simulator` faz o veículo andar numa curva suave com a velocidade oscilando em torno de 2 m/s, e calcula a posição a partir dela. Não é uma fonte real do ASTRO.
+> A ordem importa quando se compila **um módulo isolado**: o consumidor precisa que `libvehicle_simulator_interface.a` e `vehicle_simulator_messages.h` já estejam em `lib/` e `include/astro/`. No build completo da `src/` as fases 1 (bibliotecas) e 2 (executáveis) resolvem isso sozinhas.
 
-Saída real dos dois módulos juntos, com o limite de velocidade em 2,5 m/s:
+Saída real (resumida):
 
 ```text
-vehicle_simulator: publicou x=2.83 y=0.28 theta=0.10 v=2.84
-vehicle_simulator: publicou x=5.68 y=0.86 theta=0.20 v=2.91
-vehicle_simulator: publicou x=7.72 y=1.49 theta=0.30 v=2.14
-...
-vehicle_simulator_monitor: x=2.83 y=0.28 theta=0.10 v=2.84 (de vehicle_simulator@lume-M, t=1795554534.224)
-vehicle_simulator_monitor: ALERTA velocidade 2.84 m/s acima do limite 2.50 m/s
-vehicle_simulator_monitor: x=7.72 y=1.49 theta=0.30 v=2.14 (de vehicle_simulator@lume-M, t=1795554536.225)
+---- Compiling vehicle_simulator_interface.cpp to vehicle_simulator_interface.o (g++)
+---- Archiving vehicle_simulator_interface.o into libvehicle_simulator_interface.a
+---- Copying libvehicle_simulator_interface.a to /home/lume/astro/lib
+---- Linking vehicle_simulator_main.o to vehicle_simulator (g++)
+---- Copying vehicle_simulator to /home/lume/astro/bin
+[SUCCESS] Module VEHICLE SIMULATOR built with hash: ...
 ```
 
-Ao final, o capítulo 8 entrega o **template** (`src/template_module/` e `src/template_module_consumer/`): os mesmos dois módulos, sem a simulação e sem o alerta, para você copiar.
-
 > [!NOTE]
-> O repositório já tem outros exemplos: [`src/simple_module_example`](file:///home/lume/astro/src/simple_module_example) (em C, só publish e subscribe) e [`src/skeleton_package`](file:///home/lume/astro/src/skeleton_package) (padrão sensor e filter com interface Qt). Este manual usa **C++**, linguagem da maioria dos módulos atuais (a API de IPC é a mesma).
+> Os `.o`, `.a` e `include/*` não são versionados, mas os binários recém-copiados em `bin/` aparecem como não rastreados no `git status`.
+
+**Próximo capítulo:** configurar a conexão com a `central` e a leitura de parâmetros (`02_configuracao_ipc.md`).
