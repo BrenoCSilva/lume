@@ -5,7 +5,7 @@ Até aqui, para rodar o exemplo você abriu um terminal para a `central`, outro 
 No ASTRO, os módulos sobem **juntos**, descritos em um arquivo de texto, por um programa chamado **`proccontrol`**. Neste capítulo vamos integrar nossos módulos a esse mecanismo:
 
 1. descrever os módulos em um **arquivo de processos**;
-2. subir tudo com o `proccontrol` e **ver a saída** dos módulos;
+2. subir tudo com o `proccontrol` e acompanhar o **estado e a saída** dos módulos, pela janela de controle (a GUI);
 3. **parar** tudo corretamente;
 4. fazer o `proccontrol` **vigiar** o simulador, com o **heartbeat**;
 5. incluir os módulos no **build completo** do ASTRO.
@@ -20,7 +20,10 @@ flowchart LR
     PC -- "inicia e vigia" --> PD["param_daemon"]
     PC -- "inicia e vigia" --> S["vehicle_simulator"]
     PC -- "inicia e vigia" --> M["vehicle_simulator_monitor"]
+    PC -- "inicia" --> G["proccontrol_gui<br/>(janela de controle)"]
 ```
+
+Entre os módulos que ele inicia está o **`proccontrol_gui`**, a janela que mostra o estado de cada módulo (seção 6.3).
 
 A única coisa que o `proccontrol` **não** inicia é a `central`: ele mesmo precisa dela para funcionar, então ela é sempre iniciada à parte, antes.
 
@@ -41,14 +44,28 @@ Crie o arquivo `process-vehicle_simulator.ini` na pasta do módulo:
 ```text
 # nome                       grupo       requested  watch   comando
  param_daemon                support     1          0       ./param_daemon ../src/vehicle_simulator/vehicle_simulator.ini
+ proccontrol_gui             support     1          0       ./proccontrol_gui
  vehicle_simulator           simulator   1          0       ./vehicle_simulator
  vehicle_simulator_monitor   monitor     1          0       ./vehicle_simulator_monitor
 ```
 
-As linhas começadas por `#` são comentários. Note que o `param_daemon` também é um módulo da lista, com o `.ini` do capítulo 5 como argumento: ele passa a subir junto com os outros.
+As linhas começadas por `#` são comentários. Duas linhas merecem atenção:
+
+* O `param_daemon` também é um módulo da lista, com o `.ini` do capítulo 5 como argumento: ele passa a subir junto com os outros.
+* O **`proccontrol_gui`** é a **janela de controle** do `proccontrol`. Ela entra na lista como qualquer outro módulo, e é por ela que você acompanha o estado de cada módulo (seção 6.3).
 
 > [!NOTE]
 > Os arquivos de processos dos robôs reais ficam em `bin/` e se chamam `process-*.ini`. Vamos deixar o do exemplo na pasta do módulo, como fizemos com o `vehicle_simulator.ini`, para não misturar o exemplo com os arquivos do sistema.
+
+### Outros recursos dos arquivos de processos
+
+Os arquivos de processos do projeto usam ainda alguns recursos que o nosso exemplo não precisa, mas que você vai encontrar:
+
+| Recurso | Exemplo | Para que serve |
+|---|---|---|
+| `requested_state` `0` | `... monitor  0  0  ./vehicle_simulator_monitor` | O módulo fica **listado, mas parado**: não sobe sozinho, e pode ser iniciado depois pela GUI |
+| Variáveis `SET` | `SET PARAM_INI=../src/vehicle_simulator/vehicle_simulator.ini` e depois `./param_daemon ${PARAM_INI}` | Define um valor uma vez e o reutiliza nas linhas de comando, sem repetir caminhos longos |
+| Redirecionamento | `./simulator_ackerman > sim.txt` | Envia a saída do módulo para um arquivo |
 
 ## 6.3 Subindo tudo com o `proccontrol`
 
@@ -79,16 +96,30 @@ PROCCONTROL (119520): Spawned ./vehicle_simulator_monitor (119527)
 
 Ele leu o arquivo, mostrou as três linhas numeradas e **iniciou** os três módulos (`Spawned`, com o PID de cada um).
 
-(FOTO AQUI DE: os dois terminais, com a `central` no ar e o `proccontrol` mostrando as três linhas `Spawned`.)
+Com o `proccontrol_gui` na lista, há também uma linha `Spawned` para ele, e **uma janela se abre**: a janela de controle do `proccontrol`.
+
+(FOTO AQUI DE: os dois terminais, com a `central` no ar e o `proccontrol` mostrando as linhas `Spawned`, e ao lado a janela do `proccontrol_gui` com os três módulos.)
+
+(PREENCHER: o que a janela mostra para cada módulo (nome, grupo, estado, PID) e como se reconhece um módulo "vivo" e um parado.)
 
 > [!NOTE]
 > Como o `proccontrol` inicia o `param_daemon` ao mesmo tempo que os módulos que dependem dele, pode aparecer **uma** linha `IPC_ERROR : Message timed out : message astro_param_query_version` logo na partida: um módulo perguntou antes de o `param_daemon` estar pronto. Nos testes, os módulos subiram normalmente mesmo assim. Se ela se repetir sem parar, o problema é outro (veja o capítulo 5, "`param_daemon` fora do ar").
 
-## 6.4 Onde foi parar a saída dos módulos?
+## 6.4 Vendo o estado e a saída dos módulos
 
 O terminal do `proccontrol` mostra **só** os `Spawned`. Nenhuma linha do tipo `vehicle_simulator: publicou ...`, nem do monitor. Isso é proposital: o `proccontrol` **captura** a saída de cada módulo (a saída padrão e a de erro) para dentro dele, em vez de deixá-la ir para o terminal. Com dezenas de módulos, o terminal ficaria ilegível.
 
-Para ver a saída, existe o **`proccontrol_viewoutput`**: um programa que **assina** as saídas capturadas, pelo mesmo IPC que já conhecemos, e as imprime. Em um terceiro terminal:
+### Pela janela de controle (a GUI)
+
+O jeito normal de acompanhar o sistema é a janela do **`proccontrol_gui`**. Nela você vê **o estado de cada módulo da lista**, se está rodando ou parado, e **a saída de cada um**.
+
+(FOTO AQUI DE: a janela do `proccontrol_gui` com o `vehicle_simulator` e o `vehicle_simulator_monitor` rodando, e a saída de um deles à mostra.)
+
+(PREENCHER: como abrir a saída de um módulo na janela, e o que mais ela permite: iniciar ou parar um módulo ou um grupo inteiro, e ligar ou desligar a exibição da saída.)
+
+### Pelo terminal: `proccontrol_viewoutput`
+
+Em uma máquina **sem interface gráfica** (por exemplo, acessada por SSH), a janela não abre. Para esses casos existe o **`proccontrol_viewoutput`**: um programa que **assina** as saídas capturadas, pelo mesmo IPC que já conhecemos, e as imprime no terminal. Em um terminal à parte:
 
 ```bash
 cd $ASTRO_HOME/bin
@@ -99,7 +130,9 @@ cd $ASTRO_HOME/bin
 
 ### O problema do buffer
 
-Se você olhar com atenção, vai notar um comportamento estranho: **parte das linhas não aparece**, ou aparece **de uma vez, em rajadas, com muito atraso**. Nos testes, as linhas do simulador, que escreve menos, não apareciam, enquanto as do monitor, que escreve mais, chegavam em blocos.
+Se você olhar com atenção, vai notar um comportamento estranho: **parte das linhas não aparece**, ou aparece **de uma vez, em rajadas, com muito atraso**. No `proccontrol_viewoutput`, as linhas do simulador, que escreve menos, não apareciam, enquanto as do monitor, que escreve mais, chegavam em blocos.
+
+(PREENCHER: se a janela da GUI mostra o mesmo atraso para um `printf` sem `fflush`.)
 
 A causa é o **buffer** da saída padrão. Quando um programa imprime em um **terminal**, a saída é liberada **a cada linha**. Mas quando a saída vai para um **pipe** (como o `proccontrol` faz), ela é guardada em um buffer de cerca de **4 KB**, e só é liberada quando o buffer enche, ou quando o programa termina. Uma linha como `vehicle_simulator: publicou x=2.83 ...` tem cerca de 60 bytes, então seriam necessárias em torno de 70 linhas, mais de um minuto de publicação, para o buffer encher.
 
@@ -132,7 +165,7 @@ pose_message_handler(astro_vehicle_simulator_pose_message *message)
 	fflush(stdout);
 ```
 
-Compile os dois módulos de novo e suba tudo outra vez. Agora cada linha aparece **na hora** no `proccontrol_viewoutput`:
+Compile os dois módulos de novo e suba tudo outra vez. Agora cada linha aparece **na hora**; no `proccontrol_viewoutput`, ela fica assim:
 
 ```text
 vehicle_simulator_monitor: aguardando mensagens.
@@ -144,7 +177,7 @@ vehicle_simulator_monitor: x=5.68 y=0.86 theta=0.20 v=2.91 (de vehicle_simulator
 vehicle_simulator_monitor: ALERTA velocidade 2.91 m/s acima do limite 2.50 m/s
 ```
 
-As linhas dos dois módulos aparecem **misturadas**, na ordem em que foram escritas: é a visão unificada que o `proccontrol_viewoutput` oferece.
+As linhas dos dois módulos aparecem **misturadas**, na ordem em que foram escritas: é a visão unificada que o `proccontrol_viewoutput` oferece. Na janela da GUI, a saída é mostrada por módulo.
 
 > [!TIP]
 > Uma alternativa ao `fflush` é escrever em `stderr` (`fprintf(stderr, ...)`), que **não tem buffer**. Os dois jeitos aparecem nos módulos do ASTRO. O importante é saber que **um `printf` sem `fflush` pode parecer que "sumiu"** quando o módulo roda sob o `proccontrol`, e que o problema não está no módulo.
@@ -175,6 +208,10 @@ Os passos mostram a ideia: **congela** o `proccontrol` (para ele não reiniciar 
 >
 > O `proccontrol` **ignora o SIGTERM**: um `kill` comum nele não o encerra. Evite `kill -9` à mão em módulos soltos: o `proccontrol` os reinicia.
 
+A janela do `proccontrol_gui` permite também **parar e iniciar módulos individualmente**, ou um **grupo** inteiro, sem derrubar o resto do sistema. É para isso que serve a coluna do grupo no arquivo de processos.
+
+(PREENCHER: como parar e iniciar um módulo e um grupo pela janela, na prática.)
+
 Depois de parar o `proccontrol`, a `central` continua no ar: encerre-a com Ctrl+C no terminal dela.
 
 ## 6.6 O heartbeat: o `proccontrol` vigiando os módulos
@@ -204,6 +241,8 @@ PROCCONTROL (119936): ./vehicle_simulator (119948) lost heartbeats
 (FOTO AQUI DE: o `proccontrol_viewoutput` mostrando as linhas `lost heartbeats` e `Spawned` se repetindo.)
 
 O módulo está **funcionando**, mas como não envia heartbeat, o `proccontrol` o julga travado, o mata e o reinicia, em um laço. Nos testes foram **18 reinícios em 16 segundos**.
+
+(PREENCHER: como esse laço de reinícios aparece na janela da GUI.)
 
 ### Enviando o heartbeat
 
@@ -277,8 +316,8 @@ Agora o `make` de `src/` conhece os dois módulos, e o alvo existe: ele entra na
 
 Neste ponto você tem:
 
-- [x] um **arquivo de processos** com o `param_daemon` e os dois módulos, subindo juntos com o `proccontrol`, com só a `central` à parte;
-- [x] a noção de que o `proccontrol` **captura a saída** dos módulos, e de que o `proccontrol_viewoutput` a mostra;
+- [x] um **arquivo de processos** com o `param_daemon`, o `proccontrol_gui` e os dois módulos, subindo juntos com o `proccontrol`, com só a `central` à parte;
+- [x] a noção de que o `proccontrol` **captura a saída** dos módulos, que a janela do **`proccontrol_gui`** mostra o estado e a saída de cada um, e que o `proccontrol_viewoutput` faz o papel dela no terminal;
 - [x] o cuidado com o **buffer**: um `printf` sem `fflush(stdout)` pode não aparecer;
 - [x] as formas de **parar** tudo: Ctrl+C (com `bin/` no `PATH`) ou o `astrokillall.sh`;
 - [x] o **heartbeat**: `watch_heartbeats = 1` na coluna do arquivo de processos e `astro_publish_heartbeat` com o mesmo nome do módulo, em um intervalo menor que 0,5 s;
