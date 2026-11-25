@@ -7,8 +7,7 @@ No ASTRO, os módulos sobem **juntos**, descritos em um arquivo de texto, por um
 1. descrever os módulos em um **arquivo de processos**;
 2. subir tudo com o `proccontrol` e acompanhar o **estado e a saída** dos módulos, pela janela de controle (a GUI);
 3. **parar** tudo corretamente;
-4. fazer o `proccontrol` **vigiar** o simulador, com o **heartbeat**;
-5. incluir os módulos no **build completo** do ASTRO.
+4. incluir os módulos no **build completo** do ASTRO.
 
 ## 6.1 O `proccontrol` e o arquivo de processos
 
@@ -33,10 +32,10 @@ Cada linha do arquivo descreve um módulo, com cinco colunas separadas por espa�
 
 | Coluna | Significado |
 |---|---|
-| **nome do módulo** | O nome pelo qual o `proccontrol` conhece o módulo. É também o nome que o módulo deve usar no heartbeat (seção 6.6) |
+| **nome do módulo** | O nome pelo qual o `proccontrol` conhece o módulo |
 | **grupo** | Um rótulo para agrupar módulos (por exemplo `support`, `planner`). Serve para parar ou iniciar um grupo inteiro |
 | **requested_state** | `1`: o módulo deve estar rodando (o `proccontrol` o inicia e, se ele morrer, o reinicia). `0`: não é iniciado |
-| **watch_heartbeats** | `1`: o `proccontrol` vigia se o módulo está "vivo" (seção 6.6). `0`: não vigia |
+| **watch_heartbeats** | `0`: o `proccontrol` não vigia o módulo. É o valor usado nos arquivos de processos do projeto, e o que usaremos. Com `1`, o `proccontrol` passaria a exigir do módulo mensagens periódicas de "estou vivo" (*heartbeats*) e reiniciaria quem deixasse de enviá-las |
 | **comando** | A linha de comando, **como seria digitada na pasta `bin/`** |
 
 Crie o arquivo `process-vehicle_simulator.ini` na pasta do módulo:
@@ -121,37 +120,19 @@ O jeito normal de acompanhar o sistema é a janela do **`proccontrol_gui`**. Nel
 
 Com tudo rodando, como parar? No terminal do `proccontrol`, aperte **Ctrl+C**. Ele encerra **todos** os módulos que iniciou e termina.
 
-Por baixo, o `proccontrol` chama o script **`astrokillall.sh`** (que fica em `bin/`), e é esse script que faz o trabalho. Só que o `proccontrol` **descarta a saída do script**, então você não vê o que ele faz. O que aparece no terminal é só o `^C` e os avisos do próprio shell:
-
 ![Ctrl+C no terminal do proccontrol: o shell avisa que ele foi parado e morto](img/06_encerrando_proccontrol.png)
 
-Depois do `^C`, o shell avisa `Stopped` e `Killed` para o `proccontrol`. Eles correspondem a dois passos do script, que veremos a seguir: o **congelamento** do `proccontrol` e o `SIGKILL` final. Os números entre colchetes (`[2]`, `[3]`) são os números de *job* do shell e variam de um terminal para outro.
-
-### O que o `astrokillall.sh` faz
-
-Para ver os passos do script, rode-o **à mão**, de dentro de `bin/`, com o **mesmo caminho** usado para subir o `proccontrol`:
-
-```bash
-cd $ASTRO_HOME/bin
-./astrokillall.sh ../src/vehicle_simulator/process-vehicle_simulator.ini
-```
-
-```text
-Shutting down the whole 119745 process group and associated Docker processes:
-[1/6] Freezing proccontrol (SIGSTOP)
-[2/6] Sending signal -15 to process group -119745
-[3/6] Sending signal -15 to Docker processes
-[4/6] Grace period
-[5/6] Sending SIGKILL to process group -119745
-[6/6] Sending SIGKILL to Docker processes
-```
-
-Os passos mostram a ideia: **congela** o `proccontrol` (para ele não reiniciar os módulos que estão morrendo), manda o sinal de término ao **grupo de processos inteiro**, espera 2 segundos e, o que ainda estiver vivo, **mata à força**.
+O terminal mostra só o `^C` e os avisos do próprio shell, `Stopped` e `Killed`: o `proccontrol` chama, por baixo, um script (o `astrokillall.sh`) que o congela e depois o mata junto com os módulos, e descarta a saída do script. Os números entre colchetes (`[2]`, `[3]`) são os números de *job* do shell e variam de um terminal para outro.
 
 > [!WARNING]
-> **Se o Ctrl+C parecer não fazer nada**, os módulos morrem e o `proccontrol` os **reinicia**, com PIDs novos. Isso acontece quando a pasta `bin/` **não está no `PATH`**: o `proccontrol` chama o script como `astrokillall.sh`, sem o `./`, e só o encontra se `bin/` estiver no `PATH`. Confira com `echo $PATH`. Enquanto não corrigir, pare tudo rodando o script à mão, como mostrado acima.
+> **Se o Ctrl+C parecer não fazer nada**, os módulos morrem e o `proccontrol` os **reinicia**, com PIDs novos. Isso acontece quando a pasta `bin/` **não está no `PATH`**: o `proccontrol` chama o script como `astrokillall.sh`, sem o `./`, e só o encontra se `bin/` estiver no `PATH`. Confira com `echo $PATH`. Enquanto não corrigir, pare tudo rodando o script à mão, de dentro de `bin/` e com o **mesmo caminho** usado para subir o `proccontrol`:
 >
-> O `proccontrol` **ignora o SIGTERM**: um `kill` comum nele não o encerra. Evite `kill -9` à mão em módulos soltos: o `proccontrol` os reinicia.
+> ```bash
+> cd $ASTRO_HOME/bin
+> ./astrokillall.sh ../src/vehicle_simulator/process-vehicle_simulator.ini
+> ```
+>
+> O `proccontrol` **ignora o SIGTERM**: um `kill` comum nele não o encerra.
 
 A janela do `proccontrol_gui` permite também **parar e iniciar módulos individualmente**, ou um **grupo** inteiro, sem derrubar o resto do sistema. É para isso que serve a coluna do grupo no arquivo de processos.
 
@@ -159,79 +140,7 @@ A janela do `proccontrol_gui` permite também **parar e iniciar módulos individ
 
 Depois de parar o `proccontrol`, a `central` continua no ar: encerre-a com Ctrl+C no terminal dela.
 
-## 6.6 O heartbeat: o `proccontrol` vigiando os módulos
-
-Até agora a coluna `watch_heartbeats` ficou em `0`. Com `1`, o `proccontrol` passa a **vigiar** o módulo: espera receber dele, **periodicamente**, uma mensagem de "estou vivo", o **heartbeat**. Se o módulo ficar um tempo sem enviar, o `proccontrol` conclui que ele travou, o **mata** e o **reinicia**. É uma proteção contra módulos travados.
-
-### Ligando a vigilância sem enviar heartbeat
-
-Para ver o efeito, ligue a vigilância no simulador, **sem** ter acrescentado nenhum heartbeat nele. No arquivo de processos, troque o `0` por `1` na linha do `vehicle_simulator`:
-
-```text
- vehicle_simulator           simulator   1          1       ./vehicle_simulator
-```
-
-Suba o `proccontrol` de novo. O `proccontrol` registra:
-
-```text
-PROCCONTROL (119936): Spawned ./vehicle_simulator (119941)
-PROCCONTROL (119936): ./vehicle_simulator (119941) lost heartbeats
-PROCCONTROL (119936): Spawned ./vehicle_simulator (119943)
-PROCCONTROL (119936): ./vehicle_simulator (119943) lost heartbeats
-PROCCONTROL (119936): Spawned ./vehicle_simulator (119948)
-PROCCONTROL (119936): ./vehicle_simulator (119948) lost heartbeats
-...
-```
-
-(FOTO AQUI DE: as linhas `lost heartbeats` e `Spawned` se repetindo.)
-
-(PREENCHER: onde essas linhas aparecem para você: no terminal do `proccontrol`, na janela da GUI, ou nos dois.)
-
-O módulo está **funcionando**, mas como não envia heartbeat, o `proccontrol` o julga travado, o mata e o reinicia, em um laço. Nos testes foram **18 reinícios em 16 segundos**.
-
-(PREENCHER: como esse laço de reinícios aparece na janela da GUI.)
-
-### Enviando o heartbeat
-
-O módulo precisa chamar `astro_publish_heartbeat`, passando o **nome do módulo**, em um timer periódico. Acrescente ao `vehicle_simulator_main.cpp`:
-
-```cpp
-static void
-publish_heartbeat(void)
-{
-	astro_publish_heartbeat("vehicle_simulator");
-}
-```
-
-E no `main`, ao lado do timer da simulação:
-
-```cpp
-	astro_ipc_addPeriodicTimer(dt, (TIMER_HANDLER_TYPE) simulation_step, NULL);
-	astro_ipc_addPeriodicTimer(0.1, (TIMER_HANDLER_TYPE) publish_heartbeat, NULL);
-```
-
-Dois cuidados:
-
-| Cuidado | Motivo |
-|---|---|
-| O nome deve ser **igual à primeira coluna** do arquivo de processos (`vehicle_simulator`) | É por esse nome que o `proccontrol` reconhece de quem veio o heartbeat |
-| O intervalo deve ser **menor que 0,5 s** | O `proccontrol` espera no máximo **0,5 segundo** entre heartbeats. Por isso usamos 0,1 s |
-
-> [!WARNING]
-> **O heartbeat precisa ser mais rápido que o tempo limite.** Um intervalo de 1 s ou de 10 s, que parece razoável à primeira vista, faria o `proccontrol` reiniciar o módulo continuamente, como no laço acima.
-
-Compile, e suba o `proccontrol` de novo, ainda com `watch_heartbeats = 1`. Agora:
-
-```text
-PROCCONTROL (120007): Spawned ./vehicle_simulator (120012)
-PROCCONTROL (120007): Spawned ./vehicle_simulator_monitor (120013)
-```
-
-O módulo é iniciado **uma vez** e **nenhum** `lost heartbeats` aparece: o `proccontrol` recebe o heartbeat a tempo e o considera vivo.
-
-Para o monitor, deixe `watch_heartbeats` em `0`: a vigilância é opcional, e vale para módulos que precisam ser reiniciados quando travam. O padrão é o mesmo, com o nome do módulo e um timer.
-
-## 6.7 Incluindo os módulos no build completo
+## 6.6 Incluindo os módulos no build completo
 
 Até agora compilamos cada módulo entrando na sua pasta e rodando `make`. O ASTRO completo é compilado por um `make` na pasta `src/`, que constrói **todos os módulos conhecidos**, em uma ordem que respeita as dependências. Nossos módulos ainda **não são conhecidos** por esse `make`:
 
@@ -259,14 +168,13 @@ Agora o `make` de `src/` conhece os dois módulos, e o alvo existe: ele entra na
 > [!NOTE]
 > Esta é a **única** alteração do tutorial em um arquivo compartilhado do sistema. Ela é pequena (duas linhas), mas muda o `Makefile` de `src/` para todos. Em um módulo real, essa mudança vai junto com o resto do módulo, no mesmo *pull request*, e vale combinar com a equipe em qual lista ele deve entrar.
 
-## 6.8 Checkpoint
+## 6.7 Checkpoint
 
 Neste ponto você tem:
 
 - [x] um **arquivo de processos** com o `param_daemon`, o `proccontrol_gui` e os dois módulos, subindo juntos com o `proccontrol`, com só a `central` à parte;
 - [x] a noção de que o `proccontrol` **captura a saída** dos módulos, e de que a janela do **`proccontrol_gui`** mostra o estado e a saída de cada um;
-- [x] as formas de **parar** tudo: Ctrl+C (com `bin/` no `PATH`) ou o `astrokillall.sh`;
-- [x] o **heartbeat**: `watch_heartbeats = 1` na coluna do arquivo de processos e `astro_publish_heartbeat` com o mesmo nome do módulo, em um intervalo menor que 0,5 s;
+- [x] a forma de **parar** tudo: Ctrl+C no terminal do `proccontrol` (com `bin/` no `PATH`), ou o `astrokillall.sh` à mão;
 - [x] os módulos incluídos nas listas de pacotes de `src/Makefile`, e portanto no build completo.
 
 **Próximo capítulo:** boas práticas e erros comuns. Vamos reunir, em um só lugar, os cuidados que apareceram ao longo do manual e os que ainda faltam.
