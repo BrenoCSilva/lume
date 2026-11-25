@@ -1,10 +1,12 @@
 # 8. O template: criando um módulo novo
 
-Ao longo do manual construímos, passo a passo, um par de módulos que se comunicam por IPC. Este capítulo entrega o resultado já pronto, em forma de **template**: um esqueleto de módulo, **compilável e testado**, para ser usado como ponto de partida. Em vez de recomeçar do capítulo 1 a cada módulo novo, você cria o seu a partir dele e troca só o que é específico.
+Ao longo do manual construímos, passo a passo, um par de módulos que se comunicam por IPC. Este capítulo entrega o resultado em forma de **template**: um esqueleto de módulo, **compilável e testado**, para ser ponto de partida. Em vez de recomeçar do capítulo 1 a cada módulo novo, você copia o template, troca o nome e adapta só o que é específico do seu módulo.
+
+O template **usa a mesma mensagem do exemplo** (a pose, com `x`, `y`, `theta` e `v`), então não há nada novo para entender. Ele é o exemplo do manual no estado do fim do capítulo 3, com um parâmetro do capítulo 5, e **sem** o que era só da simulação: a cinemática do capítulo 4 e o alerta de velocidade. O `vehicle_simulator` completo continua sendo a referência de um módulo real.
 
 ## 8.1 O que o template contém
 
-O template são **dois módulos**, como no exemplo do manual: um que é **dono da mensagem** e a publica, e um que a **assina**. Ficam ao lado dos demais módulos, em `src/`:
+São **dois módulos**, como no exemplo: um que é **dono da mensagem** e a publica, e um que a **assina**. Ficam ao lado dos demais módulos, em `src/`:
 
 ```text
 src/template_module/                    ← dono da mensagem
@@ -14,81 +16,98 @@ src/template_module/                    ← dono da mensagem
 ├── template_module_interface.cpp
 ├── template_module_main.cpp            # main: conexão, parâmetros, publicação, Ctrl+C
 ├── template_module.ini                 # parâmetros do módulo
-├── process-template_module.ini         # arquivo de processos (proccontrol)
-└── new_module.sh                       # script que cria um módulo novo a partir deste
+└── process-template_module.ini         # arquivo de processos (proccontrol)
 
 src/template_module_consumer/           ← assina a mensagem
 ├── Makefile
 └── template_module_consumer_main.cpp   # main: conexão, assinatura, handler, Ctrl+C
 ```
 
-A mensagem de exemplo, `astro_template_module_data`, tem um contador e um valor:
-
-| Campo | Tipo | Significado |
-|---|---|---|
-| `counter` | `int` | Número sequencial da mensagem |
-| `value` | `double` | Valor de exemplo |
-| `timestamp`, `host` | `double`, `char *` | Obrigatórios em toda mensagem |
-
-O `template_module` publica uma mensagem por intervalo `period`, que ele lê do `.ini`. O `template_module_consumer` assina a mensagem e imprime o que recebe. Executados juntos:
+O `template_module` publica a pose a cada `period` segundos, valor que ele lê do `.ini`. Os dados são fixos, como no capítulo 2. O `template_module_consumer` assina a mensagem e imprime o que recebe. Executados juntos:
 
 ```text
-template_module: publicou counter=0 value=0.00
-template_module: publicou counter=1 value=0.50
-template_module: publicou counter=2 value=1.00
+template_module: publicou x=0.00 y=0.00 theta=0.00 v=2.00
+template_module: publicou x=0.00 y=0.00 theta=0.00 v=2.00
 
 template_module_consumer: aguardando mensagens.
-template_module_consumer: counter=0 value=0.00 (de template_module@lume-M, t=1795630784.112)
-template_module_consumer: counter=1 value=0.50 (de template_module@lume-M, t=1795630785.112)
-template_module_consumer: counter=2 value=1.00 (de template_module@lume-M, t=1795630786.113)
+template_module_consumer: x=0.00 y=0.00 theta=0.00 v=2.00 (de template_module@lume-M, t=1795631520.559)
+template_module_consumer: x=0.00 y=0.00 theta=0.00 v=2.00 (de template_module@lume-M, t=1795631521.560)
 ```
 
-## 8.2 Criando um módulo novo
+## 8.2 Criando um módulo novo a partir dele
 
-O script `new_module.sh` copia os dois módulos do template e **troca o nome** em todos os arquivos. Execute-o dentro da pasta do `template_module`, passando o nome do seu módulo, em `snake_case`:
+O processo tem três passos: copiar as pastas, renomear os arquivos e trocar o nome **dentro** dos arquivos. Nos exemplos abaixo o módulo novo se chama `meu_sensor`.
+
+### Passo 1: copiar as duas pastas
+
+Se você já compilou o template, rode antes o `make clean` em cada uma, para não copiar objetos e executáveis:
 
 ```bash
-cd $ASTRO_HOME/src/template_module
-./new_module.sh meu_sensor
+cd $ASTRO_HOME/src
+(cd template_module && make clean)
+(cd template_module_consumer && make clean)
+
+cp -r template_module meu_sensor
+cp -r template_module_consumer meu_sensor_consumer
 ```
 
-```text
-Modulos criados:
-  /home/lume/astro/src/meu_sensor
-  /home/lume/astro/src/meu_sensor_consumer
+O `make clean` deixa nas pastas só os arquivos-fonte.
 
-Proximos passos:
-  1. Edite meu_sensor_messages.h (campos da mensagem) e a main de cada modulo.
-  2. Compile, nesta ordem:  (cd /home/lume/astro/src/meu_sensor && make)  e depois  (cd /home/lume/astro/src/meu_sensor_consumer && make)
-  3. Inicie: central, param_daemon ../src/meu_sensor/meu_sensor.ini, e os dois modulos.
-```
+### Passo 2: renomear os arquivos
 
-Foram criados **dois módulos novos**, `meu_sensor` e `meu_sensor_consumer`, com tudo renomeado:
+Os arquivos que têm `template_module` no nome passam a ter o nome do seu módulo:
 
 | No template | No seu módulo |
 |---|---|
 | `template_module_messages.h` | `meu_sensor_messages.h` |
-| `astro_template_module_data_message` | `astro_meu_sensor_data_message` |
-| `ASTRO_TEMPLATE_MODULE_DATA_MESSAGE_NAME` | `ASTRO_MEU_SENSOR_DATA_MESSAGE_NAME` |
+| `template_module_interface.h` | `meu_sensor_interface.h` |
+| `template_module_interface.cpp` | `meu_sensor_interface.cpp` |
+| `template_module_main.cpp` | `meu_sensor_main.cpp` |
+| `template_module.ini` | `meu_sensor.ini` |
+| `process-template_module.ini` | `process-meu_sensor.ini` |
+| `template_module_consumer_main.cpp` (na pasta `meu_sensor_consumer`) | `meu_sensor_consumer_main.cpp` |
+
+O `Makefile` mantém o nome.
+
+### Passo 3: trocar o nome dentro dos arquivos
+
+O nome do template aparece **dentro** dos arquivos em três formas. Substitua as três, **só nas duas pastas novas**, com a função "substituir em arquivos" do seu editor:
+
+| Forma | Procurar | Substituir por |
+|---|---|---|
+| Minúsculas, com `_` | `template_module` | `meu_sensor` |
+| Maiúsculas, com `_` | `TEMPLATE_MODULE` | `MEU_SENSOR` |
+| Maiúsculas, com espaço | `TEMPLATE MODULE` | `MEU SENSOR` |
+
+A primeira troca também cobre o nome do consumidor (`template_module_consumer` passa a `meu_sensor_consumer`).
+
+Para conferir que nenhum nome antigo ficou para trás, procure por `template` nas duas pastas novas:
+
+```bash
+cd $ASTRO_HOME/src
+grep -ri template meu_sensor meu_sensor_consumer
+```
+
+Não deve haver nenhuma ocorrência.
+
+Os símbolos renomeados ficam assim:
+
+| No template | No seu módulo |
+|---|---|
+| `astro_template_module_pose_message` | `astro_meu_sensor_pose_message` |
+| `ASTRO_TEMPLATE_MODULE_POSE_MESSAGE_NAME` | `ASTRO_MEU_SENSOR_POSE_MESSAGE_NAME` |
+| `astro_template_module_publish_pose_message` | `astro_meu_sensor_publish_pose_message` |
 | `template_module_period` (no `.ini`) | `meu_sensor_period` |
 | `MODULE_NAME = TEMPLATE MODULE` | `MODULE_NAME = MEU SENSOR` |
 
-O script **só cria arquivos**: não altera nenhum arquivo do sistema. Os artefatos de compilação do template (`.o`, bibliotecas, executáveis) não são copiados. O script recusa:
-
-| Situação | Resposta |
-|---|---|
-| Nome que não está em `snake_case` (por exemplo `MeuModulo` ou `9abc`) | Erro, nada é criado |
-| O próprio nome do template | Erro, nada é criado |
-| Uma das pastas já existe | Erro, nada é sobrescrito |
-
-## 8.3 O que trocar em cada arquivo
+## 8.3 O que adaptar em cada arquivo
 
 O template marca com o comentário `TROQUE` os pontos que você precisa adaptar:
 
-| Arquivo | O que trocar |
+| Arquivo | O que adaptar |
 |---|---|
 | `<nome>_messages.h` | Os **campos** da struct e o `_FMT`, mantendo os dois **espelhados**. Escreva a **unidade** e o referencial de cada campo |
-| `<nome>_main.cpp` | Em `publish_data()`, **preencher os dados reais**. Em `read_parameters()`, **um item por parâmetro** |
+| `<nome>_main.cpp` | Em `publish_pose()`, **preencher os dados reais**. Em `read_parameters()`, **um item por parâmetro** |
 | `<nome>_consumer_main.cpp` | No handler, **tratar os dados** recebidos. Lembre-se de que eles só valem dentro do handler |
 | `<nome>.ini` | Os **parâmetros** do módulo, com unidade no comentário |
 
@@ -96,12 +115,12 @@ O restante (a conexão, a interface, o `Makefile`, o tratamento do Ctrl+C) norma
 
 ## 8.4 Passo a passo
 
-Depois de criar o módulo com o script:
+Depois de criar o módulo com os passos da seção 8.2:
 
-1. **Defina a mensagem.** Em `<nome>_messages.h`, troque os campos da struct e o `_FMT`, mantendo-os espelhados (capítulo 2). O template chama a mensagem de `data`. Se quiser outro nome (por exemplo `pose`), troque `data` e `DATA` pelo novo nome nos símbolos `..._data_message`, `..._DATA_MESSAGE_...`, `publish_data` e `data_message_handler`, nos três lugares onde aparecem: a mensagem, a interface e as mains.
-2. **Publique dados reais.** Em `publish_data()`, no `<nome>_main.cpp`, preencha a struct com o que o seu módulo produz (capítulos 2 e 4).
+1. **Defina a mensagem.** Em `<nome>_messages.h`, troque os campos da struct e o `_FMT`, mantendo-os espelhados (capítulo 2). O template chama a mensagem de `pose`. Se a sua tem outro nome (por exemplo `leitura`), troque `pose` e `POSE` pelo novo nome nos símbolos `..._pose_message`, `..._POSE_MESSAGE_...`, `publish_pose` e `pose_message_handler`, nos três lugares onde aparecem: a mensagem, a interface e as mains.
+2. **Publique dados reais.** Em `publish_pose()`, no `<nome>_main.cpp`, preencha a struct com o que o seu módulo produz (capítulos 2 e 4).
 3. **Configure os parâmetros.** Acrescente cada parâmetro à lista de `read_parameters()` e ao `<nome>.ini` (capítulo 5). Leia-os **antes** de usá-los.
-4. **Trate os dados no consumidor.** Em `data_message_handler`, use os campos recebidos e **copie** o que precisar guardar (capítulo 3).
+4. **Trate os dados no consumidor.** No handler, use os campos recebidos e **copie** o que precisar guardar (capítulo 3).
 5. **Compile, na ordem:** primeiro o dono da mensagem, depois o consumidor.
 
    ```bash
@@ -153,7 +172,6 @@ Nada muda no `Makefile`: o header e a biblioteca da interface já estão publica
 
 Chegamos ao fim do manual. Ao longo dos capítulos você construiu, e agora tem como ponto de partida reutilizável:
 
-- [x] um **template** de módulo, compilável, com o dono da mensagem e um consumidor, em `src/template_module/` e `src/template_module_consumer/`;
-- [x] um **script**, `new_module.sh`, que cria um módulo novo a partir dele, com tudo renomeado;
-- [x] os **pontos de adaptação** marcados com `TROQUE`, e o passo a passo para chegar a um módulo seu funcionando;
-- [x] o caminho de volta aos capítulos para cada conceito do template.
+- [x] um **template** de módulo, compilável, com o dono da mensagem e um consumidor, em `src/template_module/` e `src/template_module_consumer/`, com a mesma mensagem do exemplo;
+- [x] o **passo a passo** para criar um módulo novo a partir dele: copiar, renomear arquivos e trocar o nome dentro deles;
+- [x] os **pontos de adaptação** marcados com `TROQUE`, e o caminho de volta aos capítulos para cada conceito do template.
