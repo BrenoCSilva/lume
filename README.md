@@ -117,71 +117,6 @@ O jeito normal de acompanhar o sistema é a janela do **`proccontrol_gui`**. Nel
 
 (PREENCHER: como abrir a saída de um módulo na janela, e o que mais ela permite: iniciar ou parar um módulo ou um grupo inteiro, e ligar ou desligar a exibição da saída.)
 
-### Pelo terminal: `proccontrol_viewoutput`
-
-Em uma máquina **sem interface gráfica** (por exemplo, acessada por SSH), a janela não abre. Para esses casos existe o **`proccontrol_viewoutput`**: um programa que **assina** as saídas capturadas, pelo mesmo IPC que já conhecemos, e as imprime no terminal. Em um terminal à parte:
-
-```bash
-cd $ASTRO_HOME/bin
-./proccontrol_viewoutput
-```
-
-(FOTO AQUI DE: o `proccontrol_viewoutput` mostrando a saída dos módulos.)
-
-### O problema do buffer
-
-Se você olhar com atenção, vai notar um comportamento estranho: **parte das linhas não aparece**, ou aparece **de uma vez, em rajadas, com muito atraso**. No `proccontrol_viewoutput`, as linhas do simulador, que escreve menos, não apareciam, enquanto as do monitor, que escreve mais, chegavam em blocos.
-
-(PREENCHER: se a janela da GUI mostra o mesmo atraso para um `printf` sem `fflush`.)
-
-A causa é o **buffer** da saída padrão. Quando um programa imprime em um **terminal**, a saída é liberada **a cada linha**. Mas quando a saída vai para um **pipe** (como o `proccontrol` faz), ela é guardada em um buffer de cerca de **4 KB**, e só é liberada quando o buffer enche, ou quando o programa termina. Uma linha como `vehicle_simulator: publicou x=2.83 ...` tem cerca de 60 bytes, então seriam necessárias em torno de 70 linhas, mais de um minuto de publicação, para o buffer encher.
-
-A correção é **liberar o buffer explicitamente**, depois de cada `printf` que você quer ver na hora, com `fflush(stdout)`. No `vehicle_simulator_main.cpp`, em `publish_pose`:
-
-```cpp
-	printf("vehicle_simulator: publicou x=%.2f y=%.2f theta=%.2f v=%.2f\n", x, y, theta, v);
-	fflush(stdout);
-```
-
-No `vehicle_simulator_monitor_main.cpp`, ao final do *handler*, e depois do `printf` de "aguardando mensagens":
-
-```cpp
-static void
-pose_message_handler(astro_vehicle_simulator_pose_message *message)
-{
-	printf("vehicle_simulator_monitor: x=%.2f y=%.2f theta=%.2f v=%.2f (de %s, t=%.3f)\n",
-			message->x, message->y, message->theta, message->v, message->host, message->timestamp);
-
-	if (message->v > max_velocity)
-		printf("vehicle_simulator_monitor: ALERTA velocidade %.2f m/s acima do limite %.2f m/s\n",
-				message->v, max_velocity);
-
-	fflush(stdout);
-}
-```
-
-```cpp
-	printf("vehicle_simulator_monitor: aguardando mensagens.\n");
-	fflush(stdout);
-```
-
-Compile os dois módulos de novo e suba tudo outra vez. Agora cada linha aparece **na hora**; no `proccontrol_viewoutput`, ela fica assim:
-
-```text
-vehicle_simulator_monitor: aguardando mensagens.
-vehicle_simulator: publicou x=2.83 y=0.28 theta=0.10 v=2.84
-vehicle_simulator_monitor: x=2.83 y=0.28 theta=0.10 v=2.84 (de vehicle_simulator@lume-M, t=1795627760.930)
-vehicle_simulator_monitor: ALERTA velocidade 2.84 m/s acima do limite 2.50 m/s
-vehicle_simulator: publicou x=5.68 y=0.86 theta=0.20 v=2.91
-vehicle_simulator_monitor: x=5.68 y=0.86 theta=0.20 v=2.91 (de vehicle_simulator@lume-M, t=1795627761.431)
-vehicle_simulator_monitor: ALERTA velocidade 2.91 m/s acima do limite 2.50 m/s
-```
-
-As linhas dos dois módulos aparecem **misturadas**, na ordem em que foram escritas: é a visão unificada que o `proccontrol_viewoutput` oferece. Na janela da GUI, a saída é mostrada por módulo.
-
-> [!TIP]
-> Uma alternativa ao `fflush` é escrever em `stderr` (`fprintf(stderr, ...)`), que **não tem buffer**. Os dois jeitos aparecem nos módulos do ASTRO. O importante é saber que **um `printf` sem `fflush` pode parecer que "sumiu"** quando o módulo roda sob o `proccontrol`, e que o problema não está no módulo.
-
 ## 6.5 Parando tudo
 
 Com tudo rodando, como parar? No terminal do `proccontrol`, aperte **Ctrl+C**. Ele encerra **todos** os módulos que iniciou e termina. Por baixo, o `proccontrol` chama o script **`astrokillall.sh`** (que fica em `bin/`), e esse script faz o trabalho:
@@ -197,6 +132,10 @@ Shutting down the whole 119745 process group and associated Docker processes:
 ```
 
 Os passos mostram a ideia: **congela** o `proccontrol` (para ele não reiniciar os módulos que estão morrendo), manda o sinal de término ao **grupo de processos inteiro**, espera 2 segundos e, o que ainda estiver vivo, **mata à força**.
+
+![Ctrl+C no terminal do proccontrol: o shell avisa que ele foi parado e morto](img/06_encerrando_proccontrol.png)
+
+Na captura, depois do `^C`, o shell avisa `Stopped` e `Killed` para o `proccontrol`: são o passo de congelamento e o `SIGKILL` final do script. Os números entre colchetes (`[2]`, `[3]`) são os números de *job* do shell e variam de um terminal para outro.
 
 > [!WARNING]
 > **Se o Ctrl+C parecer não fazer nada**, os módulos morrem e o `proccontrol` os **reinicia**, com PIDs novos. Isso acontece quando a pasta `bin/` **não está no `PATH`**: o `proccontrol` chama o script como `astrokillall.sh`, sem o `./`, e só o encontra se `bin/` estiver no `PATH`. Confira com `echo $PATH`. Enquanto não corrigir, pare tudo pelo próprio script, de dentro de `bin/`, **com o mesmo caminho** usado para subir o `proccontrol`:
@@ -226,7 +165,7 @@ Para ver o efeito, ligue a vigilância no simulador, **sem** ter acrescentado ne
  vehicle_simulator           simulator   1          1       ./vehicle_simulator
 ```
 
-Suba o `proccontrol` de novo. O `proccontrol_viewoutput` mostra:
+Suba o `proccontrol` de novo. O `proccontrol` registra:
 
 ```text
 PROCCONTROL (119936): Spawned ./vehicle_simulator (119941)
@@ -238,7 +177,9 @@ PROCCONTROL (119936): ./vehicle_simulator (119948) lost heartbeats
 ...
 ```
 
-(FOTO AQUI DE: o `proccontrol_viewoutput` mostrando as linhas `lost heartbeats` e `Spawned` se repetindo.)
+(FOTO AQUI DE: as linhas `lost heartbeats` e `Spawned` se repetindo.)
+
+(PREENCHER: onde essas linhas aparecem para você: no terminal do `proccontrol`, na janela da GUI, ou nos dois.)
 
 O módulo está **funcionando**, mas como não envia heartbeat, o `proccontrol` o julga travado, o mata e o reinicia, em um laço. Nos testes foram **18 reinícios em 16 segundos**.
 
@@ -317,8 +258,7 @@ Agora o `make` de `src/` conhece os dois módulos, e o alvo existe: ele entra na
 Neste ponto você tem:
 
 - [x] um **arquivo de processos** com o `param_daemon`, o `proccontrol_gui` e os dois módulos, subindo juntos com o `proccontrol`, com só a `central` à parte;
-- [x] a noção de que o `proccontrol` **captura a saída** dos módulos, que a janela do **`proccontrol_gui`** mostra o estado e a saída de cada um, e que o `proccontrol_viewoutput` faz o papel dela no terminal;
-- [x] o cuidado com o **buffer**: um `printf` sem `fflush(stdout)` pode não aparecer;
+- [x] a noção de que o `proccontrol` **captura a saída** dos módulos, e de que a janela do **`proccontrol_gui`** mostra o estado e a saída de cada um;
 - [x] as formas de **parar** tudo: Ctrl+C (com `bin/` no `PATH`) ou o `astrokillall.sh`;
 - [x] o **heartbeat**: `watch_heartbeats = 1` na coluna do arquivo de processos e `astro_publish_heartbeat` com o mesmo nome do módulo, em um intervalo menor que 0,5 s;
 - [x] os módulos incluídos nas listas de pacotes de `src/Makefile`, e portanto no build completo.
