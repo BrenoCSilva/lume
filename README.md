@@ -1,213 +1,94 @@
-# 4. Fazendo o veículo se mover
+# Manual: Criando um Novo Módulo no ASTRO
 
-Até aqui o `vehicle_simulator` publica sempre a mesma pose: o veículo está parado na origem. Neste capítulo ele vai **se mover**: a cada ciclo, a posição será calculada a partir da velocidade e da orientação.
+Este manual ensina, passo a passo, a criar um módulo novo no ASTRO que se comunica com os demais por **IPC** (*Inter-Process Communication*). O conteúdo usa como exemplo condutor dois módulos, [`vehicle_simulator`](file:///home/lume/astro/src/vehicle_simulator) (publica) e [`vehicle_simulator_monitor`](file:///home/lume/astro/src/vehicle_simulator_monitor) (assina), que **compilam e foram testados**: as saídas mostradas nos capítulos são saídas reais.
 
-Só o `vehicle_simulator_main.cpp` muda. A mensagem, a interface e o monitor **continuam como estão**. O monitor vai mostrar o veículo andando sem que você toque nele, e isso é uma boa demonstração do que o IPC entrega: quem consome não precisa saber como o dado é produzido.
+> [!IMPORTANT]
+> **Resumo:**
+> * Cada módulo do ASTRO é um **processo independente** (um executável em `bin/`). Eles não chamam funções uns dos outros; trocam **mensagens** por meio de um processo central.
+> * Quem envia uma mensagem **publica** (*publish*); quem quer recebê-la **assina** (*subscribe*) e registra um *handler* (callback) que o IPC chama a cada chegada.
+> * Um módulo novo precisa de: um `Makefile`, um `_main.cpp` (inicialização, handlers e publicadores) e, se definir mensagens próprias, um `_messages.h` e um `_interface.cpp/.h`.
+> * Para rodar é preciso ter `central` e `param_daemon` ativos, e todo parâmetro lido pelo módulo precisa existir no `.ini` do robô.
 
-Vamos em três passos, e cada um pode ser executado:
+---
 
-1. **Linha reta**: o veículo anda em frente com velocidade constante.
-2. **Curva**: a orientação passa a mudar.
-3. **Velocidade variável**: a velocidade oscila.
-
-## 4.1 A ideia: simular em passos
-
-Uma simulação de movimento é um laço de **passos pequenos**. A cada passo, o veículo avança um pouco, a partir de onde estava. Quem dispara cada passo é o **timer** que já temos: ele chama uma função a cada `dt` segundos.
+## 1. Como os módulos conversam
 
 ```mermaid
 flowchart LR
-    T["timer<br/>(a cada dt)"] --> S["simulation_step()<br/>atualiza x, y, theta, v"]
-    S --> P["publish_pose()<br/>publica a pose"]
+    PUB["vehicle_simulator<br/>(publicador)"] -- "IPC_publishData" --> CEN(("central"))
+    CEN -- "entrega a mensagem" --> SUB["vehicle_simulator_monitor<br/>(assinante)"]
+    PD["param_daemon<br/>(lê o .ini)"] -. "parâmetros na inicialização" .-> PUB
+    PD -.-> SUB
 ```
 
-A atualização da posição, em cada passo, vem da cinemática básica:
-
-```text
-x = x + v · cos(theta) · dt
-y = y + v · sin(theta) · dt
-```
-
-| Símbolo | Significado | Unidade |
-|---|---|---|
-| `x`, `y` | Posição do veículo | m |
-| `theta` | Orientação: o ângulo para onde o veículo aponta | rad |
-| `v` | Velocidade linear | m/s |
-| `dt` | Tempo de um passo | s |
-
-Se o veículo aponta para `theta` e anda com velocidade `v` durante `dt` segundos, ele percorre `v · dt` metros nessa direção. A parte `cos(theta)` dessa distância vai para o eixo `x`, e a parte `sin(theta)` para o eixo `y`.
-
-## 4.2 Guardando o estado
-
-A pose precisa **sobreviver entre um passo e o próximo**: o `x` de agora é o `x` do passo anterior mais o deslocamento. Variáveis declaradas **dentro** de uma função desaparecem quando ela termina, então o estado do veículo vai em variáveis **`static` fora das funções**, que duram o programa inteiro.
-
-Essa é a única informação que o `vehicle_simulator` passa a guardar:
-
-```cpp
-static double x = 0.0;
-static double y = 0.0;
-static double theta = 0.0;
-static double v = 2.0;
-```
-
-O veículo começa na origem, apontando para o eixo `x` (`theta = 0`), com `v = 2.0` m/s.
-
-## 4.3 Passo 1: linha reta
-
-Abra o `vehicle_simulator_main.cpp`. Vamos mudar três coisas: o estado, a função que publica e a função que o timer chama.
-
-```cpp
-#include <math.h>
-#include <astro/astro.h>
-#include <astro/vehicle_simulator_interface.h>
-
-static const double dt = 1.0;	// tempo de cada passo (s)
-
-static double x = 0.0;
-static double y = 0.0;
-static double theta = 0.0;
-static double v = 2.0;
-
-static void
-publish_pose(void)
-{
-	astro_vehicle_simulator_pose_message message;
-
-	message.x = x;
-	message.y = y;
-	message.theta = theta;
-	message.v = v;
-
-	astro_vehicle_simulator_publish_pose_message(&message, astro_get_time());
-
-	printf("vehicle_simulator: publicou x=%.2f y=%.2f theta=%.2f v=%.2f\n", x, y, theta, v);
-}
-
-static void
-simulation_step(void)
-{
-	x += v * cos(theta) * dt;
-	y += v * sin(theta) * dt;
-
-	publish_pose();
-}
-```
-
-E no `main`, o timer chama agora a função de passo, e usa o mesmo `dt`:
-
-```cpp
-	astro_ipc_addPeriodicTimer(dt, (TIMER_HANDLER_TYPE) simulation_step, NULL);
-```
-
-O que mudou em relação ao capítulo anterior:
-
-| Mudança | Motivo |
+| Processo | Papel |
 |---|---|
-| `#include <math.h>` | Traz o `cos` e o `sin` |
-| `dt` e as quatro variáveis de estado | O estado que guardamos entre os passos |
-| `publish_pose()` | Em vez de valores fixos, **lê o estado** (`message.x = x;`...) |
-| `simulation_step()` | **Atualiza o estado** pela cinemática e depois publica |
-| O timer chama `simulation_step` | Antes chamava `publish_pose` diretamente |
+| `central` | Servidor IPC. Registra as mensagens definidas e distribui cada publicação aos assinantes. Deve estar no ar antes de qualquer módulo. |
+| `param_daemon` | Lê o arquivo `.ini` do robô e responde aos módulos que pedem seus parâmetros. |
+| Seu módulo | Conecta-se à `central`, define/publica/assina mensagens e lê parâmetros. |
 
-A divisão é a mesma ideia de separar responsabilidades que usamos nos arquivos: `simulation_step` **calcula**, e `publish_pose` **publica**.
+Os módulos compartilham apenas **o nome e o formato da mensagem**. Quem publica não sabe quem assina, e vice-versa.
 
-> [!NOTE]
-> **Uma constante só para os dois usos.** O mesmo `dt` é o intervalo do timer **e** o tempo usado no cálculo. Assim, um segundo de simulação corresponde a um segundo real. Se o timer rodasse a cada 0,5 s e o cálculo usasse `dt = 1.0`, o veículo pareceria andar o dobro da velocidade.
+---
 
-Compile, e com a `central` no ar execute o monitor e o `vehicle_simulator`, como no capítulo 3:
+## 2. Pré-requisitos
+
+1. Repositório do ASTRO compilado (as bibliotecas `libipc`, `libglobal` e `libparam_interface` em `lib/`, e os executáveis `central` e `param_daemon` em `bin/`).
+2. A variável de ambiente `ASTRO_HOME` apontando para a raiz do ASTRO. Sem ela o `Makefile` aborta com `ASTRO_HOME environment variable not set`:
 
 ```bash
-cd $ASTRO_HOME/src/vehicle_simulator
-make
+export ASTRO_HOME=/home/lume/astro
 ```
 
-```text
-vehicle_simulator: publicou x=2.00 y=0.00 theta=0.00 v=2.00
-vehicle_simulator: publicou x=4.00 y=0.00 theta=0.00 v=2.00
-vehicle_simulator: publicou x=6.00 y=0.00 theta=0.00 v=2.00
-vehicle_simulator: publicou x=8.00 y=0.00 theta=0.00 v=2.00
-vehicle_simulator: publicou x=10.00 y=0.00 theta=0.00 v=2.00
-```
+---
 
-(FOTO AQUI DE: o `vehicle_simulator` publicando com `x` crescendo de 2 em 2 e o `vehicle_simulator_monitor` recebendo os mesmos valores.)
+## 3. Mapa do manual
 
-O `x` cresce de **2 em 2 metros** (`v · dt = 2 · 1`), e o `y` fica em zero, porque `theta` é zero. O veículo anda em linha reta, e o monitor mostra o mesmo, sem nenhuma alteração.
+| Capítulo | Assunto |
+|---|---|
+| [`01_estrutura_de_um_modulo.md`](01_estrutura_de_um_modulo.md) | Arquivos, responsabilidades, convenções e `Makefile` |
+| `02_configuracao_ipc.md` | Conexão com a central, parâmetros e encerramento |
+| `03_criacao_de_mensagens.md` | Struct, nome e formato da mensagem |
+| `04_subscribe.md` | Assinatura e handlers |
+| `05_publish.md` | Publicação |
+| `06_integracao_e_validacao.md` | Executar e validar a comunicação |
+| `07_boas_praticas.md` | Padrões e erros comuns |
+| `08_template_de_modulo.md` | Esqueleto reutilizável |
 
-## 4.4 Passo 2: curva
+---
 
-Para o veículo fazer uma curva, a orientação precisa mudar com o tempo. Acrescente uma linha em `simulation_step`, **antes** de atualizar a posição:
+## 4. Os módulos de exemplo
 
-```cpp
-static void
-simulation_step(void)
-{
-	theta += 0.1 * dt;
-	x += v * cos(theta) * dt;
-	y += v * sin(theta) * dt;
+O exemplo usa **dois módulos**, como acontece no ASTRO real: um dono da mensagem, que publica, e um consumidor, que assina.
 
-	publish_pose();
-}
-```
+| Módulo | Pasta | O que faz |
+|---|---|---|
+| `vehicle_simulator` | [`src/vehicle_simulator/`](file:///home/lume/astro/src/vehicle_simulator) | **Dono da mensagem** `astro_vehicle_simulator_pose`. Simula um veículo em movimento, publica sua pose e velocidade a cada 1 s e disponibiliza `_messages.h` e `libvehicle_simulator_interface.a` para os outros módulos. |
+| `vehicle_simulator_monitor` | [`src/vehicle_simulator_monitor/`](file:///home/lume/astro/src/vehicle_simulator_monitor) | **Consumidor**: faz link com a interface do `vehicle_simulator`, assina a mensagem, imprime a pose e **alerta** quando a velocidade passa de um limite lido do `.ini`. Só tem `_main.cpp` e `Makefile`. |
 
-A linha nova gira o veículo a **0,1 rad/s** (cerca de 5,7 graus por segundo). A cada passo ele aponta um pouco mais para o lado, e o deslocamento do passo acompanha a nova direção.
+A mensagem `astro_vehicle_simulator_pose` é uma versão enxuta da mensagem real de localização do ASTRO (`astro_localize_ackerman_globalpos`, que também tem posição, `v`, `timestamp` e `host`):
 
-```text
-vehicle_simulator: publicou x=1.99 y=0.20 theta=0.10 v=2.00
-vehicle_simulator: publicou x=3.95 y=0.60 theta=0.20 v=2.00
-vehicle_simulator: publicou x=5.86 y=1.19 theta=0.30 v=2.00
-vehicle_simulator: publicou x=7.70 y=1.97 theta=0.40 v=2.00
-vehicle_simulator: publicou x=9.46 y=2.93 theta=0.50 v=2.00
-```
-
-Agora o `theta` cresce de 0,10 em 0,10, e o `y` sai de zero, com o `x` avançando cada vez menos por passo: o veículo está **curvando para a esquerda**.
+| Campo | Tipo | Significado |
+|---|---|---|
+| `x`, `y` | `double` | Posição no referencial global (m) |
+| `theta` | `double` | Orientação (rad) |
+| `v` | `double` | Velocidade linear (m/s) |
+| `timestamp`, `host` | `double`, `char *` | Obrigatórios em toda mensagem |
 
 > [!NOTE]
-> A orientação é atualizada **antes** da posição. Isso é uma escolha: o passo usa a orientação já girada. Fazer ao contrário também seria uma simulação válida, com números ligeiramente diferentes. O que importa é manter a mesma ordem sempre.
+> Os dados são **simulados**: o `vehicle_simulator` faz o veículo andar numa curva suave com a velocidade oscilando entre 1 e 3 m/s, e calcula a posição a partir dela. Não é uma fonte real do ASTRO.
 
-## 4.5 Passo 3: velocidade variável
-
-Por fim, vamos fazer a velocidade oscilar, como se o motorista acelerasse e freasse. Precisamos de um **relógio da simulação**, uma variável que conta quantos segundos simulados já passaram. Acrescente ao estado:
-
-```cpp
-static double sim_time = 0.0;
-```
-
-E em `simulation_step`, antes das outras linhas:
-
-```cpp
-static void
-simulation_step(void)
-{
-	sim_time += dt;
-	v = 2.0 + 1.0 * sin(sim_time);
-	theta += 0.1 * dt;
-	x += v * cos(theta) * dt;
-	y += v * sin(theta) * dt;
-
-	publish_pose();
-}
-```
-
-A linha nova faz `v` oscilar em torno de 2 m/s, com amplitude de 1 m/s, ou seja, entre **1 e 3 m/s**.
+Saída real da execução dos dois juntos (limite de velocidade em 2,5 m/s):
 
 ```text
 vehicle_simulator: publicou x=2.83 y=0.28 theta=0.10 v=2.84
 vehicle_simulator: publicou x=5.68 y=0.86 theta=0.20 v=2.91
 vehicle_simulator: publicou x=7.72 y=1.49 theta=0.30 v=2.14
-vehicle_simulator: publicou x=8.87 y=1.98 theta=0.40 v=1.24
-vehicle_simulator: publicou x=9.78 y=2.48 theta=0.50 v=1.04
+...
+vehicle_simulator_monitor: x=2.83 y=0.28 theta=0.10 v=2.84 (de vehicle_simulator@lume-M, t=1795463342.478)
+vehicle_simulator_monitor: ALERTA velocidade 2.84 m/s acima do limite 2.50 m/s
+vehicle_simulator_monitor: x=7.72 y=1.49 theta=0.30 v=2.14 (de vehicle_simulator@lume-M, t=1795463344.480)
 ```
 
-(FOTO AQUI DE: o `vehicle_simulator` publicando com `v` variando e o `vehicle_simulator_monitor` recebendo a mesma sequência.)
-
-Repare na relação entre `v` e o deslocamento: nos primeiros passos, com `v` perto de 2,9 m/s, o `x` anda cerca de 2,8 m por passo; mais adiante, com `v` caindo para 1,04 m/s, ele anda só cerca de 0,9 m. A posição é **consistente** com a velocidade publicada.
-
-## 4.6 Checkpoint
-
-Neste ponto você tem:
-
-- [x] um `vehicle_simulator` que **simula o movimento** do veículo em passos, a partir de um estado (`x`, `y`, `theta`, `v`) guardado em variáveis `static`;
-- [x] a separação entre `simulation_step`, que **calcula** o novo estado, e `publish_pose`, que **publica**;
-- [x] uma constante `dt` que serve de intervalo do timer e de tempo de cada passo;
-- [x] um monitor que **continua igual** e mostra o veículo andando: a mudança foi só no publicador.
-
-**Próximo capítulo:** os valores do simulador ainda estão escritos no código: o intervalo `dt`, a velocidade média, a taxa de giro. Vamos passá-los para o **arquivo `.ini`**, lendo-os como **parâmetros**, e o monitor ganhará um **alerta de velocidade** com um limite também configurável.
+> [!NOTE]
+> O repositório já tem outros exemplos: [`src/simple_module_example`](file:///home/lume/astro/src/simple_module_example) (em C, só publish/subscribe) e [`src/skeleton_package`](file:///home/lume/astro/src/skeleton_package) (padrão sensor/filter com interface Qt). Este manual usa **C++**, linguagem da maioria dos módulos atuais (a API de IPC é a mesma).
