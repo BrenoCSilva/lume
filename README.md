@@ -119,7 +119,22 @@ O jeito normal de acompanhar o sistema é a janela do **`proccontrol_gui`**. Nel
 
 ## 6.5 Parando tudo
 
-Com tudo rodando, como parar? No terminal do `proccontrol`, aperte **Ctrl+C**. Ele encerra **todos** os módulos que iniciou e termina. Por baixo, o `proccontrol` chama o script **`astrokillall.sh`** (que fica em `bin/`), e esse script faz o trabalho:
+Com tudo rodando, como parar? No terminal do `proccontrol`, aperte **Ctrl+C**. Ele encerra **todos** os módulos que iniciou e termina.
+
+Por baixo, o `proccontrol` chama o script **`astrokillall.sh`** (que fica em `bin/`), e é esse script que faz o trabalho. Só que o `proccontrol` **descarta a saída do script**, então você não vê o que ele faz. O que aparece no terminal é só o `^C` e os avisos do próprio shell:
+
+![Ctrl+C no terminal do proccontrol: o shell avisa que ele foi parado e morto](img/06_encerrando_proccontrol.png)
+
+Depois do `^C`, o shell avisa `Stopped` e `Killed` para o `proccontrol`. Eles correspondem a dois passos do script, que veremos a seguir: o **congelamento** do `proccontrol` e o `SIGKILL` final. Os números entre colchetes (`[2]`, `[3]`) são os números de *job* do shell e variam de um terminal para outro.
+
+### O que o `astrokillall.sh` faz
+
+Para ver os passos do script, rode-o **à mão**, de dentro de `bin/`, com o **mesmo caminho** usado para subir o `proccontrol`:
+
+```bash
+cd $ASTRO_HOME/bin
+./astrokillall.sh ../src/vehicle_simulator/process-vehicle_simulator.ini
+```
 
 ```text
 Shutting down the whole 119745 process group and associated Docker processes:
@@ -133,17 +148,8 @@ Shutting down the whole 119745 process group and associated Docker processes:
 
 Os passos mostram a ideia: **congela** o `proccontrol` (para ele não reiniciar os módulos que estão morrendo), manda o sinal de término ao **grupo de processos inteiro**, espera 2 segundos e, o que ainda estiver vivo, **mata à força**.
 
-![Ctrl+C no terminal do proccontrol: o shell avisa que ele foi parado e morto](img/06_encerrando_proccontrol.png)
-
-Na captura, depois do `^C`, o shell avisa `Stopped` e `Killed` para o `proccontrol`: são o passo de congelamento e o `SIGKILL` final do script. Os números entre colchetes (`[2]`, `[3]`) são os números de *job* do shell e variam de um terminal para outro.
-
 > [!WARNING]
-> **Se o Ctrl+C parecer não fazer nada**, os módulos morrem e o `proccontrol` os **reinicia**, com PIDs novos. Isso acontece quando a pasta `bin/` **não está no `PATH`**: o `proccontrol` chama o script como `astrokillall.sh`, sem o `./`, e só o encontra se `bin/` estiver no `PATH`. Confira com `echo $PATH`. Enquanto não corrigir, pare tudo pelo próprio script, de dentro de `bin/`, **com o mesmo caminho** usado para subir o `proccontrol`:
->
-> ```bash
-> cd $ASTRO_HOME/bin
-> ./astrokillall.sh ../src/vehicle_simulator/process-vehicle_simulator.ini
-> ```
+> **Se o Ctrl+C parecer não fazer nada**, os módulos morrem e o `proccontrol` os **reinicia**, com PIDs novos. Isso acontece quando a pasta `bin/` **não está no `PATH`**: o `proccontrol` chama o script como `astrokillall.sh`, sem o `./`, e só o encontra se `bin/` estiver no `PATH`. Confira com `echo $PATH`. Enquanto não corrigir, pare tudo rodando o script à mão, como mostrado acima.
 >
 > O `proccontrol` **ignora o SIGTERM**: um `kill` comum nele não o encerra. Evite `kill -9` à mão em módulos soltos: o `proccontrol` os reinicia.
 
