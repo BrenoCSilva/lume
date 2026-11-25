@@ -1,129 +1,159 @@
-# 7. Boas práticas e erros comuns
+# 8. O template: criando um módulo novo
 
-Este capítulo não constrói nada novo. Ele reúne, em um só lugar, os cuidados que apareceram ao longo do manual, para você consultar quando for criar ou depurar um módulo. Cada item aponta o capítulo em que foi explicado.
+Ao longo do manual construímos, passo a passo, um par de módulos que se comunicam por IPC. Este capítulo entrega o resultado já pronto, em forma de **template**: um esqueleto de módulo, **compilável e testado**, para ser usado como ponto de partida. Em vez de recomeçar do capítulo 1 a cada módulo novo, você cria o seu a partir dele e troca só o que é específico.
 
-O capítulo termina com uma **tabela de erros comuns**: a mensagem que você vê, a causa provável e a solução.
+## 8.1 O que o template contém
 
-## 7.1 Organização do módulo
+O template são **dois módulos**, como no exemplo do manual: um que é **dono da mensagem** e a publica, e um que a **assina**. Ficam ao lado dos demais módulos, em `src/`:
 
-| Arquivo | Responsabilidade |
-|---|---|
-| `<modulo>_messages.h` | Só **descreve** a mensagem: struct, nome e formato |
-| `<modulo>_interface.h/.cpp` | As funções que **chamam o IPC** para essa mensagem: `define`, `publish`, `subscribe` |
-| `<modulo>_main.cpp` | A **lógica** do módulo: inicialização, handlers, publicação e `main` |
-| `Makefile` | Fontes, bibliotecas, alvos e o que publicar para outros módulos |
+```text
+src/template_module/                    ← dono da mensagem
+├── Makefile
+├── template_module_messages.h          # a mensagem: struct, nome e formato
+├── template_module_interface.h         # funções da mensagem: define, publish, subscribe, unsubscribe
+├── template_module_interface.cpp
+├── template_module_main.cpp            # main: conexão, parâmetros, publicação, Ctrl+C
+├── template_module.ini                 # parâmetros do módulo
+├── process-template_module.ini         # arquivo de processos (proccontrol)
+└── new_module.sh                       # script que cria um módulo novo a partir deste
 
-Quem usa a mensagem chama as funções da interface: **nunca escreve o nome nem o formato dela** em outro lugar (capítulo 2).
-
-### A ordem do `main`
-
-A ordem dos passos no `main` importa. Esta é a que usamos nos capítulos:
-
-```cpp
-	astro_ipc_initialize(argc, argv);                  // 1. conectar à central
-	astro_param_check_version(argv[0]);                // 2. conferir o param_daemon (se o módulo lê parâmetros)
-	signal(SIGINT, shutdown_module);                   // 3. tratar o Ctrl+C
-	read_parameters(argc, argv);                       // 4. ler os parâmetros
-	astro_vehicle_simulator_define_pose_message();     // 5. definir as mensagens que o módulo publica
-	astro_ipc_addPeriodicTimer(dt, ..., NULL);         // 6. assinar mensagens e registrar timers
-	astro_ipc_dispatch();                              // 7. entrar no laço de eventos
+src/template_module_consumer/           ← assina a mensagem
+├── Makefile
+└── template_module_consumer_main.cpp   # main: conexão, assinatura, handler, Ctrl+C
 ```
 
-| Passo | Por que nessa posição |
+A mensagem de exemplo, `astro_template_module_data`, tem um contador e um valor:
+
+| Campo | Tipo | Significado |
+|---|---|---|
+| `counter` | `int` | Número sequencial da mensagem |
+| `value` | `double` | Valor de exemplo |
+| `timestamp`, `host` | `double`, `char *` | Obrigatórios em toda mensagem |
+
+O `template_module` publica uma mensagem por intervalo `period`, que ele lê do `.ini`. O `template_module_consumer` assina a mensagem e imprime o que recebe. Executados juntos:
+
+```text
+template_module: publicou counter=0 value=0.00
+template_module: publicou counter=1 value=0.50
+template_module: publicou counter=2 value=1.00
+
+template_module_consumer: aguardando mensagens.
+template_module_consumer: counter=0 value=0.00 (de template_module@lume-M, t=1795630784.112)
+template_module_consumer: counter=1 value=0.50 (de template_module@lume-M, t=1795630785.112)
+template_module_consumer: counter=2 value=1.00 (de template_module@lume-M, t=1795630786.113)
+```
+
+## 8.2 Criando um módulo novo
+
+O script `new_module.sh` copia os dois módulos do template e **troca o nome** em todos os arquivos. Execute-o dentro da pasta do `template_module`, passando o nome do seu módulo, em `snake_case`:
+
+```bash
+cd $ASTRO_HOME/src/template_module
+./new_module.sh meu_sensor
+```
+
+```text
+Modulos criados:
+  /home/lume/astro/src/meu_sensor
+  /home/lume/astro/src/meu_sensor_consumer
+
+Proximos passos:
+  1. Edite meu_sensor_messages.h (campos da mensagem) e a main de cada modulo.
+  2. Compile, nesta ordem:  (cd /home/lume/astro/src/meu_sensor && make)  e depois  (cd /home/lume/astro/src/meu_sensor_consumer && make)
+  3. Inicie: central, param_daemon ../src/meu_sensor/meu_sensor.ini, e os dois modulos.
+```
+
+Foram criados **dois módulos novos**, `meu_sensor` e `meu_sensor_consumer`, com tudo renomeado:
+
+| No template | No seu módulo |
 |---|---|
-| Conectar primeiro | Sem a conexão, nenhuma chamada de IPC funciona (cap. 1) |
-| Parâmetros **antes** dos timers | O timer usa valores lidos do `.ini`, como o `dt` (cap. 5) |
-| Definir antes de publicar | A `central` só entrega mensagens que conhece (cap. 2) |
-| `astro_ipc_dispatch()` por último | Ela não retorna: é onde o módulo "vive" e responde a mensagens e timers (cap. 1) |
+| `template_module_messages.h` | `meu_sensor_messages.h` |
+| `astro_template_module_data_message` | `astro_meu_sensor_data_message` |
+| `ASTRO_TEMPLATE_MODULE_DATA_MESSAGE_NAME` | `ASTRO_MEU_SENSOR_DATA_MESSAGE_NAME` |
+| `template_module_period` (no `.ini`) | `meu_sensor_period` |
+| `MODULE_NAME = TEMPLATE MODULE` | `MODULE_NAME = MEU SENSOR` |
 
-## 7.2 Mensagens
+O script **só cria arquivos**: não altera nenhum arquivo do sistema. Os artefatos de compilação do template (`.o`, bibliotecas, executáveis) não são copiados. O script recusa:
 
-| Faça | Por quê | Cap. |
+| Situação | Resposta |
+|---|---|
+| Nome que não está em `snake_case` (por exemplo `MeuModulo` ou `9abc`) | Erro, nada é criado |
+| O próprio nome do template | Erro, nada é criado |
+| Uma das pastas já existe | Erro, nada é sobrescrito |
+
+## 8.3 O que trocar em cada arquivo
+
+O template marca com o comentário `TROQUE` os pontos que você precisa adaptar:
+
+| Arquivo | O que trocar |
+|---|---|
+| `<nome>_messages.h` | Os **campos** da struct e o `_FMT`, mantendo os dois **espelhados**. Escreva a **unidade** e o referencial de cada campo |
+| `<nome>_main.cpp` | Em `publish_data()`, **preencher os dados reais**. Em `read_parameters()`, **um item por parâmetro** |
+| `<nome>_consumer_main.cpp` | No handler, **tratar os dados** recebidos. Lembre-se de que eles só valem dentro do handler |
+| `<nome>.ini` | Os **parâmetros** do módulo, com unidade no comentário |
+
+O restante (a conexão, a interface, o `Makefile`, o tratamento do Ctrl+C) normalmente **não precisa mudar**.
+
+## 8.4 Passo a passo
+
+Depois de criar o módulo com o script:
+
+1. **Defina a mensagem.** Em `<nome>_messages.h`, troque os campos da struct e o `_FMT`, mantendo-os espelhados (capítulo 2). O template chama a mensagem de `data`. Se quiser outro nome (por exemplo `pose`), troque `data` e `DATA` pelo novo nome nos símbolos `..._data_message`, `..._DATA_MESSAGE_...`, `publish_data` e `data_message_handler`, nos três lugares onde aparecem: a mensagem, a interface e as mains.
+2. **Publique dados reais.** Em `publish_data()`, no `<nome>_main.cpp`, preencha a struct com o que o seu módulo produz (capítulos 2 e 4).
+3. **Configure os parâmetros.** Acrescente cada parâmetro à lista de `read_parameters()` e ao `<nome>.ini` (capítulo 5). Leia-os **antes** de usá-los.
+4. **Trate os dados no consumidor.** Em `data_message_handler`, use os campos recebidos e **copie** o que precisar guardar (capítulo 3).
+5. **Compile, na ordem:** primeiro o dono da mensagem, depois o consumidor.
+
+   ```bash
+   cd $ASTRO_HOME/src/meu_sensor && make
+   cd $ASTRO_HOME/src/meu_sensor_consumer && make
+   ```
+
+   O dono vem primeiro porque é ele que **publica** o header e a biblioteca da interface, de que o consumidor precisa (capítulo 3).
+6. **Teste à mão**, em terminais separados, com a `central` recém-iniciada (capítulos 1 e 5):
+
+   ```bash
+   ./central
+   ./param_daemon ../src/meu_sensor/meu_sensor.ini
+   ./meu_sensor_consumer
+   ./meu_sensor
+   ```
+
+7. **Integre.** Ajuste o `process-<nome>.ini` e suba tudo com o `proccontrol`, como no capítulo 6. Inclua os dois módulos em uma das listas `PACKAGES_TIER` do `src/Makefile`, para entrarem no build completo.
+8. **Confira o checklist** do capítulo 7 (seção 7.8) antes de considerar o módulo pronto.
+
+## 8.5 Onde está cada conceito
+
+Se você precisa lembrar **como** ou **por quê** algo é feito no template, esta tabela aponta o arquivo e o capítulo:
+
+| Conceito | Onde está no template | Capítulo |
 |---|---|---|
-| Mantenha a **struct e o formato** (`_FMT`) espelhados, mesma ordem | O compilador não vê o formato. Se divergirem, os dados chegam trocados, **sem nenhum erro** | 2 |
-| Termine toda struct com `double timestamp` e `char *host` | São obrigatórios em toda mensagem. A função de `publish` os preenche | 2 |
-| Escreva **unidade e referencial** de cada campo nos comentários | Dois módulos podem entender `v` de formas diferentes (m/s ou km/h) sem o compilador saber | 2 |
-| Use `extern "C"` no `_messages.h` e no `_interface.h` | A biblioteca de IPC é em C | 2 |
-| **Defina** a mensagem no módulo que a publica | A `central` lembra mensagens já definidas: sem a definição, o erro pode ficar escondido até uma `central` nova | 2 |
-| **Verifique** o resultado de toda chamada de IPC (`astro_test_ipc_exit`) | O erro aparece com o nome da mensagem, e o módulo não segue em estado inconsistente | 2 |
-| Nomeie as funções da interface `astro_<modulo>_<ação>_<mensagem>_message` | Padrão que facilita encontrar e reconhecer as funções | 2 |
+| Conectar à `central`, `dispatch` | `main`: `astro_ipc_initialize` e `astro_ipc_dispatch` | 1 |
+| Encerrar com Ctrl+C | `shutdown_module` | 1 |
+| A mensagem: struct, nome e formato | `<nome>_messages.h` | 2 |
+| `define`, `publish` (e `timestamp` e `host`) | `<nome>_interface.cpp` | 2 |
+| Publicação periódica com timer | `main` do dono: `astro_ipc_addPeriodicTimer` | 2 |
+| `subscribe`, handler, `LATEST` | `<nome>_interface.cpp` e a `main` do consumidor | 3 |
+| Publicar a interface (`PUBLIC_*`, biblioteca) | `Makefile` do dono | 3 |
+| Parâmetros: `astro_param_t`, `read_parameters` | `main` do dono e `<nome>.ini` | 5 |
+| Arquivo de processos | `process-<nome>.ini` | 6 |
+| Ordem dos passos do `main` | Comentários numerados na `main` | 7 |
 
-> [!WARNING]
-> **O header publicado é uma cópia.** Depois de mudar a struct ou o formato, rode `make` no módulo **dono** da mensagem para atualizar a cópia em `include/astro/`, e **recompile todos os módulos** que a usam. Se o publicador e o assinante tiverem structs diferentes, nada avisa (cap. 3).
+## 8.6 Acrescentando uma segunda mensagem
 
-## 7.3 Assinando mensagens e escrevendo handlers
+Para o módulo publicar mais de uma mensagem, repita para cada uma o mesmo conjunto de peças:
 
-| Faça | Por quê | Cap. |
-|---|---|---|
-| Use `ASTRO_SUBSCRIBE_LATEST` para dados de **estado** (pose, velocidade) | Só o valor mais recente importa, e as mensagens antigas são descartadas se o handler estiver ocupado | 3 |
-| Use `ASTRO_SUBSCRIBE_ALL` quando **perder uma mensagem** causa problema | Mantém uma fila longa (até 1000 mensagens) | 3 |
-| Leia os dados **dentro do handler**; **copie** o que precisar guardar | O IPC reaproveita a memória a cada mensagem: o ponteiro `host` e outras strings deixam de valer depois do handler | 3 |
-| Mantenha o handler **rápido** | Ele roda no mesmo laço do `dispatch`: um handler lento atrasa as mensagens e os timers | 3 |
+1. Em `<nome>_messages.h`: uma **struct** e as macros `..._MESSAGE_NAME` e `..._MESSAGE_FMT`, dela, mantendo struct e formato espelhados.
+2. Em `<nome>_interface.h/.cpp`: as funções `define`, `publish` (e, se alguém for assinar, `subscribe` e `unsubscribe`) da nova mensagem, no padrão `astro_<nome>_<ação>_<mensagem>_message`.
+3. Na `main` do dono: **uma chamada à função `define`** da nova mensagem, junto com a da primeira, antes de qualquer publicação.
 
-## 7.4 `Makefile` e build
+Nada muda no `Makefile`: o header e a biblioteca da interface já estão publicados.
 
-| Faça | Por quê | Cap. |
-|---|---|---|
-| Inclua no `LFLAGS`: `-lglobal -lipc -lpthread`, **nessa ordem** (`-lglobal` antes de `-lipc`) | Fora de ordem ou sem o `-lpthread`, o link falha | 1 |
-| Acrescente `-lparam_interface` se o módulo lê parâmetros | O header vem com `astro.h`, mas o código está na biblioteca | 5 |
-| Para **quem consome** uma interface, acrescente `-l<modulo>_interface` | O header basta para compilar, mas o link precisa do código | 3 |
-| Para **quem oferece** uma interface, coloque a biblioteca no `TARGETS` e os arquivos em `PUBLIC_INCLUDES` e `PUBLIC_LIBRARIES` | O `TARGETS` constrói, e o `PUBLIC_*` só **copia** o que já foi construído | 3 |
-| Mantenha no `SOURCES` todo `.cpp` do módulo, inclusive o da interface | É por estar lá que ele é compilado e entra na biblioteca | 3 |
+## 8.7 Checkpoint
 
-## 7.5 Parâmetros
+Chegamos ao fim do manual. Ao longo dos capítulos você construiu, e agora tem como ponto de partida reutilizável:
 
-| Faça | Por quê | Cap. |
-|---|---|---|
-| Nomeie `<modulo>_<parametro>` | Padrão do `.ini`, e é como o nome é montado a partir do módulo e da variável | 5 |
-| Faça o **tipo** do parâmetro combinar com o tipo da variável em C | `ASTRO_PARAM_DOUBLE` com `double`, `ASTRO_PARAM_INT` com `int`... | 5 |
-| Acrescente todo parâmetro novo ao `.ini` | O módulo termina se o `param_daemon` não o conhecer | 5 |
-| **Reinicie o `param_daemon` e o módulo** ao editar o `.ini` | O `param_daemon` lê o arquivo uma vez, ao iniciar | 5 |
-| Escreva a **unidade** do parâmetro (no comentário do `.ini`) | Mesmo motivo das mensagens: o valor sozinho é ambíguo | 5 |
-
-## 7.6 Executando e testando
-
-| Faça | Por quê | Cap. |
-|---|---|---|
-| Exporte `ASTRO_HOME` antes de compilar | Sem ele o `make` aborta | 1 |
-| Inicie a **`central` primeiro**, depois o `param_daemon` | Todo módulo precisa da `central`, e os que leem parâmetros precisam do `param_daemon` | 1, 5 |
-| **Reinicie a `central`** ao testar mensagens novas | Ela lembra definições de execuções anteriores e pode esconder uma definição esquecida | 2 |
-| Trate o **Ctrl+C** (`shutdown_module`) | Dá ao módulo um ponto de saída controlado para desconectar e fazer limpeza | 1 |
-| Nos arquivos de processos, deixe `watch_heartbeats` em `0` | É o valor usado nos arquivos do projeto | 6 |
-
-## 7.7 Erros comuns
-
-Mensagens reais que apareceram no manual, o que significam e como resolver:
-
-| O que você vê | Causa provável | Solução | Cap. |
-|---|---|---|---|
-| `ASTRO_HOME environment variable not set` (no `make`) | A variável não foi exportada | `export ASTRO_HOME=/caminho/do/astro` | 1 |
-| `Could not connect to central.` | A `central` não está no ar | Iniciar `./central` antes do módulo | 1 |
-| `unable to bind TCP/IP socket for listening` (ao iniciar a `central`) | A porta ainda está presa por uma execução anterior | Esperar alguns segundos e tentar de novo | 1 |
-| `undefined reference to IPC_perror` (no link) | `-lipc` antes de `-lglobal` | Colocar `-lglobal` antes de `-lipc` | 1 |
-| `undefined reference to pthread_mutexattr_init` (no link) | Falta `-lpthread` | Acrescentar `-lpthread` ao `LFLAGS` | 1 |
-| `IPC_ERROR : Could not publish ... IPC message not defined` | A mensagem não foi definida (e a `central` não a conhecia) | Chamar a função `define` no `main`, antes de publicar | 2 |
-| `fatal error: astro/<modulo>_interface.h: No such file or directory` | O header da interface não foi publicado | Rodar `make` no módulo dono, com `PUBLIC_INCLUDES` | 3 |
-| `undefined reference to astro_<modulo>_..._message` (no link) | Falta o `-l<modulo>_interface` no `LFLAGS` de quem consome | Acrescentá-lo | 3 |
-| `undefined reference to astro_param_install_params` (ou `astro_param_check_version`) | Falta o `-lparam_interface` | Acrescentá-lo ao `LFLAGS` | 5 |
-| `The parameter server contains no definition for <nome>` | O parâmetro não está no `.ini` | Acrescentá-lo e reiniciar o `param_daemon` | 5 |
-| `Message timed out : message astro_param_query_version` seguido de `Did you remember to start the parameter server?` | O `param_daemon` não está no ar | Iniciar o `param_daemon` | 5 |
-| **Nenhuma mensagem de erro**, mas os dados chegam trocados ou sem sentido | Struct e formato dessincronizados, ou header publicado desatualizado | Conferir a struct e o `_FMT`; rodar `make` no módulo dono e recompilar quem usa a mensagem | 2, 3 |
-| Um texto (`host`, por exemplo) vira lixo depois do handler | O ponteiro da string foi guardado e o IPC reaproveitou a memória | Copiar a string dentro do handler | 3 |
-| Mudei o `.ini` e nada mudou | O `param_daemon` e o módulo não foram reiniciados | Reiniciar os dois | 5 |
-
-## 7.8 Checklist para um módulo novo
-
-Antes de considerar o módulo pronto, confira:
-
-- [ ] A struct e o `_FMT` da mensagem são **espelhados**, e há `timestamp` e `host` no fim.
-- [ ] Os campos da struct têm **unidade e referencial** nos comentários.
-- [ ] O módulo dono da mensagem tem **`define`** e **`publish`**, e os chama na ordem certa.
-- [ ] O `Makefile` tem o `LFLAGS` completo, o `TARGETS`, e `PUBLIC_INCLUDES` e `PUBLIC_LIBRARIES` para o que outros módulos usam.
-- [ ] Quem consome a mensagem usa **só as funções da interface**.
-- [ ] Os **handlers** não guardam ponteiros de strings recebidas.
-- [ ] Os parâmetros estão **no `.ini`**, são lidos **antes** de serem usados, e o `.ini` foi lido por um `param_daemon` reiniciado.
-- [ ] O **Ctrl+C** é tratado com um `shutdown_module`.
-- [ ] O módulo foi testado com uma **`central` recém-iniciada**.
-- [ ] O módulo está no **arquivo de processos** e nas **listas de pacotes** do `src/Makefile`.
-
-**Próximo capítulo:** o **template**. Reuniremos tudo o que construímos em um esqueleto de módulo pronto para copiar, com os arquivos, o `Makefile` e o passo a passo para criar um módulo novo a partir dele.
+- [x] um **template** de módulo, compilável, com o dono da mensagem e um consumidor, em `src/template_module/` e `src/template_module_consumer/`;
+- [x] um **script**, `new_module.sh`, que cria um módulo novo a partir dele, com tudo renomeado;
+- [x] os **pontos de adaptação** marcados com `TROQUE`, e o passo a passo para chegar a um módulo seu funcionando;
+- [x] o caminho de volta aos capítulos para cada conceito do template.
