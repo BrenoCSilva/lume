@@ -1,180 +1,129 @@
-# 6. Integrando os módulos ao ASTRO
+# 7. Boas práticas e erros comuns
 
-Até aqui, para rodar o exemplo você abriu um terminal para a `central`, outro para o `param_daemon`, outro para o `vehicle_simulator` e outro para o `vehicle_simulator_monitor`. Em um robô real são dezenas de módulos, e ninguém sobe cada um à mão.
+Este capítulo não constrói nada novo. Ele reúne, em um só lugar, os cuidados que apareceram ao longo do manual, para você consultar quando for criar ou depurar um módulo. Cada item aponta o capítulo em que foi explicado.
 
-No ASTRO, os módulos sobem **juntos**, descritos em um arquivo de texto, por um programa chamado **`proccontrol`**. Neste capítulo vamos integrar nossos módulos a esse mecanismo:
+O capítulo termina com uma **tabela de erros comuns**: a mensagem que você vê, a causa provável e a solução.
 
-1. descrever os módulos em um **arquivo de processos**;
-2. subir tudo com o `proccontrol` e acompanhar o **estado e a saída** dos módulos, pela janela de controle (a GUI);
-3. **parar** tudo corretamente;
-4. incluir os módulos no **build completo** do ASTRO.
+## 7.1 Organização do módulo
 
-## 6.1 O `proccontrol` e o arquivo de processos
-
-O `proccontrol` lê um **arquivo de processos**, inicia cada módulo listado nele, **acompanha** se estão vivos e, se necessário, os reinicia.
-
-```mermaid
-flowchart LR
-    F["arquivo de processos<br/>(process-*.ini)"] --> PC["proccontrol"]
-    PC -- "inicia e vigia" --> PD["param_daemon"]
-    PC -- "inicia e vigia" --> S["vehicle_simulator"]
-    PC -- "inicia e vigia" --> M["vehicle_simulator_monitor"]
-    PC -- "inicia" --> G["proccontrol_gui<br/>(janela de controle)"]
-```
-
-Entre os módulos que ele inicia está o **`proccontrol_gui`**, a janela que mostra o estado de cada módulo (seção 6.3).
-
-A única coisa que o `proccontrol` **não** inicia é a `central`: ele mesmo precisa dela para funcionar, então ela é sempre iniciada à parte, antes.
-
-## 6.2 O arquivo de processos
-
-Cada linha do arquivo descreve um módulo, com cinco colunas separadas por espaços:
-
-| Coluna | Significado |
+| Arquivo | Responsabilidade |
 |---|---|
-| **nome do módulo** | O nome pelo qual o `proccontrol` conhece o módulo |
-| **grupo** | Um rótulo para agrupar módulos (por exemplo `support`, `planner`). Serve para parar ou iniciar um grupo inteiro |
-| **requested_state** | `1`: o módulo deve estar rodando (o `proccontrol` o inicia e, se ele morrer, o reinicia). `0`: não é iniciado |
-| **watch_heartbeats** | `0`: o `proccontrol` não vigia o módulo. É o valor usado nos arquivos de processos do projeto, e o que usaremos. Com `1`, o `proccontrol` passaria a exigir do módulo mensagens periódicas de "estou vivo" (*heartbeats*) e reiniciaria quem deixasse de enviá-las |
-| **comando** | A linha de comando, **como seria digitada na pasta `bin/`** |
+| `<modulo>_messages.h` | Só **descreve** a mensagem: struct, nome e formato |
+| `<modulo>_interface.h/.cpp` | As funções que **chamam o IPC** para essa mensagem: `define`, `publish`, `subscribe` |
+| `<modulo>_main.cpp` | A **lógica** do módulo: inicialização, handlers, publicação e `main` |
+| `Makefile` | Fontes, bibliotecas, alvos e o que publicar para outros módulos |
 
-Crie o arquivo `process-vehicle_simulator.ini` na pasta do módulo:
+Quem usa a mensagem chama as funções da interface: **nunca escreve o nome nem o formato dela** em outro lugar (capítulo 2).
 
-```text
-# nome                       grupo       requested  watch   comando
- param_daemon                support     1          0       ./param_daemon ../src/vehicle_simulator/vehicle_simulator.ini
- proccontrol_gui             support     1          0       ./proccontrol_gui
- vehicle_simulator           simulator   1          0       ./vehicle_simulator
- vehicle_simulator_monitor   monitor     1          0       ./vehicle_simulator_monitor
+### A ordem do `main`
+
+A ordem dos passos no `main` importa. Esta é a que usamos nos capítulos:
+
+```cpp
+	astro_ipc_initialize(argc, argv);                  // 1. conectar à central
+	astro_param_check_version(argv[0]);                // 2. conferir o param_daemon (se o módulo lê parâmetros)
+	signal(SIGINT, shutdown_module);                   // 3. tratar o Ctrl+C
+	read_parameters(argc, argv);                       // 4. ler os parâmetros
+	astro_vehicle_simulator_define_pose_message();     // 5. definir as mensagens que o módulo publica
+	astro_ipc_addPeriodicTimer(dt, ..., NULL);         // 6. assinar mensagens e registrar timers
+	astro_ipc_dispatch();                              // 7. entrar no laço de eventos
 ```
 
-As linhas começadas por `#` são comentários. Duas linhas merecem atenção:
+| Passo | Por que nessa posição |
+|---|---|
+| Conectar primeiro | Sem a conexão, nenhuma chamada de IPC funciona (cap. 1) |
+| Parâmetros **antes** dos timers | O timer usa valores lidos do `.ini`, como o `dt` (cap. 5) |
+| Definir antes de publicar | A `central` só entrega mensagens que conhece (cap. 2) |
+| `astro_ipc_dispatch()` por último | Ela não retorna: é onde o módulo "vive" e responde a mensagens e timers (cap. 1) |
 
-* O `param_daemon` também é um módulo da lista, com o `.ini` do capítulo 5 como argumento: ele passa a subir junto com os outros.
-* O **`proccontrol_gui`** é a **janela de controle** do `proccontrol`. Ela entra na lista como qualquer outro módulo, e é por ela que você acompanha o estado de cada módulo (seção 6.3).
+## 7.2 Mensagens
 
-> [!NOTE]
-> Os arquivos de processos dos robôs reais ficam em `bin/` e se chamam `process-*.ini`. Vamos deixar o do exemplo na pasta do módulo, como fizemos com o `vehicle_simulator.ini`, para não misturar o exemplo com os arquivos do sistema.
-
-### Outros recursos dos arquivos de processos
-
-Os arquivos de processos do projeto usam ainda alguns recursos que o nosso exemplo não precisa, mas que você vai encontrar:
-
-| Recurso | Exemplo | Para que serve |
+| Faça | Por quê | Cap. |
 |---|---|---|
-| `requested_state` `0` | `... monitor  0  0  ./vehicle_simulator_monitor` | O módulo fica **listado, mas parado**: não sobe sozinho, e pode ser iniciado depois pela GUI |
-| Variáveis `SET` | `SET PARAM_INI=../src/vehicle_simulator/vehicle_simulator.ini` e depois `./param_daemon ${PARAM_INI}` | Define um valor uma vez e o reutiliza nas linhas de comando, sem repetir caminhos longos |
-| Redirecionamento | `./simulator_ackerman > sim.txt` | Envia a saída do módulo para um arquivo |
-
-## 6.3 Subindo tudo com o `proccontrol`
-
-Agora você precisa de só **dois terminais**. No primeiro, a `central`:
-
-```bash
-cd $ASTRO_HOME/bin
-./central
-```
-
-No segundo, o `proccontrol` com o arquivo de processos:
-
-```bash
-cd $ASTRO_HOME/bin
-./proccontrol ../src/vehicle_simulator/process-vehicle_simulator.ini
-```
-
-```text
-0: param_daemon support 1 0 ./param_daemon ../src/vehicle_simulator/vehicle_simulator.ini
-1: vehicle_simulator simulator 1 0 ./vehicle_simulator
-2: vehicle_simulator_monitor monitor 1 0 ./vehicle_simulator_monitor
-ASTRO - LUME ROBOTICS SYSTEM Version 0.8.0
-
-PROCCONTROL (119520): Spawned ./param_daemon ../src/vehicle_simulator/vehicle_simulator.ini (119525)
-PROCCONTROL (119520): Spawned ./vehicle_simulator (119526)
-PROCCONTROL (119520): Spawned ./vehicle_simulator_monitor (119527)
-```
-
-Ele leu o arquivo, mostrou as três linhas numeradas e **iniciou** os três módulos (`Spawned`, com o PID de cada um).
-
-Com o `proccontrol_gui` na lista, há também uma linha `Spawned` para ele, e **uma janela se abre**: a janela de controle do `proccontrol`.
-
-(FOTO AQUI DE: os dois terminais, com a `central` no ar e o `proccontrol` mostrando as linhas `Spawned`, e ao lado a janela do `proccontrol_gui` com os três módulos.)
-
-(PREENCHER: o que a janela mostra para cada módulo (nome, grupo, estado, PID) e como se reconhece um módulo "vivo" e um parado.)
-
-> [!NOTE]
-> Como o `proccontrol` inicia o `param_daemon` ao mesmo tempo que os módulos que dependem dele, pode aparecer **uma** linha `IPC_ERROR : Message timed out : message astro_param_query_version` logo na partida: um módulo perguntou antes de o `param_daemon` estar pronto. Nos testes, os módulos subiram normalmente mesmo assim. Se ela se repetir sem parar, o problema é outro (veja o capítulo 5, "`param_daemon` fora do ar").
-
-## 6.4 Vendo o estado e a saída dos módulos
-
-O terminal do `proccontrol` mostra **só** os `Spawned`. Nenhuma linha do tipo `vehicle_simulator: publicou ...`, nem do monitor. Isso é proposital: o `proccontrol` **captura** a saída de cada módulo (a saída padrão e a de erro) para dentro dele, em vez de deixá-la ir para o terminal. Com dezenas de módulos, o terminal ficaria ilegível.
-
-### Pela janela de controle (a GUI)
-
-O jeito normal de acompanhar o sistema é a janela do **`proccontrol_gui`**. Nela você vê **o estado de cada módulo da lista**, se está rodando ou parado, e **a saída de cada um**.
-
-(FOTO AQUI DE: a janela do `proccontrol_gui` com o `vehicle_simulator` e o `vehicle_simulator_monitor` rodando, e a saída de um deles à mostra.)
-
-(PREENCHER: como abrir a saída de um módulo na janela, e o que mais ela permite: iniciar ou parar um módulo ou um grupo inteiro, e ligar ou desligar a exibição da saída.)
-
-## 6.5 Parando tudo
-
-Com tudo rodando, como parar? No terminal do `proccontrol`, aperte **Ctrl+C**. Ele encerra **todos** os módulos que iniciou e termina.
-
-![Ctrl+C no terminal do proccontrol: o shell avisa que ele foi parado e morto](img/06_encerrando_proccontrol.png)
-
-O terminal mostra só o `^C` e os avisos do próprio shell, `Stopped` e `Killed`: o `proccontrol` chama, por baixo, um script (o `astrokillall.sh`) que o congela e depois o mata junto com os módulos, e descarta a saída do script. Os números entre colchetes (`[2]`, `[3]`) são os números de *job* do shell e variam de um terminal para outro.
+| Mantenha a **struct e o formato** (`_FMT`) espelhados, mesma ordem | O compilador não vê o formato. Se divergirem, os dados chegam trocados, **sem nenhum erro** | 2 |
+| Termine toda struct com `double timestamp` e `char *host` | São obrigatórios em toda mensagem. A função de `publish` os preenche | 2 |
+| Escreva **unidade e referencial** de cada campo nos comentários | Dois módulos podem entender `v` de formas diferentes (m/s ou km/h) sem o compilador saber | 2 |
+| Use `extern "C"` no `_messages.h` e no `_interface.h` | A biblioteca de IPC é em C | 2 |
+| **Defina** a mensagem no módulo que a publica | A `central` lembra mensagens já definidas: sem a definição, o erro pode ficar escondido até uma `central` nova | 2 |
+| **Verifique** o resultado de toda chamada de IPC (`astro_test_ipc_exit`) | O erro aparece com o nome da mensagem, e o módulo não segue em estado inconsistente | 2 |
+| Nomeie as funções da interface `astro_<modulo>_<ação>_<mensagem>_message` | Padrão que facilita encontrar e reconhecer as funções | 2 |
 
 > [!WARNING]
-> **Se o Ctrl+C parecer não fazer nada**, os módulos morrem e o `proccontrol` os **reinicia**, com PIDs novos. Isso acontece quando a pasta `bin/` **não está no `PATH`**: o `proccontrol` chama o script como `astrokillall.sh`, sem o `./`, e só o encontra se `bin/` estiver no `PATH`. Confira com `echo $PATH`. Enquanto não corrigir, pare tudo rodando o script à mão, de dentro de `bin/` e com o **mesmo caminho** usado para subir o `proccontrol`:
->
-> ```bash
-> cd $ASTRO_HOME/bin
-> ./astrokillall.sh ../src/vehicle_simulator/process-vehicle_simulator.ini
-> ```
->
-> O `proccontrol` **ignora o SIGTERM**: um `kill` comum nele não o encerra.
+> **O header publicado é uma cópia.** Depois de mudar a struct ou o formato, rode `make` no módulo **dono** da mensagem para atualizar a cópia em `include/astro/`, e **recompile todos os módulos** que a usam. Se o publicador e o assinante tiverem structs diferentes, nada avisa (cap. 3).
 
-A janela do `proccontrol_gui` permite também **parar e iniciar módulos individualmente**, ou um **grupo** inteiro, sem derrubar o resto do sistema. É para isso que serve a coluna do grupo no arquivo de processos.
+## 7.3 Assinando mensagens e escrevendo handlers
 
-(PREENCHER: como parar e iniciar um módulo e um grupo pela janela, na prática.)
+| Faça | Por quê | Cap. |
+|---|---|---|
+| Use `ASTRO_SUBSCRIBE_LATEST` para dados de **estado** (pose, velocidade) | Só o valor mais recente importa, e as mensagens antigas são descartadas se o handler estiver ocupado | 3 |
+| Use `ASTRO_SUBSCRIBE_ALL` quando **perder uma mensagem** causa problema | Mantém uma fila longa (até 1000 mensagens) | 3 |
+| Leia os dados **dentro do handler**; **copie** o que precisar guardar | O IPC reaproveita a memória a cada mensagem: o ponteiro `host` e outras strings deixam de valer depois do handler | 3 |
+| Mantenha o handler **rápido** | Ele roda no mesmo laço do `dispatch`: um handler lento atrasa as mensagens e os timers | 3 |
 
-Depois de parar o `proccontrol`, a `central` continua no ar: encerre-a com Ctrl+C no terminal dela.
+## 7.4 `Makefile` e build
 
-## 6.6 Incluindo os módulos no build completo
+| Faça | Por quê | Cap. |
+|---|---|---|
+| Inclua no `LFLAGS`: `-lglobal -lipc -lpthread`, **nessa ordem** (`-lglobal` antes de `-lipc`) | Fora de ordem ou sem o `-lpthread`, o link falha | 1 |
+| Acrescente `-lparam_interface` se o módulo lê parâmetros | O header vem com `astro.h`, mas o código está na biblioteca | 5 |
+| Para **quem consome** uma interface, acrescente `-l<modulo>_interface` | O header basta para compilar, mas o link precisa do código | 3 |
+| Para **quem oferece** uma interface, coloque a biblioteca no `TARGETS` e os arquivos em `PUBLIC_INCLUDES` e `PUBLIC_LIBRARIES` | O `TARGETS` constrói, e o `PUBLIC_*` só **copia** o que já foi construído | 3 |
+| Mantenha no `SOURCES` todo `.cpp` do módulo, inclusive o da interface | É por estar lá que ele é compilado e entra na biblioteca | 3 |
 
-Até agora compilamos cada módulo entrando na sua pasta e rodando `make`. O ASTRO completo é compilado por um `make` na pasta `src/`, que constrói **todos os módulos conhecidos**, em uma ordem que respeita as dependências. Nossos módulos ainda **não são conhecidos** por esse `make`:
+## 7.5 Parâmetros
 
-```bash
-cd $ASTRO_HOME/src
-make phase1@vehicle_simulator
-```
+| Faça | Por quê | Cap. |
+|---|---|---|
+| Nomeie `<modulo>_<parametro>` | Padrão do `.ini`, e é como o nome é montado a partir do módulo e da variável | 5 |
+| Faça o **tipo** do parâmetro combinar com o tipo da variável em C | `ASTRO_PARAM_DOUBLE` com `double`, `ASTRO_PARAM_INT` com `int`... | 5 |
+| Acrescente todo parâmetro novo ao `.ini` | O módulo termina se o `param_daemon` não o conhecer | 5 |
+| **Reinicie o `param_daemon` e o módulo** ao editar o `.ini` | O `param_daemon` lê o arquivo uma vez, ao iniciar | 5 |
+| Escreva a **unidade** do parâmetro (no comentário do `.ini`) | Mesmo motivo das mensagens: o valor sozinho é ambíguo | 5 |
 
-```text
-make: *** No rule to make target 'phase1@vehicle_simulator'.  Stop.
-```
+## 7.6 Executando e testando
 
-O `Makefile` de `src/` tem listas de pacotes, as `PACKAGES_TIER0` a `PACKAGES_TIER5`, **em ordem de dependência**: a primeira (`ipc global`) tem a base de tudo, e as seguintes dependem das anteriores. Para incluir os módulos, acrescente-os a uma dessas listas. Os nossos usam só módulos das primeiras listas, então cabem na **última**:
+| Faça | Por quê | Cap. |
+|---|---|---|
+| Exporte `ASTRO_HOME` antes de compilar | Sem ele o `make` aborta | 1 |
+| Inicie a **`central` primeiro**, depois o `param_daemon` | Todo módulo precisa da `central`, e os que leem parâmetros precisam do `param_daemon` | 1, 5 |
+| **Reinicie a `central`** ao testar mensagens novas | Ela lembra definições de execuções anteriores e pode esconder uma definição esquecida | 2 |
+| Trate o **Ctrl+C** (`shutdown_module`) | Dá ao módulo um ponto de saída controlado para desconectar e fazer limpeza | 1 |
+| Nos arquivos de processos, deixe `watch_heartbeats` em `0` | É o valor usado nos arquivos do projeto | 6 |
 
-```makefile
-PACKAGES_TIER5 := \
-	likelihood_mapper \
-	led_stream_driver \
-	vehicle_simulator \
-	vehicle_simulator_monitor
-```
+## 7.7 Erros comuns
 
-Agora o `make` de `src/` conhece os dois módulos, e o alvo existe: ele entra na pasta do módulo e executa a fase 1 (`make -C vehicle_simulator ASTRO_ROOT_BUILD=1 phase1`), a mesma que você já viu em cada compilação.
+Mensagens reais que apareceram no manual, o que significam e como resolver:
 
-> [!NOTE]
-> Esta é a **única** alteração do tutorial em um arquivo compartilhado do sistema. Ela é pequena (duas linhas), mas muda o `Makefile` de `src/` para todos. Em um módulo real, essa mudança vai junto com o resto do módulo, no mesmo *pull request*, e vale combinar com a equipe em qual lista ele deve entrar.
+| O que você vê | Causa provável | Solução | Cap. |
+|---|---|---|---|
+| `ASTRO_HOME environment variable not set` (no `make`) | A variável não foi exportada | `export ASTRO_HOME=/caminho/do/astro` | 1 |
+| `Could not connect to central.` | A `central` não está no ar | Iniciar `./central` antes do módulo | 1 |
+| `unable to bind TCP/IP socket for listening` (ao iniciar a `central`) | A porta ainda está presa por uma execução anterior | Esperar alguns segundos e tentar de novo | 1 |
+| `undefined reference to IPC_perror` (no link) | `-lipc` antes de `-lglobal` | Colocar `-lglobal` antes de `-lipc` | 1 |
+| `undefined reference to pthread_mutexattr_init` (no link) | Falta `-lpthread` | Acrescentar `-lpthread` ao `LFLAGS` | 1 |
+| `IPC_ERROR : Could not publish ... IPC message not defined` | A mensagem não foi definida (e a `central` não a conhecia) | Chamar a função `define` no `main`, antes de publicar | 2 |
+| `fatal error: astro/<modulo>_interface.h: No such file or directory` | O header da interface não foi publicado | Rodar `make` no módulo dono, com `PUBLIC_INCLUDES` | 3 |
+| `undefined reference to astro_<modulo>_..._message` (no link) | Falta o `-l<modulo>_interface` no `LFLAGS` de quem consome | Acrescentá-lo | 3 |
+| `undefined reference to astro_param_install_params` (ou `astro_param_check_version`) | Falta o `-lparam_interface` | Acrescentá-lo ao `LFLAGS` | 5 |
+| `The parameter server contains no definition for <nome>` | O parâmetro não está no `.ini` | Acrescentá-lo e reiniciar o `param_daemon` | 5 |
+| `Message timed out : message astro_param_query_version` seguido de `Did you remember to start the parameter server?` | O `param_daemon` não está no ar | Iniciar o `param_daemon` | 5 |
+| **Nenhuma mensagem de erro**, mas os dados chegam trocados ou sem sentido | Struct e formato dessincronizados, ou header publicado desatualizado | Conferir a struct e o `_FMT`; rodar `make` no módulo dono e recompilar quem usa a mensagem | 2, 3 |
+| Um texto (`host`, por exemplo) vira lixo depois do handler | O ponteiro da string foi guardado e o IPC reaproveitou a memória | Copiar a string dentro do handler | 3 |
+| Mudei o `.ini` e nada mudou | O `param_daemon` e o módulo não foram reiniciados | Reiniciar os dois | 5 |
 
-## 6.7 Checkpoint
+## 7.8 Checklist para um módulo novo
 
-Neste ponto você tem:
+Antes de considerar o módulo pronto, confira:
 
-- [x] um **arquivo de processos** com o `param_daemon`, o `proccontrol_gui` e os dois módulos, subindo juntos com o `proccontrol`, com só a `central` à parte;
-- [x] a noção de que o `proccontrol` **captura a saída** dos módulos, e de que a janela do **`proccontrol_gui`** mostra o estado e a saída de cada um;
-- [x] a forma de **parar** tudo: Ctrl+C no terminal do `proccontrol` (com `bin/` no `PATH`), ou o `astrokillall.sh` à mão;
-- [x] os módulos incluídos nas listas de pacotes de `src/Makefile`, e portanto no build completo.
+- [ ] A struct e o `_FMT` da mensagem são **espelhados**, e há `timestamp` e `host` no fim.
+- [ ] Os campos da struct têm **unidade e referencial** nos comentários.
+- [ ] O módulo dono da mensagem tem **`define`** e **`publish`**, e os chama na ordem certa.
+- [ ] O `Makefile` tem o `LFLAGS` completo, o `TARGETS`, e `PUBLIC_INCLUDES` e `PUBLIC_LIBRARIES` para o que outros módulos usam.
+- [ ] Quem consome a mensagem usa **só as funções da interface**.
+- [ ] Os **handlers** não guardam ponteiros de strings recebidas.
+- [ ] Os parâmetros estão **no `.ini`**, são lidos **antes** de serem usados, e o `.ini` foi lido por um `param_daemon` reiniciado.
+- [ ] O **Ctrl+C** é tratado com um `shutdown_module`.
+- [ ] O módulo foi testado com uma **`central` recém-iniciada**.
+- [ ] O módulo está no **arquivo de processos** e nas **listas de pacotes** do `src/Makefile`.
 
-**Próximo capítulo:** boas práticas e erros comuns. Vamos reunir, em um só lugar, os cuidados que apareceram ao longo do manual e os que ainda faltam.
+**Próximo capítulo:** o **template**. Reuniremos tudo o que construímos em um esqueleto de módulo pronto para copiar, com os arquivos, o `Makefile` e o passo a passo para criar um módulo novo a partir dele.
